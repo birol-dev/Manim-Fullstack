@@ -39,9 +39,16 @@ import {
 } from "@/components/ui/select";
 
 // API & WS configuration
-const BACKEND_HOST = "localhost:8000";
-const API_BASE = `http://${BACKEND_HOST}`;
-const WS_BASE = `ws://${BACKEND_HOST}`;
+const BACKEND_HOST = import.meta.env.VITE_BACKEND_URL || "localhost:8000";
+const isProd = !BACKEND_HOST.includes("localhost") && !BACKEND_HOST.includes("127.0.0.1");
+
+const API_BASE = BACKEND_HOST.startsWith("http")
+  ? BACKEND_HOST.replace(/\/$/, "")
+  : `${isProd ? "https" : "http"}://${BACKEND_HOST}`;
+
+const WS_BASE = BACKEND_HOST.startsWith("http")
+  ? BACKEND_HOST.replace(/\/$/, "").replace(/^http/, "ws")
+  : `${isProd ? "wss" : "ws"}://${BACKEND_HOST}`;
 
 interface FileItem {
   name: string;
