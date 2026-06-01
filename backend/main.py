@@ -1,8 +1,13 @@
 import os
+import sys
 import ast
 import json
 import shutil
 import asyncio
+
+# Ensure backend directory is in python search path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
