@@ -143,6 +143,15 @@ def get_scene_animations(code_content: str) -> dict:
                 scene_anims[scene_name] = anims
     return scene_anims
 
+@app.get("/")
+def read_root():
+    return {
+        "status": "online",
+        "service": "Manim Composer API",
+        "version": "0.18.1 CE",
+        "docs": "/docs"
+    }
+
 @app.get("/api/diagnostics")
 def get_diagnostics():
     """Returns hardware diagnostics and rendering configuration profile."""
