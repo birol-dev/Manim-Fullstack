@@ -111,6 +111,9 @@ interface MonacoEditorInstance {
       forceMoveMarkers: boolean;
     }>
   ) => void;
+  setPosition: (position: { lineNumber: number; column: number }) => void;
+  revealLineInCenter: (lineNumber: number) => void;
+  focus: () => void;
 }
 
 interface MonacoGlobal {
@@ -174,7 +177,7 @@ function LaTeX({ math, block = false }: LaTeXProps) {
 
   useEffect(() => {
     if (containerRef.current) {
-      const globalWindow = window as any;
+      const globalWindow = window as unknown as Record<string, { render: (math: string, el: HTMLElement, options: Record<string, unknown>) => void }>;
       if (globalWindow.katex) {
         try {
           globalWindow.katex.render(math, containerRef.current, {
@@ -834,7 +837,7 @@ export default function App() {
                         )}
                       </div>
                       {renamingFile !== script.name && (
-                        <span className="text-[10px] text-slate-650 font-mono flex-shrink-0">{Math.round(script.size / 102) / 10} KB</span>
+                        <span className="text-[10px] text-slate-650 font-mono shrink-0">{Math.round(script.size / 102) / 10} KB</span>
                       )}
                     </div>
                   ))}
@@ -1062,7 +1065,7 @@ export default function App() {
             </TabsContent>
 
             <TabsContent value="latex" className="mt-0 space-y-4 outline-none flex flex-col h-[calc(100vh-180px)]">
-              <div className="space-y-3 flex-shrink-0">
+              <div className="space-y-3 shrink-0">
                 <div className="flex justify-between items-center">
                   <h3 className="text-xs font-semibold text-slate-400 tracking-wider">LaTeX Sandbox</h3>
                   <Button
@@ -1100,7 +1103,7 @@ export default function App() {
                         <span className="font-semibold block text-[9px] text-slate-400">{tmpl.name}</span>
                         <code className="text-slate-500 text-[9px] font-mono">{tmpl.code}</code>
                       </div>
-                      <span className="text-[9px] text-slate-500 bg-zinc-900 px-1 border border-zinc-850 rounded flex-shrink-0">Use</span>
+                      <span className="text-[9px] text-slate-500 bg-zinc-900 px-1 border border-zinc-850 rounded shrink-0">Use</span>
                     </div>
                   ))}
                 </div>
@@ -1181,7 +1184,7 @@ export default function App() {
       {/* 3. Center Panel: Code Editor */}
       <main className="glass-panel bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex flex-col" style={{ gridColumn: "2", gridRow: "2" }}>
         {diagnostics && !diagnostics.dependencies.latex_available && (
-          <div className="bg-white text-black px-4 py-2.5 flex items-center justify-between text-xs border-b border-zinc-800 flex-shrink-0 select-text">
+          <div className="bg-white text-black px-4 py-2.5 flex items-center justify-between text-xs border-b border-zinc-800 shrink-0 select-text">
             <div className="flex items-center gap-2 font-semibold">
               <AlertTriangle size={14} className="stroke-[2.5]" />
               <span>LaTeX compiler is required for math symbols rendering. Live preview fallback is standard Text.</span>
@@ -1233,7 +1236,7 @@ export default function App() {
               </Button>
             )}
 
-            <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer ml-2 flex-shrink-0">
+            <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer ml-2 shrink-0">
               <input
                 type="checkbox"
                 checked={autoRender}
@@ -1378,7 +1381,7 @@ export default function App() {
           )}
         </div>
         {savedPath && (
-          <div className="bg-zinc-950 border-t border-zinc-900 px-4 py-2 text-[10px] text-slate-400 font-mono truncate select-text flex-shrink-0">
+          <div className="bg-zinc-950 border-t border-zinc-900 px-4 py-2 text-[10px] text-slate-400 font-mono truncate select-text shrink-0">
             <span className="text-slate-500">Path: </span>
             <span className="text-white">{savedPath}</span>
           </div>
@@ -1388,7 +1391,7 @@ export default function App() {
       {/* 5. Bottom Panel: Console logs */}
       <section className="glass-panel bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex flex-col" style={{ gridColumn: "2 / 4", gridRow: "3" }}>
         <Tabs defaultValue="console" className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex justify-between items-center px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 flex-shrink-0">
+          <div className="flex justify-between items-center px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 shrink-0">
             <TabsList className="bg-zinc-900/40 p-0 h-8 border border-zinc-800">
               <TabsTrigger value="console" className="text-xs px-4 h-full data-[state=active]:bg-zinc-900 data-[state=active]:text-white">Console Logs</TabsTrigger>
               <TabsTrigger value="timeline" className="text-xs px-4 h-full data-[state=active]:bg-zinc-900 data-[state=active]:text-white">Visual Timeline</TabsTrigger>
@@ -1456,7 +1459,7 @@ export default function App() {
                         key={idx}
                         onClick={() => {
                           if (editorRef.current) {
-                            const editor = editorRef.current as any;
+                            const editor = editorRef.current as MonacoEditorInstance;
                             editor.setPosition({ lineNumber: anim.line, column: 1 });
                             editor.revealLineInCenter(anim.line);
                             editor.focus();
@@ -1570,14 +1573,14 @@ export default function App() {
         }
       }}>
         <DialogContent className="bg-zinc-950 border-zinc-800 text-slate-100 max-w-5xl w-[90vw] h-[85vh] flex flex-col p-4">
-          <DialogHeader className="flex-shrink-0 flex flex-row items-center justify-between pb-2 border-b border-zinc-900">
+          <DialogHeader className="shrink-0 flex flex-row items-center justify-between pb-2 border-b border-zinc-900">
             <DialogTitle className="text-sm font-semibold tracking-tight text-slate-200 font-outfit">Synchronized Render Comparison</DialogTitle>
           </DialogHeader>
           
           {/* Target Selectors */}
-          <div className="flex gap-4 py-2 flex-shrink-0 bg-zinc-950 z-10">
+          <div className="flex gap-4 py-2 shrink-0 bg-zinc-950 z-10">
             <div className="flex-1 flex items-center gap-2 text-xs">
-              <span className="text-slate-500 flex-shrink-0">Left Video (A):</span>
+              <span className="text-slate-500 shrink-0">Left Video (A):</span>
               <Select value={compareVideoA} onValueChange={setCompareVideoA}>
                 <SelectTrigger className="w-full h-8 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
                   <SelectValue placeholder="Select Video A" />
@@ -1591,7 +1594,7 @@ export default function App() {
             </div>
             
             <div className="flex-1 flex items-center gap-2 text-xs">
-              <span className="text-slate-500 flex-shrink-0">Right Video (B):</span>
+              <span className="text-slate-500 shrink-0">Right Video (B):</span>
               <Select value={compareVideoB} onValueChange={setCompareVideoB}>
                 <SelectTrigger className="w-full h-8 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
                   <SelectValue placeholder="Select Video B" />
@@ -1646,7 +1649,7 @@ export default function App() {
           </div>
 
           {/* Timeline & Playback Controls */}
-          <div className="flex-shrink-0 pt-3 space-y-3 bg-zinc-950 z-10 border-t border-zinc-900 mt-2">
+          <div className="shrink-0 pt-3 space-y-3 bg-zinc-950 z-10 border-t border-zinc-900 mt-2">
             <div className="flex items-center gap-4">
               <Button
                 type="button"
