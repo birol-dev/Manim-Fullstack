@@ -1,0 +1,34 @@
+# Node dependencies & builds
+node_modules/
+dist/
+.npm/
+
+# Python caching & builds
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+ENV/
+env/
+build/
+*.egg-info/
+
+# Manim temporary files & rendered outputs
+workspace/media/
+workspace/logs/
+workspace/__pycache__/
+workspace/manim.cfg
+logs/
+*.log
+
+# IDEs, System, and Agent files
+.vscode/
+.idea/
+.gemini/
+.agents/
+skills-lock.json
+.DS_Store
+Thumbs.db
