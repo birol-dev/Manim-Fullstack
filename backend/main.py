@@ -72,6 +72,72 @@ def get_scenes_from_code(code_content: str) -> List[str]:
                 scenes.append(node.name)
     return scenes
 
+def get_scene_animations(code_content: str) -> dict:
+    """Parses Python code using AST to find self.play and self.wait calls in each Scene's construct method."""
+    try:
+        tree = ast.parse(code_content)
+    except Exception:
+        return {}
+    
+    scene_anims = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            scene_name = node.name
+            
+            # Check if it has a construct method
+            construct_node = None
+            for subnode in node.body:
+                if isinstance(subnode, ast.FunctionDef) and subnode.name == "construct":
+                    construct_node = subnode
+                    break
+            
+            if not construct_node:
+                continue
+                
+            anims = []
+            for stmt in construct_node.body:
+                # We inspect Expr statements that hold Call values
+                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+                    call = stmt.value
+                    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == "self":
+                        if call.func.attr == "play":
+                            line_no = stmt.lineno
+                            try:
+                                # ast.unparse is available in Python 3.9+
+                                args_str = ", ".join(ast.unparse(arg) for arg in call.args)
+                                anims.append({
+                                    "type": "play",
+                                    "label": f"Play: {args_str}",
+                                    "line": line_no
+                                })
+                            except Exception:
+                                anims.append({
+                                    "type": "play",
+                                    "label": "Play animation",
+                                    "line": line_no
+                                })
+                        elif call.func.attr == "wait":
+                            line_no = stmt.lineno
+                            duration = 1.0
+                            if call.args:
+                                try:
+                                    duration_str = ast.unparse(call.args[0])
+                                    if duration_str.replace('.', '', 1).isdigit():
+                                        duration = float(duration_str)
+                                    else:
+                                        duration = duration_str
+                                except Exception:
+                                    pass
+                            anims.append({
+                                "type": "wait",
+                                "label": f"Wait {duration}s",
+                                "duration": duration,
+                                "line": line_no
+                            })
+            if anims:
+                scene_anims[scene_name] = anims
+    return scene_anims
+
 @app.get("/api/diagnostics")
 def get_diagnostics():
     """Returns hardware diagnostics and rendering configuration profile."""
@@ -185,7 +251,8 @@ def get_file_content(filename: str):
     return {
         "filename": filename,
         "code": content,
-        "scenes": get_scenes_from_code(content)
+        "scenes": get_scenes_from_code(content),
+        "animations": get_scene_animations(content)
     }
 
 @app.post("/api/save")
@@ -202,10 +269,12 @@ def save_file(req: SaveRequest):
             f.write(req.code)
         
         scenes = get_scenes_from_code(req.code)
+        animations = get_scene_animations(req.code)
         return {
             "success": True,
             "filename": filename,
             "scenes": scenes,
+            "animations": animations,
             "message": "File saved successfully."
         }
     except Exception as e:

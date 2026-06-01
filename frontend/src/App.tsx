@@ -3,7 +3,6 @@ import Editor from "@monaco-editor/react";
 import {
   Play,
   Square,
-  Terminal,
   Cpu,
   Layers,
   Video,
@@ -201,6 +200,25 @@ export default function App() {
   const [scenes, setScenes] = useState<string[]>([]);
   const [selectedScene, setSelectedScene] = useState<string>("");
   
+  // Custom states added for upgrades
+  const [animations, setAnimations] = useState<Record<string, Array<{ type: "play" | "wait"; label: string; line: number; duration?: number }>>>({});
+  const [showCompareDialog, setShowCompareDialog] = useState<boolean>(false);
+  const [compareVideoA, setCompareVideoA] = useState<string>("");
+  const [compareVideoB, setCompareVideoB] = useState<string>("");
+  
+  // Wizard settings
+  const [wizardShape, setWizardShape] = useState<string>("Circle");
+  const [wizardColor, setWizardColor] = useState<string>("BLUE");
+  const [wizardScale, setWizardScale] = useState<string>("1.0");
+  const [wizardShiftX, setWizardShiftX] = useState<string>("0.0");
+  const [wizardShiftY, setWizardShiftY] = useState<string>("0.0");
+  const [wizardRotation, setWizardRotation] = useState<string>("0.0");
+  const [wizardText, setWizardText] = useState<string>("Hello Manim");
+  const [wizardLatex, setWizardLatex] = useState<string>("x^2 + y^2 = z^2");
+  const [wizardEntryAnim, setWizardEntryAnim] = useState<string>("Create");
+  const [wizardActionAnim, setWizardActionAnim] = useState<string>("none");
+  const [wizardExitAnim, setWizardExitAnim] = useState<string>("FadeOut");
+
   const [quality, setQuality] = useState<string>("m");
   const [useOpengl, setUseOpengl] = useState<boolean>(false);
   const [isRendering, setIsRendering] = useState<boolean>(false);
@@ -230,6 +248,43 @@ export default function App() {
   const monacoRef = useRef<unknown>(null);
   const autoRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRenderRef = useRef<(() => void) | null>(null);
+
+  // Sync Comparer state and callbacks
+  const videoARef = useRef<HTMLVideoElement | null>(null);
+  const videoBRef = useRef<HTMLVideoElement | null>(null);
+  const [comparePlaying, setComparePlaying] = useState<boolean>(false);
+  const [compareTime, setCompareTime] = useState<number>(0);
+  const [compareDuration, setCompareDuration] = useState<number>(0);
+
+  const handleComparePlayToggle = () => {
+    const playState = !comparePlaying;
+    setComparePlaying(playState);
+    if (playState) {
+      videoARef.current?.play().catch(() => {});
+      videoBRef.current?.play().catch(() => {});
+    } else {
+      videoARef.current?.pause();
+      videoBRef.current?.pause();
+    }
+  };
+
+  const handleCompareTimeChange = (val: number) => {
+    setCompareTime(val);
+    if (videoARef.current) videoARef.current.currentTime = val;
+    if (videoBRef.current) videoBRef.current.currentTime = val;
+  };
+
+  const handleVideoTimeUpdate = () => {
+    if (videoARef.current) {
+      setCompareTime(videoARef.current.currentTime);
+    }
+  };
+
+  const handleVideoLoadedMetadata = () => {
+    const durA = videoARef.current?.duration || 0;
+    const durB = videoBRef.current?.duration || 0;
+    setCompareDuration(Math.max(durA, durB) || 10);
+  };
 
   const addLog = useCallback((type: LogLine["type"], msg: string, stream?: string) => {
     setLogs((prev) => [...prev, { type, message: msg, stream }]);
@@ -270,6 +325,7 @@ export default function App() {
       setActiveFile(data.filename);
       setCode(data.code);
       setScenes(data.scenes as string[]);
+      setAnimations(data.animations || {});
       if ((data.scenes as string[]).length > 0) {
         setSelectedScene(data.scenes[0]);
       } else {
@@ -292,6 +348,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         setScenes(data.scenes as string[]);
+        setAnimations(data.animations || {});
         if ((data.scenes as string[]).length > 0 && !(data.scenes as string[]).includes(selectedScene)) {
           setSelectedScene(data.scenes[0]);
         }
@@ -540,6 +597,78 @@ export default function App() {
     handleInsertSnippet(snippet);
   }, [handleInsertSnippet]);
 
+  const getGeneratedWizardCode = useCallback(() => {
+    let codeBlock = "";
+    const varName = wizardShape.toLowerCase() + "_obj";
+    
+    // 1. Definition
+    if (wizardShape === "Circle") {
+      codeBlock += `        ${varName} = Circle(color=${wizardColor})\n`;
+    } else if (wizardShape === "Square") {
+      codeBlock += `        ${varName} = Square(color=${wizardColor})\n`;
+    } else if (wizardShape === "Rectangle") {
+      codeBlock += `        ${varName} = Rectangle(color=${wizardColor}, height=2.0, width=3.5)\n`;
+    } else if (wizardShape === "Triangle") {
+      codeBlock += `        ${varName} = Triangle(color=${wizardColor})\n`;
+    } else if (wizardShape === "Line") {
+      codeBlock += `        ${varName} = Line(start=LEFT, end=RIGHT, color=${wizardColor})\n`;
+    } else if (wizardShape === "Arrow") {
+      codeBlock += `        ${varName} = Arrow(start=LEFT, end=RIGHT, color=${wizardColor})\n`;
+    } else if (wizardShape === "Text") {
+      codeBlock += `        ${varName} = Text("${wizardText}", color=${wizardColor}, font_size=36)\n`;
+    } else if (wizardShape === "MathTex") {
+      codeBlock += `        ${varName} = MathTex(r"${wizardLatex}", color=${wizardColor})\n`;
+    }
+    
+    // 2. Adjustments
+    const scaleVal = parseFloat(wizardScale);
+    if (!isNaN(scaleVal) && scaleVal !== 1.0) {
+      codeBlock += `        ${varName}.scale(${scaleVal})\n`;
+    }
+    
+    const shiftX = parseFloat(wizardShiftX);
+    const shiftY = parseFloat(wizardShiftY);
+    if ((!isNaN(shiftX) && shiftX !== 0.0) || (!isNaN(shiftY) && shiftY !== 0.0)) {
+      let shiftTerm = "";
+      if (shiftX !== 0.0) {
+        shiftTerm += (shiftX > 0 ? `RIGHT * ${shiftX}` : `LEFT * ${Math.abs(shiftX)}`);
+      }
+      if (shiftY !== 0.0) {
+        if (shiftTerm) shiftTerm += " + ";
+        shiftTerm += (shiftY > 0 ? `UP * ${shiftY}` : `DOWN * ${Math.abs(shiftY)}`);
+      }
+      codeBlock += `        ${varName}.shift(${shiftTerm})\n`;
+    }
+    
+    const rotVal = parseFloat(wizardRotation);
+    if (!isNaN(rotVal) && rotVal !== 0.0) {
+      codeBlock += `        ${varName}.rotate(${rotVal} * DEGREES)\n`;
+    }
+    
+    codeBlock += `\n`;
+    
+    // 3. Play entry
+    if (wizardEntryAnim !== "none") {
+      codeBlock += `        self.play(${wizardEntryAnim}(${varName}))\n`;
+    }
+    
+    // 4. Play action
+    if (wizardActionAnim === "Rotate") {
+      codeBlock += `        self.play(Rotate(${varName}, angle=PI / 2))\n`;
+    } else if (wizardActionAnim === "ScaleUp") {
+      codeBlock += `        self.play(${varName}.animate.scale(1.5))\n`;
+    } else if (wizardActionAnim === "ColorChange") {
+      codeBlock += `        self.play(${varName}.animate.set_color(PINK))\n`;
+    }
+    
+    // 5. Play exit
+    if (wizardExitAnim !== "none") {
+      codeBlock += `        self.play(${wizardExitAnim}(${varName}))\n`;
+    }
+    
+    return codeBlock;
+  }, [wizardShape, wizardColor, wizardScale, wizardShiftX, wizardShiftY, wizardRotation, wizardText, wizardLatex, wizardEntryAnim, wizardActionAnim, wizardExitAnim]);
+
   const handleEditorDidMount = (editor: unknown, monacoInstance: unknown) => {
     editorRef.current = editor;
     monacoRef.current = monacoInstance;
@@ -649,12 +778,13 @@ export default function App() {
       {/* 2. Left Panel: File Browser / Snippets / Assets / Diagnostics */}
       <aside className="glass-panel bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex flex-col" style={{ gridColumn: "1", gridRow: "2 / 4" }}>
         <Tabs defaultValue="files" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="grid grid-cols-5 bg-zinc-900/40 border-b border-zinc-800 p-0 rounded-none h-11">
-            <TabsTrigger value="files" className="text-[9px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">FILES</TabsTrigger>
-            <TabsTrigger value="snippets" className="text-[9px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">SNIPPETS</TabsTrigger>
-            <TabsTrigger value="latex" className="text-[9px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">LATEX</TabsTrigger>
-            <TabsTrigger value="assets" className="text-[9px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">ASSETS</TabsTrigger>
-            <TabsTrigger value="diags" className="text-[9px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">DIAGS</TabsTrigger>
+          <TabsList className="grid grid-cols-6 bg-zinc-900/40 border-b border-zinc-800 p-0 rounded-none h-11">
+            <TabsTrigger value="files" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">FILES</TabsTrigger>
+            <TabsTrigger value="wizard" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">WIZARD</TabsTrigger>
+            <TabsTrigger value="snippets" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">SNIPPETS</TabsTrigger>
+            <TabsTrigger value="latex" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">LATEX</TabsTrigger>
+            <TabsTrigger value="assets" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">ASSETS</TabsTrigger>
+            <TabsTrigger value="diags" className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900">DIAGS</TabsTrigger>
           </TabsList>
 
           <div className="flex-1 overflow-y-auto p-3">
@@ -743,6 +873,174 @@ export default function App() {
                     ))
                   )}
                 </div>
+              </div>
+            </TabsContent>
+ 
+            <TabsContent value="wizard" className="mt-0 space-y-3.5 outline-none text-[11px]">
+              <div className="flex justify-between items-center mb-1">
+                <h3 className="text-xs font-semibold text-slate-400 tracking-wider">Shape Wizard</h3>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleInsertSnippet(getGeneratedWizardCode())}
+                  className="h-6 px-2 text-[9px] bg-white border-white text-black hover:bg-slate-200 font-bold"
+                >
+                  <Plus size={10} className="mr-1" /> Insert Code
+                </Button>
+              </div>
+
+              {/* Form Controls */}
+              <div className="space-y-2.5 bg-zinc-950 p-2.5 rounded-lg border border-zinc-900">
+                {/* Shape Selector */}
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Shape Type</span>
+                  <Select value={wizardShape} onValueChange={setWizardShape}>
+                    <SelectTrigger className="w-full h-7 bg-zinc-900 border-zinc-800 text-[11px] text-slate-200">
+                      <SelectValue placeholder="Select Shape" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-[11px]">
+                      {["Circle", "Square", "Rectangle", "Triangle", "Line", "Arrow", "Text", "MathTex"].map((shape) => (
+                        <SelectItem key={shape} value={shape} className="text-[11px]">{shape}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Conditional Fields: Text */}
+                {wizardShape === "Text" && (
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Text Content</span>
+                    <input
+                      type="text"
+                      value={wizardText}
+                      onChange={(e) => setWizardText(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700"
+                    />
+                  </div>
+                )}
+
+                {wizardShape === "MathTex" && (
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">LaTeX Equation</span>
+                    <input
+                      type="text"
+                      value={wizardLatex}
+                      onChange={(e) => setWizardLatex(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono"
+                    />
+                  </div>
+                )}
+
+                {/* Color Selector */}
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Color Preset</span>
+                  <Select value={wizardColor} onValueChange={setWizardColor}>
+                    <SelectTrigger className="w-full h-7 bg-zinc-900 border-zinc-800 text-[11px] text-slate-200">
+                      <SelectValue placeholder="Select Color" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-[11px]">
+                      {["BLUE", "PINK", "YELLOW", "RED", "GREEN", "PURPLE", "ORANGE", "TEAL", "WHITE", "GOLD", "GREY"].map((color) => (
+                        <SelectItem key={color} value={color} className="text-[11px]">{color}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Transformation Fields in a Grid */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Scale</span>
+                    <input
+                      type="text"
+                      value={wizardScale}
+                      onChange={(e) => setWizardScale(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Rotation (deg)</span>
+                    <input
+                      type="text"
+                      value={wizardRotation}
+                      onChange={(e) => setWizardRotation(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Shift X</span>
+                    <input
+                      type="text"
+                      value={wizardShiftX}
+                      onChange={(e) => setWizardShiftX(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Shift Y</span>
+                    <input
+                      type="text"
+                      value={wizardShiftY}
+                      onChange={(e) => setWizardShiftY(e.target.value)}
+                      className="w-full bg-black border border-zinc-800 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Animations Section */}
+              <div className="space-y-2.5 bg-zinc-950 p-2.5 rounded-lg border border-zinc-900">
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Entry Animation</span>
+                  <Select value={wizardEntryAnim} onValueChange={setWizardEntryAnim}>
+                    <SelectTrigger className="w-full h-7 bg-zinc-900 border-zinc-800 text-[11px] text-slate-200">
+                      <SelectValue placeholder="Entry" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-[11px]">
+                      {["Create", "Write", "FadeIn", "GrowFromCenter", "none"].map((anim) => (
+                        <SelectItem key={anim} value={anim} className="text-[11px]">{anim}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Action Animation</span>
+                  <Select value={wizardActionAnim} onValueChange={setWizardActionAnim}>
+                    <SelectTrigger className="w-full h-7 bg-zinc-900 border-zinc-800 text-[11px] text-slate-200">
+                      <SelectValue placeholder="Action" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-[11px]">
+                      {["none", "Rotate", "ScaleUp", "ColorChange"].map((anim) => (
+                        <SelectItem key={anim} value={anim} className="text-[11px]">{anim}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Exit Animation</span>
+                  <Select value={wizardExitAnim} onValueChange={setWizardExitAnim}>
+                    <SelectTrigger className="w-full h-7 bg-zinc-900 border-zinc-800 text-[11px] text-slate-200">
+                      <SelectValue placeholder="Exit" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-900 border-zinc-800 text-[11px]">
+                      {["FadeOut", "Uncreate", "none"].map((anim) => (
+                        <SelectItem key={anim} value={anim} className="text-[11px]">{anim}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {/* Code Preview Block */}
+              <div className="space-y-1">
+                <span className="text-[9px] text-slate-500 font-medium uppercase tracking-wider block">Generated Code Block</span>
+                <pre className="p-2 bg-black border border-zinc-900 rounded font-mono text-[9px] text-slate-300 overflow-x-auto select-text whitespace-pre">
+                  {getGeneratedWizardCode()}
+                </pre>
               </div>
             </TabsContent>
 
@@ -1032,9 +1330,31 @@ export default function App() {
 
       {/* 4. Right Panel: Video Previewer */}
       <section className="glass-panel bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex flex-col" style={{ gridColumn: "3", gridRow: "2" }}>
-        <div className="flex items-center gap-2 px-4 py-3 bg-zinc-950 border-b border-zinc-800">
-          <Video size={14} className="text-slate-400" />
-          <h3 className="text-xs font-semibold text-slate-200">Live Video Preview</h3>
+        <div className="flex items-center justify-between px-4 py-3 bg-zinc-950 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Video size={14} className="text-slate-400" />
+            <h3 className="text-xs font-semibold text-slate-200">Live Video Preview</h3>
+          </div>
+          {files.media.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setShowCompareDialog(true);
+                if (files.media.length > 0) {
+                  setCompareVideoA(`${API_BASE}${files.media[0].url}`);
+                  if (files.media.length > 1) {
+                    setCompareVideoB(`${API_BASE}${files.media[1].url}`);
+                  } else {
+                    setCompareVideoB(`${API_BASE}${files.media[0].url}`);
+                  }
+                }
+              }}
+              className="h-6 px-2 text-[10px] bg-zinc-900 border-zinc-800 text-slate-300 hover:bg-zinc-800"
+            >
+              Compare Renders
+            </Button>
+          )}
         </div>
 
         <div className="flex-1 bg-black flex items-center justify-center relative border-t border-zinc-900">
@@ -1067,52 +1387,110 @@ export default function App() {
 
       {/* 5. Bottom Panel: Console logs */}
       <section className="glass-panel bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden flex flex-col" style={{ gridColumn: "2 / 4", gridRow: "3" }}>
-        <div className="flex justify-between items-center px-4 py-2.5 bg-zinc-950 border-b border-zinc-800">
-          <div className="flex items-center gap-2">
-            <Terminal size={14} className="text-slate-400" />
-            <h3 className="text-xs font-semibold text-slate-200">Render Output Console</h3>
-          </div>
-          {isRendering && (
-            <div className="flex items-center gap-3">
-              <Progress value={renderPercent} className="w-[120px] h-1.5" />
-              <span className="text-xs text-white font-bold font-mono">{renderPercent}%</span>
-            </div>
-          )}
-          <button
-            onClick={() => setLogs([])}
-            className="text-[10px] text-slate-500 hover:text-slate-300"
-          >
-            Clear Console
-          </button>
-        </div>
-
-        <div className="flex-1 bg-black/90 p-3 font-mono text-[11px] overflow-y-auto space-y-1 select-text">
-          {logs.length === 0 ? (
-            <div className="text-slate-655 italic">
-              Console idle. Start rendering a scene to view render logs...
-            </div>
-          ) : (
-            logs.map((log, idx) => {
-              let color = "text-slate-400";
-              if (log.type === "error") color = "text-white underline decoration-dotted font-semibold bg-zinc-950 px-1 border-l-2 border-white";
-              else if (log.type === "info") color = "text-slate-400";
-              else if (log.type === "success") color = "text-white font-semibold";
-              else if (log.type === "warning") color = "text-slate-200 italic font-medium";
-              else if (log.stream === "stderr") color = "text-slate-300 italic";
-
-              return (
-                <div key={idx} className={`${color} wrap-break-word`}>
-                  {log.type === "info" && "[INFO] "}
-                  {log.type === "error" && "[ERROR] "}
-                  {log.type === "success" && "[SUCCESS] "}
-                  {log.type === "warning" && "[WARNING] "}
-                  {log.message}
+        <Tabs defaultValue="console" className="flex-1 flex flex-col overflow-hidden">
+          <div className="flex justify-between items-center px-4 py-1.5 bg-zinc-950 border-b border-zinc-800 flex-shrink-0">
+            <TabsList className="bg-zinc-900/40 p-0 h-8 border border-zinc-800">
+              <TabsTrigger value="console" className="text-xs px-4 h-full data-[state=active]:bg-zinc-900 data-[state=active]:text-white">Console Logs</TabsTrigger>
+              <TabsTrigger value="timeline" className="text-xs px-4 h-full data-[state=active]:bg-zinc-900 data-[state=active]:text-white">Visual Timeline</TabsTrigger>
+            </TabsList>
+            <div className="flex items-center gap-4">
+              {isRendering && (
+                <div className="flex items-center gap-3">
+                  <Progress value={renderPercent} className="w-[120px] h-1.5" />
+                  <span className="text-xs text-white font-bold font-mono">{renderPercent}%</span>
                 </div>
-              );
-            })
-          )}
-          <div ref={logEndRef} />
-        </div>
+              )}
+              <button
+                onClick={() => setLogs([])}
+                className="text-[10px] text-slate-500 hover:text-slate-300"
+              >
+                Clear Console
+              </button>
+            </div>
+          </div>
+
+          <TabsContent value="console" className="flex-1 bg-black/90 p-3 font-mono text-[11px] overflow-y-auto space-y-1 select-text outline-none mt-0">
+            {logs.length === 0 ? (
+              <div className="text-slate-600 italic font-sans pl-1">
+                Console idle. Start rendering a scene to view render logs...
+              </div>
+            ) : (
+              logs.map((log, idx) => {
+                let color = "text-slate-400";
+                if (log.type === "error") color = "text-white underline decoration-dotted font-semibold bg-zinc-950 px-1 border-l-2 border-white";
+                else if (log.type === "info") color = "text-slate-400";
+                else if (log.type === "success") color = "text-white font-semibold";
+                else if (log.type === "warning") color = "text-slate-200 italic font-medium";
+                else if (log.stream === "stderr") color = "text-slate-300 italic";
+
+                return (
+                  <div key={idx} className={`${color} wrap-break-word`}>
+                    {log.type === "info" && "[INFO] "}
+                    {log.type === "error" && "[ERROR] "}
+                    {log.type === "success" && "[SUCCESS] "}
+                    {log.type === "warning" && "[WARNING] "}
+                    {log.message}
+                  </div>
+                );
+              })
+            )}
+            <div ref={logEndRef} />
+          </TabsContent>
+
+          <TabsContent value="timeline" className="flex-1 bg-black p-3 overflow-x-auto flex flex-col justify-center outline-none mt-0 select-none">
+            {(!selectedScene || !animations[selectedScene] || animations[selectedScene].length === 0) ? (
+              <div className="text-center text-slate-500 text-xs py-4 font-sans">
+                No animations parsed for Scene &ldquo;{selectedScene || "None Selected"}&rdquo;.<br />
+                Save your file to compile animations or declare `self.play(...)` / `self.wait(...)` in `construct()`.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 min-w-max pb-2">
+                <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono pl-1">
+                  Animation Sequence &mdash; Scene: {selectedScene}
+                </div>
+                <div className="flex items-center gap-3 py-1">
+                  {animations[selectedScene].map((anim, idx) => {
+                    const isPlay = anim.type === "play";
+                    return (
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          if (editorRef.current) {
+                            const editor = editorRef.current as any;
+                            editor.setPosition({ lineNumber: anim.line, column: 1 });
+                            editor.revealLineInCenter(anim.line);
+                            editor.focus();
+                            addLog("info", `Jumped to line ${anim.line}: ${anim.label}`);
+                          }
+                        }}
+                        className={`group relative flex flex-col justify-between p-3 rounded-lg border transition-all duration-200 cursor-pointer h-20 w-48 ${
+                          isPlay
+                            ? "bg-zinc-900 hover:bg-zinc-850 border-zinc-800 hover:border-zinc-700 text-white shadow-sm"
+                            : "bg-zinc-950 hover:bg-zinc-900 border-zinc-900 hover:border-zinc-850 border-dashed text-slate-400"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <span className="text-[10px] font-semibold font-mono text-slate-500">
+                            STEP {idx + 1}
+                          </span>
+                          <span className="text-[9px] text-slate-500 bg-zinc-950 px-1 border border-zinc-900 rounded group-hover:border-zinc-800 font-mono">
+                            L{anim.line}
+                          </span>
+                        </div>
+                        <div className="text-xs truncate font-medium mt-1 font-mono">
+                          {isPlay ? anim.label.replace("Play: ", "") : anim.label}
+                        </div>
+                        <div className="text-[9px] text-slate-500 font-mono text-right mt-1">
+                          {isPlay ? "play()" : "wait()"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </section>
 
       {/* 6. Footer / Status Telemetry */}
@@ -1179,6 +1557,129 @@ export default function App() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog for Synchronized Video Comparison */}
+      <Dialog open={showCompareDialog} onOpenChange={(open) => {
+        setShowCompareDialog(open);
+        if (!open) {
+          videoARef.current?.pause();
+          videoBRef.current?.pause();
+          setComparePlaying(false);
+        }
+      }}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-slate-100 max-w-5xl w-[90vw] h-[85vh] flex flex-col p-4">
+          <DialogHeader className="flex-shrink-0 flex flex-row items-center justify-between pb-2 border-b border-zinc-900">
+            <DialogTitle className="text-sm font-semibold tracking-tight text-slate-200 font-outfit">Synchronized Render Comparison</DialogTitle>
+          </DialogHeader>
+          
+          {/* Target Selectors */}
+          <div className="flex gap-4 py-2 flex-shrink-0 bg-zinc-950 z-10">
+            <div className="flex-1 flex items-center gap-2 text-xs">
+              <span className="text-slate-500 flex-shrink-0">Left Video (A):</span>
+              <Select value={compareVideoA} onValueChange={setCompareVideoA}>
+                <SelectTrigger className="w-full h-8 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
+                  <SelectValue placeholder="Select Video A" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800 text-xs">
+                  {files.media.map((vid) => (
+                    <SelectItem key={vid.url} value={`${API_BASE}${vid.url}`} className="text-xs">{vid.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="flex-1 flex items-center gap-2 text-xs">
+              <span className="text-slate-500 flex-shrink-0">Right Video (B):</span>
+              <Select value={compareVideoB} onValueChange={setCompareVideoB}>
+                <SelectTrigger className="w-full h-8 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
+                  <SelectValue placeholder="Select Video B" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-900 border-zinc-800 text-xs">
+                  {files.media.map((vid) => (
+                    <SelectItem key={vid.url} value={`${API_BASE}${vid.url}`} className="text-xs">{vid.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* Video Frames Side-by-Side */}
+          <div className="flex-1 min-h-0 grid grid-cols-2 gap-4 bg-black rounded-lg border border-zinc-900 p-2 overflow-hidden items-center justify-center">
+            <div className="w-full h-full flex flex-col justify-center items-center relative overflow-hidden bg-zinc-950/40 rounded">
+              {compareVideoA ? (
+                <video
+                  ref={videoARef}
+                  src={compareVideoA}
+                  onTimeUpdate={handleVideoTimeUpdate}
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  className="w-full h-full max-h-full object-contain"
+                  muted
+                  playsInline
+                />
+              ) : (
+                <span className="text-xs text-slate-600">Select left video</span>
+              )}
+              <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 rounded border border-zinc-800 text-[10px] text-white font-mono">
+                VIDEO A
+              </div>
+            </div>
+
+            <div className="w-full h-full flex flex-col justify-center items-center relative overflow-hidden bg-zinc-950/40 rounded">
+              {compareVideoB ? (
+                <video
+                  ref={videoBRef}
+                  src={compareVideoB}
+                  onLoadedMetadata={handleVideoLoadedMetadata}
+                  className="w-full h-full max-h-full object-contain"
+                  muted
+                  playsInline
+                />
+              ) : (
+                <span className="text-xs text-slate-600">Select right video</span>
+              )}
+              <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/80 rounded border border-zinc-800 text-[10px] text-white font-mono">
+                VIDEO B
+              </div>
+            </div>
+          </div>
+
+          {/* Timeline & Playback Controls */}
+          <div className="flex-shrink-0 pt-3 space-y-3 bg-zinc-950 z-10 border-t border-zinc-900 mt-2">
+            <div className="flex items-center gap-4">
+              <Button
+                type="button"
+                onClick={handleComparePlayToggle}
+                className="h-8 w-24 bg-white text-black font-bold hover:bg-slate-200 border border-white text-xs flex items-center justify-center gap-1.5"
+              >
+                {comparePlaying ? (
+                  <>
+                    <Square size={12} className="fill-current" /> Pause
+                  </>
+                ) : (
+                  <>
+                    <Play size={12} className="fill-current" /> Play Sync
+                  </>
+                )}
+              </Button>
+
+              {/* Master Scrubber Timeline */}
+              <div className="flex-1 flex items-center gap-2 text-xs">
+                <span className="font-mono text-slate-500 text-[10px]">{Math.round(compareTime * 10) / 10}s</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={compareDuration}
+                  step={0.02}
+                  value={compareTime}
+                  onChange={(e) => handleCompareTimeChange(parseFloat(e.target.value))}
+                  className="flex-1 h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-white"
+                />
+                <span className="font-mono text-slate-500 text-[10px]">{Math.round(compareDuration * 10) / 10}s</span>
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
