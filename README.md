@@ -28,19 +28,21 @@ An interactive, web-based IDE and live renderer for **Manim Community Edition** 
 
 ## Installation & Running
 
-### 1. Launch FastAPI Backend
+### Option A: Local Run
+
+#### 1. Launch FastAPI Backend
 The backend manages file access, hardware diagnostics, and subprocess execution.
 
 ```bash
-# Navigate to project root, install backend requirements
-pip install -r backend/requirements.txt   # if not already installed
+# Install backend requirements
+pip install -r backend/requirements.txt
 
 # Start backend server
 python backend/main.py
 ```
 *Backend runs locally on: [http://localhost:8000](http://localhost:8000)*
 
-### 2. Launch Vite Frontend
+#### 2. Launch Vite Frontend
 The frontend provides the Monaco editor, live viewer, and LaTeX sandbox.
 
 ```bash
@@ -55,6 +57,18 @@ npm run dev
 ```
 *Frontend runs locally on: [http://localhost:5173](http://localhost:5173)*
 
+### Option B: Running Backend with Docker
+
+You can build and run the backend container, which bundles Cairo, Pango, and FFmpeg for rendering.
+
+```bash
+# Build the Docker image (run from the repository root)
+docker build -t manim-composer-backend -f backend/Dockerfile .
+
+# Run the container mapping port 8000
+docker run -p 8000:8000 manim-composer-backend
+```
+
 ---
 
 ## Directory Architecture
@@ -63,7 +77,8 @@ npm run dev
 ├── backend/
 │   ├── main.py          # FastAPI application server & REST/WebSocket routes
 │   ├── diagnostics.py   # System hardware & software environment checker
-│   └── executor.py      # Subprocess execution and stream regex parser
+│   ├── executor.py      # Subprocess execution and stream regex parser
+│   └── Dockerfile       # Container setup for backend running on port 8000
 ├── frontend/
 │   ├── src/
 │   │   ├── App.tsx      # Main React dashboard component
@@ -78,3 +93,9 @@ npm run dev
 │   └── example.py       # Default starter script
 └── .gitignore           # Ignores system caches, node_modules, and media outputs
 ```
+
+---
+
+## License
+
+This project is open-source and available under the [MIT License](LICENSE).

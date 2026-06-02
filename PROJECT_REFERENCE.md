@@ -11,7 +11,7 @@ The application is structured as a decoupled full-stack project running locally:
 ```mermaid
 graph TD
     Client[React Frontend / Browser] -->|REST Calls / Save / Rename| API[FastAPI Server]
-    Client -->|WebSocket Connection| WS[Render WebSocket Endpoint]
+    Client -->|WebSocket Connection| WS[WebSocket Render Endpoint]
     WS -->|Spawns Subprocess| Sub[Manim CE Process]
     Sub -->|Regex Stdout Stream| WS
     WS -->|Real-Time Logs & Progress| Client

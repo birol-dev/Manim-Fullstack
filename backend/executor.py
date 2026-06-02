@@ -98,8 +98,15 @@ class ManimExecutor:
         # Regular expressions to parse progress and output files
         # Manim CE typical progress: "[ 50%] 30/60"
         progress_pattern = re.compile(r"\[\s*(\d+)%\]")
-        # Video file pattern: "File ready at 'C:\path\to\file.mp4'" or "File ready at: '...'"
-        file_pattern = re.compile(r"File ready at\s+'([^']+)'|File ready at:\s+'([^']+)'")
+        # Video file pattern: matches "File ready at 'path'", "File ready at: path", "File ready at path", and handles ANSI color codes
+        file_pattern = re.compile(
+            r"File ready at(?:\s+|:\s+)"
+            r"(?:\x1b\[[0-9;]*m)?"
+            r"['\"]?"
+            r"([^\x1b'\"\r\n\t]+)"
+            r"['\"]?"
+            r"(?:\x1b\[[0-9;]*m)?"
+        )
         # LaTeX errors: "LaTeX compilation error" or "xelatex is not installed"
         latex_pattern = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
 
@@ -130,9 +137,10 @@ class ManimExecutor:
             # Check for file path (output video)
             file_match = file_pattern.search(clean_line)
             if file_match:
-                # One of the groups will be matched
-                video_path = file_match.group(1) or file_match.group(2)
+                video_path = file_match.group(1)
                 if video_path:
+                    # Strip potential leftover quote/whitespace chars from the path
+                    video_path = video_path.strip().strip("'\"")
                     # Resolve relative to workspace if needed
                     abs_video_path = os.path.abspath(os.path.join(self.workspace_dir, video_path))
                     # Convert to web-friendly relative path or just return filename
@@ -148,6 +156,8 @@ class ManimExecutor:
                         media_rel_path = "media" + normalized_path.split("/media")[-1]
                     else:
                         media_rel_path = filename
+
+                    print(f"DEBUG: matched video path: {video_path} -> abs: {abs_video_path} -> rel: {media_rel_path}", flush=True)
 
                     log_callback({
                         "type": "file_ready", 

@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend
 COPY workspace/ ./workspace
 
-EXPOSE 10000
+EXPOSE 8000
 
-# Start uvicorn on port 10000 (standard Render port)
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "10000"]
+# Start uvicorn on port 8000
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

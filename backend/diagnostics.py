@@ -145,7 +145,7 @@ def generate_profile():
         default_fps = 15
         default_res = "854x480"
         recommended_threads = 1
-        description = "Optimized for cloud container deployment (Render). Threads and quality are limited to prevent out-of-memory (OOM) crashes."
+        description = "Optimized for resource-constrained cloud containers or Docker deployments. Threads and quality are limited to prevent out-of-memory (OOM) crashes."
     elif threads < 4 or ram < 6:
         profile_name = "eco"
         preview_quality = "480p15"
