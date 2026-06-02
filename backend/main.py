@@ -381,6 +381,72 @@ def install_latex():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/install-ffmpeg")
+def install_ffmpeg():
+    """Triggers the silent installation of FFmpeg via winget in a separate process."""
+    try:
+        # Check if winget is available
+        winget_path = shutil.which("winget")
+        if not winget_path:
+            # Try appdata local path
+            custom_winget = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe")
+            if os.path.exists(custom_winget):
+                winget_path = custom_winget
+            else:
+                raise HTTPException(status_code=400, detail="winget package manager is not installed on this system.")
+                
+        # Launch winget in a subprocess in the background
+        import platform
+        import subprocess
+        cmd = [
+            winget_path, "install", "--id", "Gyan.FFmpeg", 
+            "--silent", "--accept-source-agreements", "--accept-package-agreements"
+        ]
+        
+        subprocess.Popen(
+            cmd, 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        )
+        
+        return {
+            "success": True,
+            "message": "FFmpeg installer has been started in the background. Please accept any UAC prompt that appears."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/install-manim")
+def install_manim():
+    """Triggers the pip installation of manim CE in the current python environment in a separate process."""
+    try:
+        import sys
+        import subprocess
+        
+        # Check system python executable
+        python_exe = sys.executable
+        if not python_exe:
+            raise HTTPException(status_code=400, detail="Python executable could not be identified.")
+            
+        cmd = [python_exe, "-m", "pip", "install", "manim"]
+        
+        # Launch process in background
+        import platform
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+        )
+        
+        return {
+            "success": True,
+            "message": "Manim CE installation started in the background via pip."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.websocket("/api/render")
 async def websocket_render(websocket: WebSocket):
     """Handles real-time rendering processes over WebSockets."""
@@ -460,6 +526,11 @@ def get_binary_paths():
         if os.path.exists(custom_manim):
             manim_path = custom_manim
     return {"manim": manim_path or "Not Found"}
+
+# Serve frontend static assets if they exist (built React SPA)
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 if __name__ == "__main__":
     import uvicorn

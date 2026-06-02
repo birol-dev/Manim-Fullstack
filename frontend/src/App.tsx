@@ -39,7 +39,8 @@ import {
 } from "@/components/ui/select";
 
 // API & WS configuration
-const BACKEND_HOST = import.meta.env.VITE_BACKEND_URL || "localhost:8000";
+const defaultHost = window.location.port === "5173" ? "localhost:8000" : window.location.host;
+const BACKEND_HOST = import.meta.env.VITE_BACKEND_URL || defaultHost || "localhost:8000";
 const isProd = !BACKEND_HOST.includes("localhost") && !BACKEND_HOST.includes("127.0.0.1");
 
 const API_BASE = BACKEND_HOST.startsWith("http")
@@ -239,6 +240,9 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isInstallingLatex, setIsInstallingLatex] = useState<boolean>(false);
+  const [isInstallingFFmpeg, setIsInstallingFFmpeg] = useState<boolean>(false);
+  const [isInstallingManim, setIsInstallingManim] = useState<boolean>(false);
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
   
   const [videoUrl, setVideoUrl] = useState<string>("");
   const [videoKey, setVideoKey] = useState<number>(0);
@@ -258,6 +262,7 @@ export default function App() {
   const monacoRef = useRef<unknown>(null);
   const autoRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRenderRef = useRef<(() => void) | null>(null);
+  const hasAutoCheckedRef = useRef<boolean>(false);
 
   // Sync Comparer state and callbacks
   const videoARef = useRef<HTMLVideoElement | null>(null);
@@ -304,17 +309,36 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/diagnostics`);
       if (!res.ok) throw new Error();
-      const data = await res.json();
+      const data = await res.json() as DiagnosticInfo;
       setDiagnostics(data);
       setBackendError(false);
       
       if (data.profile === "eco") setQuality("l");
       else if (data.profile === "workstation") setQuality("h");
       else setQuality("m");
+
+      // Auto-show onboarding if critical dependencies are missing on first load
+      if (!hasAutoCheckedRef.current) {
+        const hasManim = data.dependencies.manim && data.dependencies.manim !== "Not Found";
+        const hasFFmpeg = data.dependencies.ffmpeg && data.dependencies.ffmpeg !== "Not Found";
+        if (!hasManim || !hasFFmpeg) {
+          setShowOnboarding(true);
+        }
+        hasAutoCheckedRef.current = true;
+      }
+
+      // Reset installer states once dependencies are successfully detected
+      const hasManim = data.dependencies.manim && data.dependencies.manim !== "Not Found";
+      const hasFFmpeg = data.dependencies.ffmpeg && data.dependencies.ffmpeg !== "Not Found";
+      const hasLatex = data.dependencies.latex_available;
+
+      if (hasManim) setIsInstallingManim(false);
+      if (hasFFmpeg) setIsInstallingFFmpeg(false);
+      if (hasLatex) setIsInstallingLatex(false);
     } catch {
       setBackendError(true);
     }
-  }, []);
+  }, [setIsInstallingManim, setIsInstallingFFmpeg, setIsInstallingLatex]);
 
   const fetchFiles = useCallback(async () => {
     try {
@@ -577,6 +601,60 @@ export default function App() {
       setIsInstallingLatex(false);
     }
   }, [isInstallingLatex, addLog]);
+
+  const handleInstallFFmpeg = useCallback(async () => {
+    if (isInstallingFFmpeg) return;
+    setIsInstallingFFmpeg(true);
+    addLog("info", "Starting FFmpeg installation in the background via winget...");
+    try {
+      const res = await fetch(`${API_BASE}/api/install-ffmpeg`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        addLog("success", data.message);
+        addLog("info", "You will be prompted for UAC permissions. After approval, the installation executes silently.");
+      } else {
+        addLog("error", "FFmpeg setup call returned failure state.");
+        setIsInstallingFFmpeg(false);
+      }
+    } catch {
+      addLog("error", "Failed to contact backend to install FFmpeg.");
+      setIsInstallingFFmpeg(false);
+    }
+  }, [isInstallingFFmpeg, addLog]);
+
+  const handleInstallManim = useCallback(async () => {
+    if (isInstallingManim) return;
+    setIsInstallingManim(true);
+    addLog("info", "Starting Manim CE installation in the background via pip...");
+    try {
+      const res = await fetch(`${API_BASE}/api/install-manim`, { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        addLog("success", data.message);
+      } else {
+        addLog("error", "Manim CE setup call returned failure state.");
+        setIsInstallingManim(false);
+      }
+    } catch {
+      addLog("error", "Failed to contact backend to install Manim CE.");
+      setIsInstallingManim(false);
+    }
+  }, [isInstallingManim, addLog]);
+
+  // Track installer state resolution (handled inside fetchDiagnostics)
+
+  // Poll diagnostics while installs are running
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (isInstallingFFmpeg || isInstallingManim || isInstallingLatex) {
+      interval = setInterval(() => {
+        fetchDiagnostics();
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isInstallingFFmpeg, isInstallingManim, isInstallingLatex, fetchDiagnostics]);
 
   const handleInsertSnippet = useCallback((snippetCode: string) => {
     if (editorRef.current) {
@@ -1179,6 +1257,16 @@ export default function App() {
                       <div className="flex justify-between items-center"><span>dvisvgm Converter:</span><span className={diagnostics.dependencies.dvisvgm !== "Not Found" ? "text-slate-200" : "text-zinc-650"}>{diagnostics.dependencies.dvisvgm !== "Not Found" ? "Installed" : "Missing"}</span></div>
                     </div>
                   </div>
+
+                  <div className="mt-4 pt-1">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowOnboarding(true)}
+                      className="w-full text-xs h-8 border-zinc-800 text-slate-350 hover:bg-zinc-900 hover:text-white font-semibold font-outfit"
+                    >
+                      Launch Setup Wizard
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <span className="text-xs text-slate-600 block">Querying diagnostics profile...</span>
@@ -1690,6 +1778,135 @@ export default function App() {
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Onboarding Setup Wizard Dialog */}
+      <Dialog open={showOnboarding} onOpenChange={setShowOnboarding}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-slate-100 max-w-lg select-text">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold tracking-tight text-white font-outfit flex items-center gap-2">
+              <Sparkles className="text-slate-400 h-5 w-5" /> Setup Environment Wizard
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="py-4 space-y-4 text-xs">
+            <p className="text-slate-400 leading-relaxed font-sans">
+              Welcome to <strong>Manim Composer</strong>! To compile math animations, we need some system components. Check the status of your environment and install missing dependencies below:
+            </p>
+
+            <div className="space-y-3 bg-zinc-900/60 p-4 rounded-lg border border-zinc-800 font-mono">
+              {/* Python Status */}
+              <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2.5">
+                <div>
+                  <div className="text-white font-semibold flex items-center gap-1.5 font-outfit">
+                    Python Runtime
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5">Required for backend operations</div>
+                </div>
+                <span className="text-[10px] bg-zinc-850 text-slate-300 px-2 py-0.5 rounded border border-zinc-800 font-sans font-medium">Detected</span>
+              </div>
+
+              {/* FFmpeg Status */}
+              <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2.5">
+                <div>
+                  <div className="text-white font-semibold flex items-center gap-1.5 font-outfit">
+                    FFmpeg Media Encoder
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5 max-w-[320px] truncate">
+                    {diagnostics?.dependencies.ffmpeg && diagnostics.dependencies.ffmpeg !== "Not Found" 
+                      ? `Installed: ${diagnostics.dependencies.ffmpeg}` 
+                      : "Required for video rendering & stitching"}
+                  </div>
+                </div>
+                {diagnostics?.dependencies.ffmpeg && diagnostics.dependencies.ffmpeg !== "Not Found" ? (
+                  <span className="text-[10px] bg-white text-black font-semibold px-2 py-0.5 rounded border border-white font-sans">Detected</span>
+                ) : (
+                  <Button
+                    onClick={handleInstallFFmpeg}
+                    disabled={isInstallingFFmpeg}
+                    className="h-6 px-2 text-[10px] bg-white text-black hover:bg-slate-200 border border-white font-semibold font-sans"
+                  >
+                    {isInstallingFFmpeg ? "Installing..." : "Install (winget)"}
+                  </Button>
+                )}
+              </div>
+
+              {/* Manim CE Status */}
+              <div className="flex items-center justify-between border-b border-zinc-800/40 pb-2.5">
+                <div>
+                  <div className="text-white font-semibold flex items-center gap-1.5 font-outfit">
+                    Manim Community Edition
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5 max-w-[320px] truncate">
+                    {diagnostics?.dependencies.manim && diagnostics.dependencies.manim !== "Not Found" 
+                      ? `Installed: ${diagnostics.dependencies.manim}` 
+                      : "Core animation engine"}
+                  </div>
+                </div>
+                {diagnostics?.dependencies.manim && diagnostics.dependencies.manim !== "Not Found" ? (
+                  <span className="text-[10px] bg-white text-black font-semibold px-2 py-0.5 rounded border border-white font-sans">Detected</span>
+                ) : (
+                  <Button
+                    onClick={handleInstallManim}
+                    disabled={isInstallingManim}
+                    className="h-6 px-2 text-[10px] bg-white text-black hover:bg-slate-200 border border-white font-semibold font-sans"
+                  >
+                    {isInstallingManim ? "Installing..." : "Install (pip)"}
+                  </Button>
+                )}
+              </div>
+
+              {/* LaTeX Status */}
+              <div className="flex items-center justify-between pb-0">
+                <div>
+                  <div className="text-white font-semibold flex items-center gap-1.5 font-outfit">
+                    LaTeX Math Tools (Optional)
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-0.5 max-w-[320px] truncate font-sans">
+                    {diagnostics?.dependencies.latex_available 
+                      ? "Installed and active" 
+                      : "Required for formula typesetting"}
+                  </div>
+                </div>
+                {diagnostics?.dependencies.latex_available ? (
+                  <span className="text-[10px] bg-white text-black font-semibold px-2 py-0.5 rounded border border-white font-sans">Detected</span>
+                ) : (
+                  <Button
+                    onClick={handleInstallLatex}
+                    disabled={isInstallingLatex}
+                    className="h-6 px-2 text-[10px] bg-zinc-900 text-white hover:bg-zinc-850 border border-zinc-800 font-semibold font-sans"
+                  >
+                    {isInstallingLatex ? "Installing..." : "Install (winget)"}
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="text-[10px] text-slate-500 leading-relaxed font-sans">
+              * Note: Installations using winget/pip are supported automatically on Windows. If you are on Linux or macOS, please follow the manual install steps listed in the README.md.
+            </div>
+          </div>
+          
+          <DialogFooter className="border-t border-zinc-900 pt-3 flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowOnboarding(false)}
+              className="h-8 px-4 text-xs border-zinc-800 text-slate-400 hover:text-white hover:bg-zinc-900 font-semibold font-outfit"
+            >
+              Skip Setup
+            </Button>
+            <Button
+              onClick={() => setShowOnboarding(false)}
+              disabled={
+                (!diagnostics?.dependencies.manim || diagnostics.dependencies.manim === "Not Found") ||
+                (!diagnostics?.dependencies.ffmpeg || diagnostics.dependencies.ffmpeg === "Not Found")
+              }
+              className="h-8 px-4 text-xs bg-white text-black hover:bg-slate-200 border border-white font-bold font-outfit"
+            >
+              Let's Go
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
