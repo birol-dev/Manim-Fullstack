@@ -133,31 +133,43 @@ def generate_profile():
     gpu = get_gpu_info()
     binaries = get_binary_paths()
 
+    # Detect if we are running on Render or inside a Docker container
+    is_cloud = os.environ.get("RENDER") == "true" or os.environ.get("RUNNING_IN_DOCKER") == "true"
+
     threads = cpu["logical_threads"]
     
     # Profile decision logic
-    if threads < 4 or ram < 6:
+    if is_cloud:
         profile_name = "eco"
         preview_quality = "480p15"
         default_fps = 15
         default_res = "854x480"
+        recommended_threads = 1
+        description = "Optimized for cloud container deployment (Render). Threads and quality are limited to prevent out-of-memory (OOM) crashes."
+    elif threads < 4 or ram < 6:
+        profile_name = "eco"
+        preview_quality = "480p15"
+        default_fps = 15
+        default_res = "854x480"
+        recommended_threads = 1
         description = "Optimized for battery saving / lower-spec computers. Caching is aggressive and quality defaults are low for fast rendering."
     elif threads <= 8 and ram <= 16:
         profile_name = "balanced"
         preview_quality = "720p30"
         default_fps = 30
         default_res = "1280x720"
+        recommended_threads = max(1, threads - 1)
         description = "Standard system configuration. Balanced preview quality and rendering speeds."
     else:
         profile_name = "workstation"
         preview_quality = "1080p60"
         default_fps = 60
         default_res = "1920x1080"
+        recommended_threads = max(1, threads - 1)
         description = "High performance workstation. Previews are crisp and render settings use multithreaded FFMPEG encoders."
 
     # Can we use OpenGL hardware acceleration?
-    # OpenGL rendering in Manim requires window creation and works best with dedicated GPU drivers
-    opengl_capable = len(gpu["devices"]) > 0 and gpu["devices"][0]["type"] != "Software"
+    opengl_capable = len(gpu["devices"]) > 0 and gpu["devices"][0]["type"] != "Software" and not is_cloud
 
     config = {
         "profile": profile_name,
@@ -165,7 +177,7 @@ def generate_profile():
         "preview_quality": preview_quality,
         "default_fps": default_fps,
         "default_resolution": default_res,
-        "recommended_threads": max(1, threads - 1),  # Leave 1 core for OS/FastAPI
+        "recommended_threads": recommended_threads,
         "opengl_supported": opengl_capable,
         "hardware": {
             "cpu": cpu,

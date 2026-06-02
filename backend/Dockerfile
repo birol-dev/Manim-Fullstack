@@ -1,15 +1,12 @@
 FROM python:3.11-slim
 
-# Install system dependencies for Cairo, Pango, FFmpeg, and LaTeX
+# Install system dependencies for Cairo, Pango, and FFmpeg (LaTeX omitted to save memory/space on cloud)
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
     libcairo2-dev \
     libpango1.0-dev \
     ffmpeg \
-    texlive \
-    texlive-latex-extra \
-    dvisvgm \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
