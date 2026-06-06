@@ -881,8 +881,7 @@ export default function App() {
 
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-xs">
-            <span className={`h-2 w-2 rounded-full ${wsConnected ? "bg-white" : "bg-zinc-700"}`} />
-            <span className="text-slate-200">
+            <span className={`font-bold ${wsConnected ? "text-white" : "text-red-500"}`}>
               {wsConnected ? "Engine Connected" : "Engine Offline"}
             </span>
             {backendError && (
@@ -896,14 +895,6 @@ export default function App() {
               </Button>
             )}
           </div>
-
-          {diagnostics && (
-            <div className="bg-zinc-900/60 border border-zinc-800 px-3 py-1 rounded-full text-xs flex items-center gap-2">
-              <Cpu size={12} className="text-slate-400" />
-              <span className="text-slate-400">Profile:</span>
-              <strong className="text-white font-mono tracking-wider uppercase font-semibold">{diagnostics.profile}</strong>
-            </div>
-          )}
         </div>
       </header>
 
