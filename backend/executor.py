@@ -2,7 +2,6 @@ import asyncio
 import os
 import re
 import subprocess
-import sys
 import platform
 
 class ManimExecutor:
@@ -39,7 +38,7 @@ class ManimExecutor:
         # We always want it to output progress bar to stdout
         cmd.append("--progress_bar=display")
 
-        log_callback({"type": "info", "message": f"Starting command: {' '.join(cmd)}"})
+        await log_callback({"type": "info", "message": f"Starting command: {' '.join(cmd)}"})
 
         try:
             # Run the command asynchronously
@@ -64,18 +63,18 @@ class ManimExecutor:
             self.current_process = None
 
             if self._cancelled:
-                log_callback({"type": "status", "status": "cancelled", "message": "Rendering was cancelled by user."})
+                await log_callback({"type": "status", "status": "cancelled", "message": "Rendering was cancelled by user."})
                 return {"success": False, "status": "cancelled"}
 
             if exit_code == 0:
-                log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
+                await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
                 return {"success": True, "status": "success"}
             else:
-                log_callback({"type": "status", "status": "failed", "message": f"Rendering failed with exit code {exit_code}."})
+                await log_callback({"type": "status", "status": "failed", "message": f"Rendering failed with exit code {exit_code}."})
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
         except Exception as e:
-            log_callback({"type": "error", "message": f"Executor error: {str(e)}"})
+            await log_callback({"type": "error", "message": f"Executor error: {str(e)}"})
             return {"success": False, "status": "error", "error": str(e)}
 
     async def cancel(self):
@@ -126,13 +125,13 @@ class ManimExecutor:
                 continue
 
             # Stream raw line to console log
-            log_callback({"type": "log", "stream": stream_name, "message": clean_line})
+            await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
 
             # Check for progress
             progress_match = progress_pattern.search(clean_line)
             if progress_match:
                 percent = int(progress_match.group(1))
-                log_callback({"type": "progress", "percent": percent, "line": clean_line})
+                await log_callback({"type": "progress", "percent": percent, "line": clean_line})
 
             # Check for file path (output video)
             file_match = file_pattern.search(clean_line)
@@ -157,9 +156,7 @@ class ManimExecutor:
                     else:
                         media_rel_path = filename
 
-                    print(f"DEBUG: matched video path: {video_path} -> abs: {abs_video_path} -> rel: {media_rel_path}", flush=True)
-
-                    log_callback({
+                    await log_callback({
                         "type": "file_ready", 
                         "abs_path": abs_video_path,
                         "rel_path": media_rel_path,
@@ -168,7 +165,7 @@ class ManimExecutor:
 
             # Check for LaTeX specific errors to give user helpful hints
             if latex_pattern.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
-                log_callback({
+                await log_callback({
                     "type": "latex_error_warning",
                     "message": "It looks like LaTeX rendering failed. If LaTeX is not installed or dvisvgm is missing, please replace MathTex elements with standard Text, or download MiKTeX/TeX Live."
                 })

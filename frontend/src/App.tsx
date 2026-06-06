@@ -15,7 +15,9 @@ import {
   Download,
   RefreshCw,
   HardDrive,
-  FileCode
+  FileCode,
+  Copy,
+  Check
 } from "lucide-react";
 
 // Import Shadcn UI Components
@@ -216,6 +218,7 @@ export default function App() {
   const [showCompareDialog, setShowCompareDialog] = useState<boolean>(false);
   const [compareVideoA, setCompareVideoA] = useState<string>("");
   const [compareVideoB, setCompareVideoB] = useState<string>("");
+  const [copiedAsset, setCopiedAsset] = useState<string | null>(null);
   
   // Wizard settings
   const [wizardShape, setWizardShape] = useState<string>("Circle");
@@ -248,6 +251,8 @@ export default function App() {
   const [videoKey, setVideoKey] = useState<number>(0);
   
   const [showNewFileDialog, setShowNewFileDialog] = useState<boolean>(false);
+  const [showLoadTemplateDialog, setShowLoadTemplateDialog] = useState<boolean>(false);
+  const [pendingTemplateCode, setPendingTemplateCode] = useState<string>("");
   const [newFileName, setNewFileName] = useState<string>("");
   const [backendError, setBackendError] = useState<boolean>(false);
   const [latexInput, setLatexInput] = useState<string>("e^{i\\pi} + 1 = 0");
@@ -263,6 +268,8 @@ export default function App() {
   const autoRenderTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startRenderRef = useRef<(() => void) | null>(null);
   const hasAutoCheckedRef = useRef<boolean>(false);
+  const shouldCancelRenameRef = useRef<boolean>(false);
+  const isRenamingInProgressRef = useRef<boolean>(false);
 
   // Sync Comparer state and callbacks
   const videoARef = useRef<HTMLVideoElement | null>(null);
@@ -431,6 +438,9 @@ export default function App() {
     let name = newName.trim();
     if (!name.endsWith(".py")) name += ".py";
     
+    if (isRenamingInProgressRef.current) return;
+    isRenamingInProgressRef.current = true;
+    
     try {
       const res = await fetch(`${API_BASE}/api/rename`, {
         method: "POST",
@@ -439,11 +449,11 @@ export default function App() {
       });
       
       if (!res.ok) {
-        const errorData = await res.json();
+        const errorData = await res.json() as { detail?: string };
         throw new Error(errorData.detail || "Rename failed.");
       }
       
-      const data = await res.json();
+      const data = await res.json() as { success: boolean };
       if (data.success) {
         addLog("info", `Renamed file: ${oldName} -> ${name}`);
         if (activeFile === oldName) {
@@ -454,8 +464,10 @@ export default function App() {
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Error renaming file.";
       addLog("error", msg);
+    } finally {
+      isRenamingInProgressRef.current = false;
     }
-  }, [activeFile, fetchFiles, addLog]);
+  }, [activeFile, fetchFiles, addLog, renamingFile]);
 
   const handleAssetUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -591,7 +603,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         addLog("success", data.message);
-        addLog("info", "You will be prompted for UAC permissions. After approval, the installation executes silently.");
+        addLog("info", "The installation runs silently in your user profile directory (no UAC prompt required).");
       } else {
         addLog("error", "LaTeX setup call returned failure state.");
         setIsInstallingLatex(false);
@@ -611,7 +623,7 @@ export default function App() {
       const data = await res.json();
       if (data.success) {
         addLog("success", data.message);
-        addLog("info", "You will be prompted for UAC permissions. After approval, the installation executes silently.");
+        addLog("info", "The installation runs silently in your user profile directory (no UAC prompt required).");
       } else {
         addLog("error", "FFmpeg setup call returned failure state.");
         setIsInstallingFFmpeg(false);
@@ -680,10 +692,40 @@ export default function App() {
     }
   }, [addLog]);
 
+  const handleLoadTemplate = useCallback((templateCode: string) => {
+    setPendingTemplateCode(templateCode);
+    setShowLoadTemplateDialog(true);
+  }, []);
+
+  const confirmLoadTemplate = useCallback(() => {
+    if (pendingTemplateCode) {
+      setCode(pendingTemplateCode);
+      setPendingTemplateCode("");
+      setShowLoadTemplateDialog(false);
+      addLog("info", "Loaded template script into active editor.");
+    }
+  }, [pendingTemplateCode, addLog]);
+
   const handleInsertMathTex = useCallback((latexCode: string) => {
     const snippet = `MathTex(r"${latexCode}")`;
     handleInsertSnippet(snippet);
   }, [handleInsertSnippet]);
+
+  const handleInsertAssetPath = useCallback((assetName: string) => {
+    const path = `"assets/${assetName}"`;
+    handleInsertSnippet(path);
+  }, [handleInsertSnippet]);
+
+  const handleCopyAssetPath = useCallback((assetName: string) => {
+    const path = `assets/${assetName}`;
+    navigator.clipboard.writeText(path).then(() => {
+      setCopiedAsset(assetName);
+      addLog("info", `Copied asset path: ${path}`);
+      setTimeout(() => setCopiedAsset(null), 2000);
+    }).catch(() => {
+      addLog("error", "Failed to copy to clipboard.");
+    });
+  }, [addLog]);
 
   const getGeneratedWizardCode = useCallback(() => {
     let codeBlock = "";
@@ -703,9 +745,11 @@ export default function App() {
     } else if (wizardShape === "Arrow") {
       codeBlock += `        ${varName} = Arrow(start=LEFT, end=RIGHT, color=${wizardColor})\n`;
     } else if (wizardShape === "Text") {
-      codeBlock += `        ${varName} = Text("${wizardText}", color=${wizardColor}, font_size=36)\n`;
+      const escapedText = wizardText.replace(/"/g, '\\"');
+      codeBlock += `        ${varName} = Text("${escapedText}", color=${wizardColor}, font_size=36)\n`;
     } else if (wizardShape === "MathTex") {
-      codeBlock += `        ${varName} = MathTex(r"${wizardLatex}", color=${wizardColor})\n`;
+      const escapedLatex = wizardLatex.replace(/"/g, '\\"');
+      codeBlock += `        ${varName} = MathTex(r"${escapedLatex}", color=${wizardColor})\n`;
     }
     
     // 2. Adjustments
@@ -902,18 +946,30 @@ export default function App() {
                       className={`p-2 rounded-lg cursor-pointer flex items-center justify-between border transition-all duration-200 ${activeFile === script.name ? "bg-zinc-900 border-zinc-700 text-white" : "bg-transparent border-transparent hover:bg-zinc-900/40 text-slate-400"}`}
                     >
                       <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <FileCode size={14} className={activeFile === script.name ? "text-white" : "text-slate-650"} />
+                        <FileCode size={14} className={activeFile === script.name ? "text-white" : "text-slate-500"} />
                         {renamingFile === script.name ? (
                           <input
                             type="text"
                             value={renameValue}
                             onChange={(e) => setRenameValue(e.target.value)}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter") handleRename(script.name, renameValue);
-                              else if (e.key === "Escape") setRenamingFile(null);
+                              if (e.key === "Enter") {
+                                e.currentTarget.blur();
+                              } else if (e.key === "Escape") {
+                                shouldCancelRenameRef.current = true;
+                                setRenamingFile(null);
+                              }
                             }}
-                            onBlur={() => handleRename(script.name, renameValue)}
+                            onBlur={() => {
+                              if (shouldCancelRenameRef.current) {
+                                shouldCancelRenameRef.current = false;
+                                return;
+                              }
+                              handleRename(script.name, renameValue);
+                            }}
                             onClick={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
                             autoFocus
                             className="bg-black border border-zinc-700 text-xs text-white px-1 py-0.5 rounded focus:outline-none w-full font-sans"
                           />
@@ -922,7 +978,7 @@ export default function App() {
                         )}
                       </div>
                       {renamingFile !== script.name && (
-                        <span className="text-[10px] text-slate-650 font-mono shrink-0">{Math.round(script.size / 102) / 10} KB</span>
+                        <span className="text-[10px] text-slate-500 font-mono shrink-0">{Math.round(script.size / 1024 * 10) / 10} KB</span>
                       )}
                     </div>
                   ))}
@@ -1133,20 +1189,41 @@ export default function App() {
             </TabsContent>
 
             <TabsContent value="snippets" className="mt-0 space-y-2 outline-none">
-              <span className="text-[10px] text-slate-500 block mb-2">Click snippet to load in editor buffer.</span>
-              {SNIPPETS.map((snippet) => (
-                <div
-                  key={snippet.title}
-                  onClick={() => handleInsertSnippet(snippet.code)}
-                  className="p-3 rounded-lg bg-zinc-950 border border-zinc-900 hover:border-zinc-700 hover:bg-zinc-900/30 cursor-pointer transition-all duration-200"
-                >
-                  <div className="flex justify-between items-center mb-1">
-                    <h4 className="text-xs font-semibold text-slate-200">{snippet.title}</h4>
-                    <span className="text-[9px] bg-zinc-900 border border-zinc-800 text-slate-300 px-1.5 py-0.5 rounded font-semibold">{snippet.category}</span>
+              <span className="text-[10px] text-slate-500 block mb-2">Use ready-to-render templates or insert specific scenes.</span>
+              <div className="space-y-2">
+                {SNIPPETS.map((snippet) => (
+                  <div
+                    key={snippet.title}
+                    className="p-3 rounded-lg bg-zinc-950 border border-zinc-900 flex flex-col gap-2.5"
+                  >
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <h4 className="text-xs font-semibold text-slate-200">{snippet.title}</h4>
+                        <span className="text-[9px] bg-zinc-900 border border-zinc-800 text-slate-300 px-1.5 py-0.5 rounded font-semibold">{snippet.category}</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 leading-normal">{snippet.description}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleLoadTemplate(snippet.code)}
+                        className="flex-1 h-6 text-[9px] bg-zinc-900 border-zinc-800 text-slate-200 hover:bg-zinc-850 font-semibold"
+                      >
+                        Load Script
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleInsertSnippet(snippet.code)}
+                        className="flex-1 h-6 text-[9px] bg-zinc-900 border-zinc-800 text-slate-200 hover:bg-zinc-850 font-semibold"
+                      >
+                        Insert Cursor
+                      </Button>
+                    </div>
                   </div>
-                  <p className="text-[10px] text-slate-400">{snippet.description}</p>
-                </div>
-              ))}
+                ))}
+              </div>
             </TabsContent>
 
             <TabsContent value="latex" className="mt-0 space-y-4 outline-none flex flex-col h-[calc(100vh-180px)]">
@@ -1188,7 +1265,15 @@ export default function App() {
                         <span className="font-semibold block text-[9px] text-slate-400">{tmpl.name}</span>
                         <code className="text-slate-500 text-[9px] font-mono">{tmpl.code}</code>
                       </div>
-                      <span className="text-[9px] text-slate-500 bg-zinc-900 px-1 border border-zinc-850 rounded shrink-0">Use</span>
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleInsertMathTex(tmpl.code);
+                        }}
+                        className="text-[9px] text-slate-400 hover:text-white bg-zinc-900 hover:bg-zinc-800 px-1.5 py-0.5 border border-zinc-800 rounded shrink-0 font-medium cursor-pointer"
+                      >
+                        Insert
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1212,13 +1297,34 @@ export default function App() {
                     files.assets.map((asset) => (
                       <div
                         key={asset.name}
-                        className="p-2 rounded-lg bg-zinc-950 border border-zinc-900 flex items-center justify-between text-xs text-slate-400"
+                        className="p-2 rounded-lg bg-zinc-950 border border-zinc-900 flex items-center justify-between gap-2 text-xs text-slate-400 group"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Layers size={12} className="text-slate-500" />
-                          <span className="truncate">{asset.name}</span>
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <Layers size={12} className="text-slate-500 shrink-0" />
+                          <span className="truncate" title={asset.name}>{asset.name}</span>
                         </div>
-                        <span className="text-[10px] text-slate-500 font-mono">{Math.round(asset.size / 1024 * 10) / 10} KB</span>
+                        
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span className="text-[9px] text-slate-600 font-mono group-hover:hidden">{Math.round(asset.size / 1024 * 10) / 10} KB</span>
+                          <button
+                            onClick={() => handleInsertAssetPath(asset.name)}
+                            title="Insert asset path at cursor"
+                            className="p-1 hover:text-white rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 cursor-pointer hidden group-hover:block transition-all"
+                          >
+                            <Plus size={10} />
+                          </button>
+                          <button
+                            onClick={() => handleCopyAssetPath(asset.name)}
+                            title="Copy path to clipboard"
+                            className="p-1 hover:text-white rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 cursor-pointer hidden group-hover:block transition-all"
+                          >
+                            {copiedAsset === asset.name ? (
+                              <Check size={10} className="text-emerald-500" />
+                            ) : (
+                              <Copy size={10} />
+                            )}
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -1234,7 +1340,7 @@ export default function App() {
                     <p className="text-slate-300 text-[11px] leading-relaxed">{diagnostics.description}</p>
                   </div>
 
-                  <hr className="border-zinc-850" />
+                  <hr className="border-zinc-800" />
 
                   <div>
                     <h4 className="font-semibold text-slate-400 mb-2">Hardware Specs</h4>
@@ -1246,15 +1352,15 @@ export default function App() {
                     </div>
                   </div>
 
-                  <hr className="border-zinc-850" />
+                  <hr className="border-zinc-800" />
 
                   <div>
                     <h4 className="font-semibold text-slate-400 mb-2">Software Environment</h4>
                     <div className="space-y-1.5 text-[11px]">
-                      <div className="flex justify-between items-center"><span>Manim CE CLI:</span><span className={diagnostics.dependencies.manim !== "Not Found" ? "text-slate-200 font-semibold" : "text-zinc-650"}>{diagnostics.dependencies.manim !== "Not Found" ? "Detected" : "Not Found"}</span></div>
-                      <div className="flex justify-between items-center"><span>FFmpeg Binaries:</span><span className={diagnostics.dependencies.ffmpeg !== "Not Found" ? "text-slate-200 font-semibold" : "text-zinc-650"}>{diagnostics.dependencies.ffmpeg !== "Not Found" ? "Detected" : "Not Found"}</span></div>
-                      <div className="flex justify-between items-center"><span>LaTeX Compiler:</span><span className={diagnostics.dependencies.latex !== "Not Found" ? "text-slate-200" : "text-zinc-650"}>{diagnostics.dependencies.latex !== "Not Found" ? "Installed" : "Missing"}</span></div>
-                      <div className="flex justify-between items-center"><span>dvisvgm Converter:</span><span className={diagnostics.dependencies.dvisvgm !== "Not Found" ? "text-slate-200" : "text-zinc-650"}>{diagnostics.dependencies.dvisvgm !== "Not Found" ? "Installed" : "Missing"}</span></div>
+                      <div className="flex justify-between items-center"><span>Manim CE CLI:</span><span className={diagnostics.dependencies.manim !== "Not Found" ? "text-slate-200 font-semibold" : "text-zinc-500"}>{diagnostics.dependencies.manim !== "Not Found" ? "Detected" : "Not Found"}</span></div>
+                      <div className="flex justify-between items-center"><span>FFmpeg Binaries:</span><span className={diagnostics.dependencies.ffmpeg !== "Not Found" ? "text-slate-200 font-semibold" : "text-zinc-500"}>{diagnostics.dependencies.ffmpeg !== "Not Found" ? "Detected" : "Not Found"}</span></div>
+                      <div className="flex justify-between items-center"><span>LaTeX Compiler:</span><span className={diagnostics.dependencies.latex !== "Not Found" ? "text-slate-200" : "text-zinc-500"}>{diagnostics.dependencies.latex !== "Not Found" ? "Installed" : "Missing"}</span></div>
+                      <div className="flex justify-between items-center"><span>dvisvgm Converter:</span><span className={diagnostics.dependencies.dvisvgm !== "Not Found" ? "text-slate-200" : "text-zinc-500"}>{diagnostics.dependencies.dvisvgm !== "Not Found" ? "Installed" : "Missing"}</span></div>
                     </div>
                   </div>
 
@@ -1381,7 +1487,7 @@ export default function App() {
                   type="checkbox"
                   checked={useOpengl}
                   onChange={(e) => setUseOpengl(e.target.checked)}
-                  className="rounded border-zinc-850 bg-zinc-900"
+                  className="rounded border-zinc-800 bg-zinc-900"
                 />
                 <span className={useOpengl ? "text-white" : "text-slate-500"}>OpenGL HW</span>
               </label>
@@ -1459,13 +1565,13 @@ export default function App() {
           {videoUrl ? (
             <video
               key={videoKey}
+              src={videoUrl}
               controls
               className="w-full h-full max-h-full object-contain"
               autoPlay
               muted
               playsInline
             >
-              <source src={videoUrl} type="video/mp4" />
               Browser tag error.
             </video>
           ) : (
@@ -1521,8 +1627,24 @@ export default function App() {
                 else if (log.type === "warning") color = "text-slate-200 italic font-medium";
                 else if (log.stream === "stderr") color = "text-slate-300 italic";
 
+                const lineMatch = log.message?.match(/line (\d+)/i);
+                const lineNumber = lineMatch ? parseInt(lineMatch[1], 10) : null;
+
                 return (
-                  <div key={idx} className={`${color} wrap-break-word`}>
+                  <div 
+                    key={idx} 
+                    className={`${color} wrap-break-word ${lineNumber ? "cursor-pointer hover:bg-zinc-900/60 hover:text-white transition-all pl-1 border-l border-zinc-800" : ""}`}
+                    onClick={() => {
+                      if (lineNumber && editorRef.current) {
+                        const editor = editorRef.current as MonacoEditorInstance;
+                        editor.setPosition({ lineNumber, column: 1 });
+                        editor.revealLineInCenter(lineNumber);
+                        editor.focus();
+                        addLog("info", `Jumped to line ${lineNumber} from compiler log.`);
+                      }
+                    }}
+                    title={lineNumber ? `Click to jump to line ${lineNumber} in editor` : undefined}
+                  >
                     {log.type === "info" && "[INFO] "}
                     {log.type === "error" && "[ERROR] "}
                     {log.type === "success" && "[SUCCESS] "}
@@ -1563,8 +1685,8 @@ export default function App() {
                         }}
                         className={`group relative flex flex-col justify-between p-3 rounded-lg border transition-all duration-200 cursor-pointer h-20 w-48 ${
                           isPlay
-                            ? "bg-zinc-900 hover:bg-zinc-850 border-zinc-800 hover:border-zinc-700 text-white shadow-sm"
-                            : "bg-zinc-950 hover:bg-zinc-900 border-zinc-900 hover:border-zinc-850 border-dashed text-slate-400"
+                            ? "bg-zinc-900 hover:bg-zinc-800 border-zinc-800 hover:border-zinc-700 text-white shadow-sm"
+                            : "bg-zinc-950 hover:bg-zinc-900 border-zinc-900 hover:border-zinc-800 border-dashed text-slate-400"
                         }`}
                       >
                         <div className="flex items-start justify-between">
@@ -1641,7 +1763,7 @@ export default function App() {
                 value={newFileName}
                 onChange={(e) => setNewFileName(e.target.value)}
                 autoFocus
-                className="w-full bg-black border border-zinc-800 rounded-md px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-zinc-650"
+                className="w-full bg-black border border-zinc-800 rounded-md px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-zinc-500"
               />
             </div>
             <DialogFooter className="flex justify-end gap-2 pt-2">
@@ -1655,6 +1777,34 @@ export default function App() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog for Loading Template Confirmation */}
+      <Dialog open={showLoadTemplateDialog} onOpenChange={setShowLoadTemplateDialog}>
+        <DialogContent className="bg-zinc-950 border-zinc-800 text-slate-100 max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-semibold tracking-tight text-slate-200 font-outfit">Load Template</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Are you sure you want to load this template? It will replace all code in the current editor buffer.
+            </p>
+            <DialogFooter className="flex justify-end gap-2 pt-2">
+              <DialogClose asChild>
+                <Button type="button" variant="outline" size="sm" className="bg-transparent border-zinc-800 h-8 text-xs">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button
+                size="sm"
+                onClick={confirmLoadTemplate}
+                className="bg-white hover:bg-slate-200 text-black border border-white font-bold h-8 text-xs"
+              >
+                Load Template
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1804,7 +1954,7 @@ export default function App() {
                   </div>
                   <div className="text-[10px] text-slate-500 mt-0.5">Required for backend operations</div>
                 </div>
-                <span className="text-[10px] bg-zinc-850 text-slate-300 px-2 py-0.5 rounded border border-zinc-800 font-sans font-medium">Detected</span>
+                <span className="text-[10px] bg-zinc-800 text-slate-300 px-2 py-0.5 rounded border border-zinc-800 font-sans font-medium">Detected</span>
               </div>
 
               {/* FFmpeg Status */}
@@ -1875,7 +2025,7 @@ export default function App() {
                   <Button
                     onClick={handleInstallLatex}
                     disabled={isInstallingLatex}
-                    className="h-6 px-2 text-[10px] bg-zinc-900 text-white hover:bg-zinc-850 border border-zinc-800 font-semibold font-sans"
+                    className="h-6 px-2 text-[10px] bg-zinc-900 text-white hover:bg-zinc-800 border border-zinc-800 font-semibold font-sans"
                   >
                     {isInstallingLatex ? "Installing..." : "Install (winget)"}
                   </Button>

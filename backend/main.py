@@ -8,13 +8,13 @@ import asyncio
 # Ensure backend directory is in python search path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from typing import List, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
+from typing import List
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from diagnostics import generate_profile, write_manim_config_file
+from diagnostics import generate_profile, write_manim_config_file, get_binary_paths
 from executor import ManimExecutor
 
 app = FastAPI(title="Manim Video Editor Backend")
@@ -100,16 +100,14 @@ def get_scene_animations(code_content: str) -> dict:
                 continue
                 
             anims = []
-            for stmt in construct_node.body:
-                # We inspect Expr statements that hold Call values
-                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
-                    call = stmt.value
-                    if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) and call.func.value.id == "self":
-                        if call.func.attr == "play":
-                            line_no = stmt.lineno
+            for subnode in ast.walk(construct_node):
+                if isinstance(subnode, ast.Call):
+                    if isinstance(subnode.func, ast.Attribute) and isinstance(subnode.func.value, ast.Name) and subnode.func.value.id == "self":
+                        if subnode.func.attr == "play":
+                            line_no = subnode.lineno
                             try:
                                 # ast.unparse is available in Python 3.9+
-                                args_str = ", ".join(ast.unparse(arg) for arg in call.args)
+                                args_str = ", ".join(ast.unparse(arg) for arg in subnode.args)
                                 anims.append({
                                     "type": "play",
                                     "label": f"Play: {args_str}",
@@ -121,12 +119,12 @@ def get_scene_animations(code_content: str) -> dict:
                                     "label": "Play animation",
                                     "line": line_no
                                 })
-                        elif call.func.attr == "wait":
-                            line_no = stmt.lineno
+                        elif subnode.func.attr == "wait":
+                            line_no = subnode.lineno
                             duration = 1.0
-                            if call.args:
+                            if subnode.args:
                                 try:
-                                    duration_str = ast.unparse(call.args[0])
+                                    duration_str = ast.unparse(subnode.args[0])
                                     if duration_str.replace('.', '', 1).isdigit():
                                         duration = float(duration_str)
                                     else:
@@ -140,6 +138,8 @@ def get_scene_animations(code_content: str) -> dict:
                                 "line": line_no
                             })
             if anims:
+                # Sort animations by line number chronologically
+                anims.sort(key=lambda x: x["line"])
                 scene_anims[scene_name] = anims
     return scene_anims
 
@@ -238,7 +238,7 @@ class WriteFormula(Scene):
         self.wait(1.5)
         self.play(FadeOut(title), FadeOut(subtitle))
 """
-        with open(os.path.join(WORKSPACE_DIR, default_script_name), "w") as f:
+        with open(os.path.join(WORKSPACE_DIR, default_script_name), "w", encoding="utf-8") as f:
             f.write(default_script_content)
         scripts.append({
             "name": default_script_name,
@@ -259,7 +259,7 @@ def get_file_content(filename: str):
     if not os.path.exists(filepath) or not filename.endswith(".py"):
         raise HTTPException(status_code=404, detail="Python script not found.")
     
-    with open(filepath, "r") as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         content = f.read()
     
     return {
@@ -279,7 +279,7 @@ def save_file(req: SaveRequest):
     filepath = os.path.join(WORKSPACE_DIR, filename)
     
     try:
-        with open(filepath, "w") as f:
+        with open(filepath, "w", encoding="utf-8") as f:
             f.write(req.code)
         
         scenes = get_scenes_from_code(req.code)
@@ -363,8 +363,9 @@ def install_latex():
         import platform
         import subprocess
         cmd = [
-            winget_path, "install", "--id", "MikTeX.MikTeX", 
-            "--silent", "--accept-source-agreements", "--accept-package-agreements"
+            winget_path, "install", "--id", "MiKTeX.MiKTeX", 
+            "--silent", "--accept-source-agreements", "--accept-package-agreements",
+            "--scope", "user"
         ]
         
         subprocess.Popen(
@@ -376,7 +377,7 @@ def install_latex():
         
         return {
             "success": True,
-            "message": "MiKTeX installer has been started in the background. Please accept any UAC prompt that appears."
+            "message": "MiKTeX installer has been started in the background. It will install silently in your user profile (no UAC prompt required)."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -400,7 +401,8 @@ def install_ffmpeg():
         import subprocess
         cmd = [
             winget_path, "install", "--id", "Gyan.FFmpeg", 
-            "--silent", "--accept-source-agreements", "--accept-package-agreements"
+            "--silent", "--accept-source-agreements", "--accept-package-agreements",
+            "--scope", "user"
         ]
         
         subprocess.Popen(
@@ -412,7 +414,7 @@ def install_ffmpeg():
         
         return {
             "success": True,
-            "message": "FFmpeg installer has been started in the background. Please accept any UAC prompt that appears."
+            "message": "FFmpeg installer has been started in the background. It will install silently in your user profile (no UAC prompt required)."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -479,9 +481,11 @@ async def websocket_render(websocket: WebSocket):
                     continue
                 
                 # Define callback function to stream logs and progress to WebSocket
-                def log_callback(log_event):
-                    # We run this in an async-friendly way or execute it directly
-                    asyncio.create_task(websocket.send_json(log_event))
+                async def log_callback(log_event):
+                    try:
+                        await websocket.send_json(log_event)
+                    except (WebSocketDisconnect, RuntimeError):
+                        pass
 
                 # Launch async rendering
                 result = await executor.execute(
@@ -517,15 +521,6 @@ async def websocket_render(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": f"Server WebSocket error: {str(e)}"})
         except Exception:
             pass
-
-def get_binary_paths():
-    """Local helper mirroring diagnostic utility path finding."""
-    manim_path = shutil.which("manim")
-    if not manim_path:
-        custom_manim = r"C:\tools\Manim\Scripts\manim.exe"
-        if os.path.exists(custom_manim):
-            manim_path = custom_manim
-    return {"manim": manim_path or "Not Found"}
 
 # Serve frontend static assets if they exist (built React SPA)
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")

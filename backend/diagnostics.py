@@ -118,6 +118,27 @@ def get_binary_paths():
         if os.path.exists(custom_manim):
             manim_path = custom_manim
 
+    if platform.system() == "Windows":
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+        appdata = os.environ.get("APPDATA", "")
+        
+        miktex_user_bin = os.path.join(local_appdata, "Programs", "MiKTeX", "miktex", "bin", "x64")
+        miktex_system_bin = os.path.join(program_files, "MiKTeX", "miktex", "bin", "x64")
+        tinytex_win = os.path.join(appdata, "TinyTeX", "bin", "windows")
+        tinytex_win32 = os.path.join(appdata, "TinyTeX", "bin", "win32")
+        
+        for bin_dir in [miktex_user_bin, miktex_system_bin, tinytex_win, tinytex_win32]:
+            if os.path.exists(bin_dir):
+                if not latex_path:
+                    cand_latex = os.path.join(bin_dir, "latex.exe")
+                    if os.path.exists(cand_latex):
+                        latex_path = cand_latex
+                if not dvisvgm_path:
+                    cand_dvisvgm = os.path.join(bin_dir, "dvisvgm.exe")
+                    if os.path.exists(cand_dvisvgm):
+                        dvisvgm_path = cand_dvisvgm
+
     return {
         "manim": manim_path or "Not Found",
         "ffmpeg": ffmpeg_path or "Not Found",
@@ -225,7 +246,7 @@ sound = False
 text_to_speech = False
 """
     try:
-        with open(cfg_path, "w") as f:
+        with open(cfg_path, "w", encoding="utf-8") as f:
             f.write(cfg_content)
         return True
     except Exception:
