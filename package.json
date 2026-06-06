@@ -5,8 +5,13 @@
   "scripts": {
     "dev": "npm --prefix frontend run dev",
     "backend": "python backend/main.py",
+    "start": "python run.py",
+    "dev:full": "concurrently \"python backend/main.py\" \"npm --prefix frontend run dev\"",
     "check:frontend": "npm --prefix frontend run lint && npm --prefix frontend run build",
     "check:backend": "python -m compileall backend && python -c \"import backend.main; print('backend import ok')\"",
     "check": "npm run check:frontend && npm run check:backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }
