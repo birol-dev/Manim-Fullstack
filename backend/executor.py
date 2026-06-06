@@ -3,12 +3,57 @@ import os
 import re
 import subprocess
 import platform
+import time
 
 class ManimExecutor:
     def __init__(self, workspace_dir: str):
         self.workspace_dir = workspace_dir
         self.current_process = None
         self._cancelled = False
+        self._last_file_ready = None  # Track the most recent file_ready callback for fallback
+
+    def _find_latest_render(self, script_name: str, scene_name: str):
+        """
+        Fallback: locate the most recently modified .mp4 file in the media directory
+        for a given script/scene. Used when the rich-wrapped 'File ready at' line
+        cannot be parsed from stdout (e.g., when the path wraps across lines).
+        """
+        try:
+            script_stem = os.path.splitext(script_name)[0]
+            media_videos = os.path.join(self.workspace_dir, "media", "videos", script_stem)
+            if not os.path.isdir(media_videos):
+                return None
+
+            candidates = []
+            for root, _dirs, files in os.walk(media_videos):
+                for f in files:
+                    if not f.lower().endswith((".mp4", ".gif", ".webm")):
+                        continue
+                    if scene_name and not f.startswith(scene_name):
+                        continue
+                    full = os.path.join(root, f)
+                    try:
+                        mtime = os.path.getmtime(full)
+                    except OSError:
+                        continue
+                    candidates.append((mtime, full))
+
+            if not candidates:
+                return None
+            candidates.sort(key=lambda t: t[0], reverse=True)
+            return candidates[0][1]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _to_media_rel_path(abs_path: str) -> str:
+        """Convert an absolute file path into a path that starts with 'media/...'
+        so it can be served by the FastAPI /media static mount."""
+        normalized = abs_path.replace("\\", "/")
+        idx = normalized.find("/media/")
+        if idx >= 0:
+            return "media" + normalized[idx + len("/media"):]
+        return os.path.basename(abs_path)
 
     async def execute(self, manim_path: str, script_name: str, scene_name: str, quality: str, use_opengl: bool, log_callback):
         """
@@ -18,6 +63,7 @@ class ManimExecutor:
         """
         self._cancelled = False
         self.current_process = None
+        self._last_file_ready = None
 
         # Build command list
         # Ensure we run using the absolute paths and right flags
@@ -67,6 +113,27 @@ class ManimExecutor:
                 return {"success": False, "status": "cancelled"}
 
             if exit_code == 0:
+                # If the rich-wrapped 'File ready at' line was never parsed (path wraps
+                # across multiple lines), fall back to scanning the media directory for
+                # the newest matching .mp4 file. Only emit a single file_ready event.
+                if not self._last_file_ready:
+                    latest = self._find_latest_render(script_name, scene_name)
+                    if latest:
+                        # Wait one second so the file's mtime is reliably later than
+                        # any partial_movie_files artifacts.
+                        time.sleep(1.0)
+                        # Re-scan after the small delay to avoid picking up partial files.
+                        latest = self._find_latest_render(script_name, scene_name) or latest
+                        rel_path = self._to_media_rel_path(latest)
+                        filename = os.path.basename(latest)
+                        self._last_file_ready = (rel_path, filename, latest)
+                        await log_callback({
+                            "type": "file_ready",
+                            "abs_path": latest,
+                            "rel_path": rel_path,
+                            "filename": filename,
+                        })
+
                 await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
                 return {"success": True, "status": "success"}
             else:
@@ -162,6 +229,7 @@ class ManimExecutor:
                         "rel_path": media_rel_path,
                         "filename": filename
                     })
+                    self._last_file_ready = (media_rel_path, filename, abs_video_path)
 
             # Check for LaTeX specific errors to give user helpful hints
             if latex_pattern.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
