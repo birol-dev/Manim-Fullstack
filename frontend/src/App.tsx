@@ -18,6 +18,7 @@ import {
   FileCode,
   Copy,
   Check,
+  Settings,
 } from "lucide-react";
 
 // Import Shadcn UI Components
@@ -242,7 +243,61 @@ function LaTeX({ math, block = false }: LaTeXProps) {
   return <span ref={containerRef} />;
 }
 
+const DEFAULT_BROWSER_FILES: Record<string, string> = {
+  "my_local_scene.py": `from manim import *
+
+class LocalScene(Scene):
+    def construct(self):
+        text = Text("Local Browser Storage", font_size=36, color=GOLD)
+        self.play(Write(text))
+        self.wait(1.5)
+        self.play(FadeOut(text))
+`
+};
+
+const getBrowserFiles = (): Record<string, string> => {
+  const data = localStorage.getItem("manim_composer_browser_files");
+  if (!data) {
+    localStorage.setItem("manim_composer_browser_files", JSON.stringify(DEFAULT_BROWSER_FILES));
+    return DEFAULT_BROWSER_FILES;
+  }
+  try {
+    return JSON.parse(data) as Record<string, string>;
+  } catch {
+    return DEFAULT_BROWSER_FILES;
+  }
+};
+
+const saveBrowserFiles = (filesMap: Record<string, string>) => {
+  localStorage.setItem("manim_composer_browser_files", JSON.stringify(filesMap));
+};
+
 export default function App() {
+  const [storageLocation, setStorageLocation] = useState<"backend" | "browser">(
+    () => (localStorage.getItem("manim_composer_storage_location") as "backend" | "browser") || "backend"
+  );
+  const [autoSaveOnRender, setAutoSaveOnRender] = useState<boolean>(
+    () => localStorage.getItem("manim_composer_auto_save_on_render") !== "false"
+  );
+  const [downloadOnlyMode, setDownloadOnlyMode] = useState<boolean>(
+    () => localStorage.getItem("manim_composer_download_only_mode") === "true"
+  );
+
+  const handleStorageLocationChange = (val: "backend" | "browser") => {
+    setStorageLocation(val);
+    localStorage.setItem("manim_composer_storage_location", val);
+  };
+
+  const handleAutoSaveOnRenderChange = (val: boolean) => {
+    setAutoSaveOnRender(val);
+    localStorage.setItem("manim_composer_auto_save_on_render", String(val));
+  };
+
+  const handleDownloadOnlyModeChange = (val: boolean) => {
+    setDownloadOnlyMode(val);
+    localStorage.setItem("manim_composer_download_only_mode", String(val));
+  };
+
   const [files, setFiles] = useState<FileListResponse>({
     scripts: [],
     assets: [],
@@ -412,66 +467,157 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/files`);
       if (!res.ok) throw new Error();
       const data = await res.json();
-      setFiles(data);
-    } catch {
-      console.error("Failed to load workspace files.");
-    }
-  }, []);
-
-  const loadFileContent = useCallback(async (name: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/file-content?filename=${name}`);
-      if (!res.ok) throw new Error();
-      const data = await res.json();
-      setActiveFile(data.filename);
-      setCode(data.code);
-      setScenes(data.scenes as string[]);
-      setAnimations(data.animations || {});
-      if ((data.scenes as string[]).length > 0) {
-        setSelectedScene(data.scenes[0]);
+      
+      if (storageLocation === "browser") {
+        const localScripts = getBrowserFiles();
+        const scriptsList = Object.entries(localScripts).map(([name, codeStr]) => ({
+          name,
+          size: codeStr.length,
+          type: "script" as const
+        }));
+        setFiles({
+          ...data,
+          scripts: scriptsList
+        });
       } else {
-        setSelectedScene("");
+        setFiles(data);
       }
     } catch {
-      console.error("Failed to load file contents.");
+      console.error("Failed to load workspace files.");
+      if (storageLocation === "browser") {
+        const localScripts = getBrowserFiles();
+        const scriptsList = Object.entries(localScripts).map(([name, codeStr]) => ({
+          name,
+          size: codeStr.length,
+          type: "script" as const
+        }));
+        setFiles(prev => ({
+          ...prev,
+          scripts: scriptsList
+        }));
+      }
     }
-  }, []);
+  }, [storageLocation]);
+
+  const loadFileContent = useCallback(async (name: string) => {
+    if (storageLocation === "browser") {
+      const localScripts = getBrowserFiles();
+      const fileCode = localScripts[name] || "";
+      setActiveFile(name);
+      setCode(fileCode);
+      
+      try {
+        const res = await fetch(`${API_BASE}/api/parse-code`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: fileCode }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setScenes(data.scenes as string[]);
+          setAnimations(data.animations || {});
+          if ((data.scenes as string[]).length > 0) {
+            setSelectedScene(data.scenes[0]);
+          } else {
+            setSelectedScene("");
+          }
+        }
+      } catch {
+        console.error("Failed to parse local code from backend.");
+      }
+    } else {
+      try {
+        const res = await fetch(`${API_BASE}/api/file-content?filename=${name}`);
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        setActiveFile(data.filename);
+        setCode(data.code);
+        setScenes(data.scenes as string[]);
+        setAnimations(data.animations || {});
+        if ((data.scenes as string[]).length > 0) {
+          setSelectedScene(data.scenes[0]);
+        } else {
+          setSelectedScene("");
+        }
+      } catch {
+        console.error("Failed to load file contents.");
+      }
+    }
+  }, [storageLocation]);
 
   const handleSave = useCallback(
     async (silent = false) => {
       if (!activeFile) return;
       setIsSaving(true);
-      try {
-        const res = await fetch(`${API_BASE}/api/save`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename: activeFile, code }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          setScenes(data.scenes as string[]);
-          setAnimations(data.animations || {});
-          if (
-            (data.scenes as string[]).length > 0 &&
-            !(data.scenes as string[]).includes(selectedScene)
-          ) {
-            setSelectedScene(data.scenes[0]);
+
+      if (storageLocation === "browser") {
+        try {
+          const localScripts = getBrowserFiles();
+          localScripts[activeFile] = code;
+          saveBrowserFiles(localScripts);
+
+          const res = await fetch(`${API_BASE}/api/parse-code`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code }),
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            setScenes(data.scenes as string[]);
+            setAnimations(data.animations || {});
+            if (
+              (data.scenes as string[]).length > 0 &&
+              !(data.scenes as string[]).includes(selectedScene)
+            ) {
+              setSelectedScene(data.scenes[0]);
+            }
+            if (!silent) {
+              addLog(
+                "info",
+                `File "${activeFile}" saved successfully to browser local storage. Found scenes: ${(data.scenes as string[]).join(", ")}`,
+              );
+            }
+            fetchFiles();
           }
-          if (!silent) {
-            addLog(
-              "info",
-              `File "${activeFile}" saved successfully. Found scenes: ${(data.scenes as string[]).join(", ")}`,
-            );
-          }
-          fetchFiles();
+        } catch {
+          addLog("error", "Error saving file to browser local storage.");
+        } finally {
+          setIsSaving(false);
         }
-      } catch {
-        addLog("error", "Error saving file to workspace.");
-      } finally {
-        setIsSaving(false);
+      } else {
+        try {
+          const res = await fetch(`${API_BASE}/api/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: activeFile, code }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            setScenes(data.scenes as string[]);
+            setAnimations(data.animations || {});
+            if (
+              (data.scenes as string[]).length > 0 &&
+              !(data.scenes as string[]).includes(selectedScene)
+            ) {
+              setSelectedScene(data.scenes[0]);
+            }
+            if (!silent) {
+              addLog(
+                "info",
+                `File "${activeFile}" saved successfully. Found scenes: ${(data.scenes as string[]).join(", ")}`,
+              );
+            }
+            fetchFiles();
+          }
+        } catch {
+          addLog("error", "Error saving file to workspace.");
+        } finally {
+          setIsSaving(false);
+        }
       }
     },
-    [activeFile, code, selectedScene, fetchFiles, addLog],
+    [activeFile, code, selectedScene, fetchFiles, addLog, storageLocation],
   );
 
   const handleCreateFile = useCallback(
@@ -483,25 +629,37 @@ export default function App() {
 
       const defaultCode = `from manim import *\n\nclass NewScene(Scene):\n    def construct(self):\n        text = Text("New Project", font_size=36)\n        self.play(Write(text))\n        self.wait(1)\n        self.play(FadeOut(text))\n`;
 
-      try {
-        const res = await fetch(`${API_BASE}/api/save`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filename: name, code: defaultCode }),
-        });
-        const data = await res.json();
-        if (data.success) {
-          setNewFileName("");
-          setShowNewFileDialog(false);
-          await fetchFiles();
-          await loadFileContent(name);
-          addLog("info", `Created new script: ${name}`);
+      if (storageLocation === "browser") {
+        const localScripts = getBrowserFiles();
+        localScripts[name] = defaultCode;
+        saveBrowserFiles(localScripts);
+
+        setNewFileName("");
+        setShowNewFileDialog(false);
+        await fetchFiles();
+        await loadFileContent(name);
+        addLog("info", `Created new browser local script: ${name}`);
+      } else {
+        try {
+          const res = await fetch(`${API_BASE}/api/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: name, code: defaultCode }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            setNewFileName("");
+            setShowNewFileDialog(false);
+            await fetchFiles();
+            await loadFileContent(name);
+            addLog("info", `Created new script: ${name}`);
+          }
+        } catch {
+          addLog("error", "Error creating new file.");
         }
-      } catch {
-        addLog("error", "Error creating new file.");
       }
     },
-    [newFileName, fetchFiles, loadFileContent, addLog],
+    [newFileName, fetchFiles, loadFileContent, addLog, storageLocation],
   );
 
   const handleRename = useCallback(
@@ -511,38 +669,55 @@ export default function App() {
       let name = newName.trim();
       if (!name.endsWith(".py")) name += ".py";
 
-      if (isRenamingInProgressRef.current) return;
-      isRenamingInProgressRef.current = true;
-
-      try {
-        const res = await fetch(`${API_BASE}/api/rename`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ old_name: oldName, new_name: name }),
-        });
-
-        if (!res.ok) {
-          const errorData = (await res.json()) as { detail?: string };
-          throw new Error(errorData.detail || "Rename failed.");
+      if (storageLocation === "browser") {
+        const localScripts = getBrowserFiles();
+        if (localScripts[name] !== undefined) {
+          addLog("error", "A local browser script with the target name already exists.");
+          return;
         }
+        localScripts[name] = localScripts[oldName] || "";
+        delete localScripts[oldName];
+        saveBrowserFiles(localScripts);
 
-        const data = (await res.json()) as { success: boolean };
-        if (data.success) {
-          addLog("info", `Renamed file: ${oldName} -> ${name}`);
-          if (activeFile === oldName) {
-            setActiveFile(name);
+        addLog("info", `Renamed local browser script: ${oldName} -> ${name}`);
+        if (activeFile === oldName) {
+          setActiveFile(name);
+        }
+        fetchFiles();
+      } else {
+        if (isRenamingInProgressRef.current) return;
+        isRenamingInProgressRef.current = true;
+
+        try {
+          const res = await fetch(`${API_BASE}/api/rename`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ old_name: oldName, new_name: name }),
+          });
+
+          if (!res.ok) {
+            const errorData = (await res.json()) as { detail?: string };
+            throw new Error(errorData.detail || "Rename failed.");
           }
-          fetchFiles();
+
+          const data = (await res.json()) as { success: boolean };
+          if (data.success) {
+            addLog("info", `Renamed file: ${oldName} -> ${name}`);
+            if (activeFile === oldName) {
+              setActiveFile(name);
+            }
+            fetchFiles();
+          }
+        } catch (error) {
+          const msg =
+            error instanceof Error ? error.message : "Error renaming file.";
+          addLog("error", msg);
+        } finally {
+          isRenamingInProgressRef.current = false;
         }
-      } catch (error) {
-        const msg =
-          error instanceof Error ? error.message : "Error renaming file.";
-        addLog("error", msg);
-      } finally {
-        isRenamingInProgressRef.current = false;
       }
     },
-    [activeFile, fetchFiles, addLog],
+    [activeFile, fetchFiles, addLog, storageLocation],
   );
 
   const handleAssetUpload = useCallback(
@@ -571,10 +746,9 @@ export default function App() {
 
   const downloadRenderedVideo = useCallback(
     async (relPath: string, providedName?: string) => {
-      const normalizedPath = relPath.replace(/^\/+/, "");
-      const downloadUrl = `${API_BASE}/${normalizedPath}`;
+      const downloadUrl = relPath.startsWith("api/") ? `${API_BASE}/${relPath}` : `${API_BASE}/${relPath.replace(/^\/+/, "")}`;
       const filename =
-        providedName || normalizedPath.split("/").pop() || "render.mp4";
+        providedName || relPath.split("/").pop() || "render.mp4";
 
       try {
         const response = await fetch(downloadUrl);
@@ -606,6 +780,7 @@ export default function App() {
 
   const sendRenderRequest = useCallback(() => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const shouldSendCode = storageLocation === "browser" || !autoSaveOnRender;
       wsRef.current.send(
         JSON.stringify({
           type: "start",
@@ -613,6 +788,8 @@ export default function App() {
           scene: selectedScene,
           quality: quality,
           use_opengl: useOpengl,
+          code: shouldSendCode ? code : undefined,
+          download_only: downloadOnlyMode,
         }),
       );
     } else {
@@ -622,7 +799,7 @@ export default function App() {
       );
       setIsRendering(false);
     }
-  }, [activeFile, selectedScene, quality, useOpengl, addLog]);
+  }, [activeFile, selectedScene, quality, useOpengl, addLog, code, storageLocation, autoSaveOnRender, downloadOnlyMode]);
 
   const connectWebSocket = useCallback(
     (onConnectCallback?: () => void) => {
@@ -653,10 +830,36 @@ export default function App() {
           } else if (data.type === "file_ready") {
             addLog("success", `Video ready! File saved to: ${data.filename}`);
             if (data.rel_path) {
-              setVideoUrl(`${API_BASE}/${data.rel_path}?t=${Date.now()}`);
-              setVideoKey((prev) => prev + 1);
-              setSavedPath(`workspace/${data.rel_path}`);
-              void downloadRenderedVideo(data.rel_path, data.filename);
+              if (downloadOnlyMode) {
+                const downloadUrl = data.rel_path.startsWith("api/") ? `${API_BASE}/${data.rel_path}` : `${API_BASE}/${data.rel_path}`;
+                fetch(downloadUrl)
+                  .then(res => {
+                    if (!res.ok) throw new Error();
+                    return res.blob();
+                  })
+                  .then(blob => {
+                    const objectUrl = URL.createObjectURL(blob);
+                    setVideoUrl(objectUrl);
+                    setVideoKey((prev) => prev + 1);
+                    setSavedPath("Downloaded locally (not stored on backend disk)");
+                    
+                    const anchor = document.createElement("a");
+                    anchor.href = objectUrl;
+                    anchor.download = data.filename || "render.mp4";
+                    anchor.style.display = "none";
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    anchor.remove();
+                  })
+                  .catch(() => {
+                    addLog("error", "Failed to download temporary video stream.");
+                  });
+              } else {
+                setVideoUrl(`${API_BASE}/${data.rel_path}?t=${Date.now()}`);
+                setVideoKey((prev) => prev + 1);
+                setSavedPath(`workspace/${data.rel_path}`);
+                void downloadRenderedVideo(data.rel_path, data.filename);
+              }
             }
             fetchFiles();
           } else if (data.type === "result") {
@@ -682,12 +885,14 @@ export default function App() {
         console.error("WS error connecting.");
       }
     },
-    [fetchFiles, addLog, downloadRenderedVideo],
+    [fetchFiles, addLog, downloadRenderedVideo, downloadOnlyMode],
   );
 
   const startRender = useCallback(async () => {
     if (isRendering) return;
-    await handleSave(true);
+    if (storageLocation === "backend" && autoSaveOnRender) {
+      await handleSave(true);
+    }
 
     if (!selectedScene) {
       addLog(
@@ -720,6 +925,8 @@ export default function App() {
     connectWebSocket,
     sendRenderRequest,
     addLog,
+    storageLocation,
+    autoSaveOnRender,
   ]);
 
   const cancelRender = useCallback(() => {
@@ -1045,6 +1252,35 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [files.scripts, activeFile, code, loadFileContent]);
 
+  // Trigger file list reload and load active file when storageLocation toggles
+  useEffect(() => {
+    const reloadOnStorageChange = async () => {
+      await fetchFiles();
+      if (storageLocation === "browser") {
+        const localScripts = getBrowserFiles();
+        const keys = Object.keys(localScripts);
+        if (keys.length > 0) {
+          if (!keys.includes(activeFile)) {
+            await loadFileContent(keys[0]);
+          } else {
+            await loadFileContent(activeFile);
+          }
+        } else {
+          localScripts["main.py"] = `from manim import *\n\nclass MainScene(Scene):\n    def construct(self):\n        text = Text("Main Scene")\n        self.play(Write(text))\n`;
+          saveBrowserFiles(localScripts);
+          await loadFileContent("main.py");
+        }
+      } else {
+        if (files.scripts.length > 0) {
+          if (!files.scripts.some(f => f.name === activeFile)) {
+            await loadFileContent(files.scripts[0].name);
+          }
+        }
+      }
+    };
+    void reloadOnStorageChange();
+  }, [storageLocation, fetchFiles]);
+
   // Sync startRender callback to ref for auto-rendering
   useEffect(() => {
     startRenderRef.current = startRender;
@@ -1137,7 +1373,7 @@ export default function App() {
           defaultValue="files"
           className="flex-1 flex flex-col overflow-hidden"
         >
-          <TabsList className="grid grid-cols-6 bg-zinc-900/40 border-b border-zinc-800 p-0 rounded-none h-11">
+          <TabsList className="grid grid-cols-7 bg-zinc-900/40 border-b border-zinc-800 p-0 rounded-none h-11">
             <TabsTrigger
               value="files"
               className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900"
@@ -1173,6 +1409,12 @@ export default function App() {
               className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900"
             >
               DIAGS
+            </TabsTrigger>
+            <TabsTrigger
+              value="settings"
+              className="text-[8px] tracking-wider font-semibold rounded-none py-3 text-slate-400 data-[state=active]:text-white data-[state=active]:bg-zinc-900"
+            >
+              CONFIG
             </TabsTrigger>
           </TabsList>
 
@@ -1877,6 +2119,94 @@ export default function App() {
                 </span>
               )}
             </TabsContent>
+
+            <TabsContent value="settings" className="mt-0 space-y-4 outline-none">
+              <div className="space-y-4 text-xs">
+                <div className="flex items-center gap-1.5 border-b border-zinc-900 pb-2 mb-1">
+                  <Settings size={14} className="text-slate-400" />
+                  <h3 className="text-xs font-semibold text-slate-200 tracking-wider">
+                    Storage & Saves
+                  </h3>
+                </div>
+
+                {/* Storage Location Settings */}
+                <div className="space-y-2.5 bg-zinc-950 p-3.5 rounded-lg border border-zinc-900">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block mb-1">
+                      File Storage Location
+                    </span>
+                    <p className="text-[10px] text-slate-500 leading-normal mb-3">
+                      Choose where scripts are loaded and saved: backend workspace on disk, or local browser storage.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant={storageLocation === "backend" ? "default" : "outline"}
+                      onClick={() => handleStorageLocationChange("backend")}
+                      className={`flex-1 h-7 text-[10px] font-bold ${storageLocation === "backend" ? "bg-white text-black hover:bg-slate-200" : "bg-transparent border-zinc-800 text-slate-400 hover:text-white"}`}
+                    >
+                      Workspace Disk
+                    </Button>
+                    <Button
+                      variant={storageLocation === "browser" ? "default" : "outline"}
+                      onClick={() => handleStorageLocationChange("browser")}
+                      className={`flex-1 h-7 text-[10px] font-bold ${storageLocation === "browser" ? "bg-white text-black hover:bg-slate-200" : "bg-transparent border-zinc-800 text-slate-400 hover:text-white"}`}
+                    >
+                      Local Browser
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Auto-Save Toggle */}
+                <div className="flex items-start justify-between bg-zinc-950 p-3.5 rounded-lg border border-zinc-900 gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block">
+                      Auto-Save on Render
+                    </span>
+                    <p className="text-[10px] text-slate-500 leading-normal">
+                      Automatically save all editor buffer changes to script files before running the rendering process.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={autoSaveOnRender}
+                      onChange={(e) => handleAutoSaveOnRenderChange(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
+                  </label>
+                </div>
+
+                {/* Download-Only Mode Toggle */}
+                <div className="flex items-start justify-between bg-zinc-950 p-3.5 rounded-lg border border-zinc-900 gap-3">
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider block">
+                      Download-Only Mode
+                    </span>
+                    <p className="text-[10px] text-slate-500 leading-normal">
+                      Rendered video outputs are fetched directly by the browser and deleted from backend disk automatically.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-0.5">
+                    <input
+                      type="checkbox"
+                      checked={downloadOnlyMode}
+                      onChange={(e) => handleDownloadOnlyModeChange(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
+                  </label>
+                </div>
+
+                {storageLocation === "browser" && (
+                  <div className="bg-zinc-900/30 border border-zinc-800/50 p-3 rounded-lg text-slate-400 leading-relaxed text-[10px] space-y-1">
+                    <span className="font-semibold text-white block">Local Sandbox Enabled</span>
+                    <span>All python files are running completely in your browser storage. You can write, load, and rename files offline. Click Render to securely run code on the fly.</span>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
           </div>
         </Tabs>
       </aside>
@@ -1907,7 +2237,16 @@ export default function App() {
         )}
 
         {/* Editor Action Bar */}
-        <div className="flex justify-between items-center flex-wrap gap-2 px-4 py-3 bg-zinc-950 border-b border-zinc-800">
+        <div className="flex justify-between items-center flex-wrap gap-2 px-4 py-3 bg-zinc-950 border-b border-zinc-800 relative">
+          {/* Top of Editor Progress Bar */}
+          {isRendering && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-900 overflow-hidden">
+              <div 
+                className="bg-white h-full transition-all duration-300 shadow-[0_0_8px_rgba(255,255,255,0.8)] progress-striped"
+                style={{ width: `${renderPercent}%` }}
+              />
+            </div>
+          )}
           <div className="flex items-center gap-2 flex-wrap">
             <FileText size={14} className="text-slate-400" />
             <span className="text-xs font-semibold text-slate-200">
@@ -2100,6 +2439,50 @@ export default function App() {
         </div>
 
         <div className="flex-1 bg-black flex items-center justify-center relative border-t border-zinc-900">
+          {isRendering && (
+            <div className="absolute inset-0 bg-zinc-950/85 backdrop-blur-md flex flex-col items-center justify-center p-6 z-20 transition-all duration-350">
+              <div className="w-full max-w-xs space-y-5 text-center">
+                {/* Visual Loader */}
+                <div className="flex justify-center items-center relative">
+                  <div className="h-16 w-16 rounded-full border-4 border-zinc-850 border-t-white animate-spin"></div>
+                  <span className="absolute text-xs font-mono font-bold text-white">
+                    {renderPercent}%
+                  </span>
+                </div>
+
+                <div className="space-y-1">
+                  <h4 className="text-xs font-bold text-white tracking-widest uppercase font-outfit">Rendering Scene</h4>
+                  <p className="text-[10px] text-zinc-400 font-mono truncate px-2">
+                    {selectedScene || "Initializing..."}
+                  </p>
+                </div>
+
+                {/* Progress Bar with Moving Stripes */}
+                <div className="space-y-2">
+                  <div className="w-full bg-zinc-900 rounded-full h-3 overflow-hidden border border-zinc-800 shadow-inner relative">
+                    <div
+                      className="bg-white h-full rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(255,255,255,0.7)] progress-striped"
+                      style={{ width: `${Math.max(renderPercent, 4)}%` }}
+                    />
+                  </div>
+                  {/* Latest Log Message */}
+                  <div className="text-[9px] text-zinc-500 font-mono truncate px-1 italic">
+                    {logs.filter(l => l.type === 'log' || l.type === 'info').slice(-1)[0]?.message || "Initializing render engine..."}
+                  </div>
+                </div>
+
+                {/* Cancel Button */}
+                <Button
+                  size="sm"
+                  onClick={cancelRender}
+                  className="h-7 px-3 text-[10px] font-bold bg-zinc-900 hover:bg-zinc-850 text-white border border-zinc-850 hover:border-zinc-700 inline-flex items-center gap-1.5"
+                >
+                  <Square size={10} className="fill-current" /> Cancel Render
+                </Button>
+              </div>
+            </div>
+          )}
+
           {videoUrl ? (
             <video
               key={videoKey}

@@ -18,7 +18,10 @@ from fastapi import (
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
+    BackgroundTasks,
 )
+from fastapi.responses import FileResponse
+
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -298,6 +301,52 @@ def get_file_content(filename: str):
     }
 
 
+class ParseRequest(BaseModel):
+    code: str
+
+
+@app.post("/api/parse-code")
+def parse_code(req: ParseRequest):
+    """Parses code on the fly to return scenes and animations without writing to disk."""
+    scenes = get_scenes_from_code(req.code)
+    animations = get_scene_animations(req.code)
+    return {
+        "success": True,
+        "scenes": scenes,
+        "animations": animations,
+    }
+
+
+@app.get("/api/download-temp")
+def download_temp(path: str, background_tasks: BackgroundTasks):
+    """Serves a rendered temporary file and deletes it once the download completes."""
+    # Ensure the path is inside MEDIA_DIR to prevent directory traversal
+    abs_path = os.path.abspath(os.path.join(MEDIA_DIR, path))
+    if not abs_path.startswith(os.path.abspath(MEDIA_DIR)):
+        raise HTTPException(status_code=400, detail="Access denied")
+
+    if not os.path.exists(abs_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    def remove_file():
+        try:
+            if os.path.exists(abs_path):
+                os.remove(abs_path)
+            # Remove parent directory if it's empty
+            parent = os.path.dirname(abs_path)
+            if os.path.exists(parent) and not os.listdir(parent):
+                os.rmdir(parent)
+                # Remove grandparent if empty and is a temp folder
+                grandparent = os.path.dirname(parent)
+                if os.path.basename(grandparent).startswith("_temp_run_") and not os.listdir(grandparent):
+                    os.rmdir(grandparent)
+        except Exception:
+            pass
+
+    background_tasks.add_task(remove_file)
+    return FileResponse(abs_path, media_type="video/mp4", filename=os.path.basename(abs_path))
+
+
 @app.post("/api/save")
 def save_file(req: SaveRequest):
     """Saves code to a python script, returning parsed scenes."""
@@ -542,6 +591,8 @@ async def websocket_render(websocket: WebSocket):
                 scene_name = message.get("scene")
                 quality = message.get("quality", "m")
                 use_opengl = message.get("use_opengl", False)
+                download_only = message.get("download_only", False)
+                code_content = message.get("code")
 
                 # Fetch absolute paths
                 binaries = get_binary_paths()
@@ -559,19 +610,51 @@ async def websocket_render(websocket: WebSocket):
                 # Define callback function to stream logs and progress to WebSocket
                 async def log_callback(log_event):
                     try:
+                        if download_only and log_event.get("type") == "file_ready":
+                            # Rewrite the rel_path to point to the download-temp endpoint
+                            orig_rel_path = log_event.get("rel_path", "")
+                            if orig_rel_path.startswith("media/"):
+                                path_param = orig_rel_path[len("media/"):]
+                            else:
+                                path_param = orig_rel_path
+                            
+                            log_event = dict(log_event)
+                            log_event["rel_path"] = f"api/download-temp?path={path_param}"
+                            log_event["is_temp_download"] = True
+
                         await websocket.send_json(log_event)
                     except (WebSocketDisconnect, RuntimeError):
                         pass
 
-                # Launch async rendering
-                result = await executor.execute(
-                    manim_path=manim_path,
-                    script_name=filename,
-                    scene_name=scene_name,
-                    quality=quality,
-                    use_opengl=use_opengl,
-                    log_callback=log_callback,
-                )
+                # Handle transient code content via a temporary script file
+                temp_filepath = None
+                actual_script_name = filename
+
+                if code_content is not None:
+                    import uuid
+                    temp_id = uuid.uuid4().hex[:8]
+                    actual_script_name = f"_temp_run_{temp_id}.py"
+                    temp_filepath = os.path.join(WORKSPACE_DIR, actual_script_name)
+                    with open(temp_filepath, "w", encoding="utf-8") as f:
+                        f.write(code_content)
+
+                try:
+                    # Launch async rendering
+                    result = await executor.execute(
+                        manim_path=manim_path,
+                        script_name=actual_script_name,
+                        scene_name=scene_name,
+                        quality=quality,
+                        use_opengl=use_opengl,
+                        log_callback=log_callback,
+                    )
+                finally:
+                    # Cleanup the temporary script file if created
+                    if temp_filepath and os.path.exists(temp_filepath):
+                        try:
+                            os.remove(temp_filepath)
+                        except Exception:
+                            pass
 
                 # Report final rendering result
                 await websocket.send_json(

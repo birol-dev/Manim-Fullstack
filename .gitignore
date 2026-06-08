@@ -1,7 +1,19 @@
 # Node dependencies & builds
 node_modules/
 dist/
+dist-ssr/
 .npm/
+*.tsbuildinfo
+vite.config.ts.timestamp-*
+
+# Logs & Debugging
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
 # Python caching & builds
 __pycache__/
@@ -9,20 +21,32 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 ENV/
 env/
 build/
 *.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local Environment Variables & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
 
 # Manim temporary files & rendered outputs
 workspace/media/
 workspace/logs/
 workspace/__pycache__/
 workspace/manim.cfg
-logs/
-*.log
+media/
 
 # IDEs, System, and Agent files
 .vscode/
@@ -32,3 +56,10 @@ logs/
 skills-lock.json
 .DS_Store
 Thumbs.db
+desktop.ini
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
