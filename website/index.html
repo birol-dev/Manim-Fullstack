@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#12100d" />
+  <meta
+    name="description"
+    content="Manim Composer is a browser-based IDE for Manim CE with live preview, real-time render logs, LaTeX tooling, file management, and hardware-aware render presets."
+  />
+  <meta property="og:title" content="Manim Composer | Build Mathematical Animations Without Toolchain Drag" />
+  <meta property="og:description" content="Write Python, preview equations, stream Manim render logs, and manage scenes from one focused local web workspace." />
+  <meta property="og:type" content="website" />
+  <title>Manim Composer | Browser IDE for Mathematical Animation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,760&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip To Main Content</a>
+
+  <header class="site-header" id="top">
+    <nav class="nav-shell" aria-label="Main navigation">
+      <a class="brand" href="#top" aria-label="Manim Composer home">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span translate="no">Manim Composer</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="nav-menu">
+        <span aria-hidden="true"></span>
+        <span aria-hidden="true"></span>
+      </button>
+      <div class="nav-menu" id="nav-menu">
+        <a href="#pain">Pain</a>
+        <a href="#workspace">Workspace</a>
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <a class="nav-cta" href="#download">Open The Workspace</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero section-band" aria-labelledby="hero-title">
+      <canvas class="equation-field" id="equation-field" width="1600" height="900" aria-hidden="true"></canvas>
+      <div class="container hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow">Local-first Manim CE studio</p>
+          <h1 id="hero-title">Build mathematical animations without losing the afternoon to your toolchain.</h1>
+          <p class="hero-lede">
+            Manim Composer puts Python editing, scene discovery, LaTeX previews, live render logs, and video output in one focused browser workspace. Keep the creative loop tight: write the idea, render the scene, fix the frame.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button button-primary" href="#download">Start A Local Session</a>
+            <a class="button button-secondary" href="#workspace">See The Workspace</a>
+          </div>
+          <dl class="hero-metrics" aria-label="Product metrics">
+            <div>
+              <dt>2 sec</dt>
+              <dd>Auto-render debounce after typing stops</dd>
+            </div>
+            <div>
+              <dt>3 presets</dt>
+              <dd>Eco, balanced, and workstation profiles</dd>
+            </div>
+            <div>
+              <dt>1 flow</dt>
+              <dd>Code, math, logs, assets, and video preview</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="product-stage" aria-label="Manim Composer interface preview">
+          <div class="app-frame">
+            <div class="app-topbar">
+              <span class="window-dot"></span>
+              <span class="window-dot"></span>
+              <span class="window-dot"></span>
+              <span class="app-title">workspace / eulers_identity.py</span>
+              <span class="render-pill">Rendering 78%</span>
+            </div>
+            <div class="app-layout">
+              <aside class="app-sidebar" aria-label="Workspace files preview">
+                <p class="pane-label">Scenes</p>
+                <button type="button" class="file-row active">EulersIdentity</button>
+                <button type="button" class="file-row">VectorField</button>
+                <button type="button" class="file-row">FourierTrace</button>
+                <p class="pane-label lower">Assets</p>
+                <button type="button" class="file-row muted">logo.png</button>
+                <button type="button" class="file-row muted">voiceover.mp3</button>
+              </aside>
+              <section class="code-pane" aria-label="Python code preview">
+                <pre><code><span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
+
+<span class="code-keyword">class</span> <span class="code-class">EulersIdentity</span>(Scene):
+    <span class="code-keyword">def</span> <span class="code-fn">construct</span>(self):
+        eq = MathTex(
+            <span class="code-string">r"e^{i\pi}+1=0"</span>,
+            font_size=<span class="code-num">92</span>
+        )
+        box = SurroundingRectangle(eq)
+        self.play(Write(eq))
+        self.play(Create(box))</code></pre>
+              </section>
+              <aside class="preview-pane" aria-label="Rendered video preview">
+                <div class="math-canvas">
+                  <span>e<sup>iπ</sup> + 1 = 0</span>
+                </div>
+                <div class="log-stream" aria-label="Render log preview">
+                  <p><span>stdout</span> Building EulersIdentity</p>
+                  <p><span>progress</span> Animation 3 of 4</p>
+                  <p><span>file</span> media/videos/1080p60.mp4</p>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trust-strip" aria-label="Who Manim Composer is built for">
+      <div class="container trust-grid">
+        <span>For educators</span>
+        <span>For math YouTubers</span>
+        <span>For technical teams</span>
+        <span>For researchers</span>
+        <span>For students</span>
+      </div>
+    </section>
+
+    <section class="section-band pain-section" id="pain" aria-labelledby="pain-title">
+      <div class="container split-heading">
+        <div>
+          <p class="eyebrow">The hidden tax</p>
+          <h2 id="pain-title">Manim is powerful. The workflow around it can be punishing.</h2>
+        </div>
+        <p>
+          The best explainers are built through tiny visual decisions: timing, spacing, equation shape, camera motion. Traditional terminal loops make every one of those decisions expensive.
+        </p>
+      </div>
+      <div class="container pain-grid">
+        <article class="pain-card">
+          <span class="pain-index">01</span>
+          <h3>Setup eats the motivation.</h3>
+          <p>Python environments, FFmpeg, Cairo, LaTeX, dvisvgm, and PATH errors can turn a simple scene into a dependency scavenger hunt.</p>
+        </article>
+        <article class="pain-card">
+          <span class="pain-index">02</span>
+          <h3>The feedback loop is too slow.</h3>
+          <p>Saving, switching windows, re-running commands, scanning output, and opening the video again breaks the moment when the idea is still warm.</p>
+        </article>
+        <article class="pain-card">
+          <span class="pain-index">03</span>
+          <h3>LaTeX failures feel opaque.</h3>
+          <p>Math is the reason you reached for Manim. It should not become the place where students and creators get stuck first.</p>
+        </article>
+        <article class="pain-card">
+          <span class="pain-index">04</span>
+          <h3>Scenes disappear inside files.</h3>
+          <p>When projects grow, it becomes harder to remember which class lives where, which output belongs to which scene, and which assets are safe to reuse.</p>
+        </article>
+        <article class="pain-card">
+          <span class="pain-index">05</span>
+          <h3>Hardware sits underused.</h3>
+          <p>Render settings are often chosen by habit. Manim Composer profiles the machine and recommends a practical preview quality before you waste cycles.</p>
+        </article>
+        <article class="pain-card accent-card">
+          <span class="pain-index">Fix</span>
+          <h3>Put the whole render loop where your attention already is.</h3>
+          <p>A browser workspace makes Manim feel like an instrument again: visible, interruptible, and fast enough to keep exploring.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-band workspace-section" id="workspace" aria-labelledby="workspace-title">
+      <div class="container workspace-grid">
+        <div class="workspace-copy">
+          <p class="eyebrow">Workspace anatomy</p>
+          <h2 id="workspace-title">A complete Manim desk, not a pretty wrapper around a terminal.</h2>
+          <p>
+            Every panel exists because it removes a real interruption: Monaco for code, AST scene detection for navigation, KaTeX for formula drafting, WebSocket logs for confidence, and file tools for keeping the project legible.
+          </p>
+          <ul class="check-list">
+            <li>Write scenes in a real editor with Python-focused ergonomics.</li>
+            <li>Preview common equations before inserting <span translate="no">MathTex</span> blocks.</li>
+            <li>Watch render progress and compiler output stream in real time.</li>
+            <li>Manage scripts, uploads, and rendered media from one sidebar.</li>
+          </ul>
+        </div>
+        <div class="workflow-board" aria-label="Workspace flow preview">
+          <article>
+            <span>Input</span>
+            <h3>Scene Code</h3>
+            <p>Monaco editor, snippets, inline save, scene class discovery.</p>
+          </article>
+          <article>
+            <span>Math</span>
+            <h3>LaTeX Sandbox</h3>
+            <p>Preview equations in the browser before committing them to Python.</p>
+          </article>
+          <article>
+            <span>Render</span>
+            <h3>Live Compiler</h3>
+            <p>WebSocket progress, stdout, stderr, cancellation, and file-ready events.</p>
+          </article>
+          <article>
+            <span>Output</span>
+            <h3>Video Review</h3>
+            <p>Open the latest render immediately and keep iterating.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-band features-section" id="features" aria-labelledby="features-title">
+      <div class="container centered-heading">
+        <p class="eyebrow">What ships in the box</p>
+        <h2 id="features-title">Purpose-built controls for the parts of Manim that usually slow people down.</h2>
+      </div>
+      <div class="container feature-list">
+        <article class="feature-row">
+          <div class="feature-kicker">01 / Live render loop</div>
+          <h3>Auto-render after you stop typing.</h3>
+          <p>Turn on debounced rendering and Manim Composer compiles the active scene after a short pause. The result: fewer context switches, more visual iteration.</p>
+        </article>
+        <article class="feature-row">
+          <div class="feature-kicker">02 / Diagnostics</div>
+          <h3>Render presets based on the machine in front of you.</h3>
+          <p>CPU cores, RAM, GPU availability, FFmpeg, Manim, LaTeX, and dvisvgm checks feed practical profiles for eco previews, balanced drafts, or workstation output.</p>
+        </article>
+        <article class="feature-row">
+          <div class="feature-kicker">03 / LaTeX relief</div>
+          <h3>Draft formulas before the compiler gets involved.</h3>
+          <p>The KaTeX sandbox lets you test common equation structures, then insert clean <span translate="no">MathTex</span> code when the formula is ready.</p>
+        </article>
+        <article class="feature-row">
+          <div class="feature-kicker">04 / Local files</div>
+          <h3>Scripts, assets, and rendered videos stay visible.</h3>
+          <p>Create scripts, rename files inline, upload media assets, and review rendered outputs without spelunking through generated folders.</p>
+        </article>
+        <article class="feature-row">
+          <div class="feature-kicker">05 / Render control</div>
+          <h3>Start, cancel, inspect, and recover.</h3>
+          <p>WebSocket render sessions stream progress and logs while cancellation terminates the render process tree cleanly on Windows.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-band compare-section" aria-labelledby="compare-title">
+      <div class="container split-heading">
+        <div>
+          <p class="eyebrow">Before and after</p>
+          <h2 id="compare-title">The same Manim power, with fewer places to trip.</h2>
+        </div>
+        <p>Manim Composer does not hide Python or dilute Manim. It keeps the underlying engine intact while making the creative surface humane.</p>
+      </div>
+      <div class="container comparison-table" role="table" aria-label="Workflow comparison">
+        <div class="table-row table-head" role="row">
+          <span role="columnheader">Task</span>
+          <span role="columnheader">Terminal-only workflow</span>
+          <span role="columnheader">Manim Composer</span>
+        </div>
+        <div class="table-row" role="row">
+          <span role="cell">Find scenes</span>
+          <span role="cell">Read files manually</span>
+          <span role="cell">Scene classes detected from AST</span>
+        </div>
+        <div class="table-row" role="row">
+          <span role="cell">Preview math</span>
+          <span role="cell">Compile and hope</span>
+          <span role="cell">Draft in the LaTeX sandbox first</span>
+        </div>
+        <div class="table-row" role="row">
+          <span role="cell">Watch progress</span>
+          <span role="cell">Scan terminal noise</span>
+          <span role="cell">Structured logs, progress, and result events</span>
+        </div>
+        <div class="table-row" role="row">
+          <span role="cell">Tune quality</span>
+          <span role="cell">Remember CLI flags</span>
+          <span role="cell">Choose from hardware-aware presets</span>
+        </div>
+        <div class="table-row" role="row">
+          <span role="cell">Manage outputs</span>
+          <span role="cell">Open generated folders</span>
+          <span role="cell">Rendered videos appear in the workspace</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-band workflow-section" id="workflow" aria-labelledby="workflow-title">
+      <div class="container centered-heading">
+        <p class="eyebrow">The loop</p>
+        <h2 id="workflow-title">From blank scene to finished explainer in one deliberate rhythm.</h2>
+      </div>
+      <div class="container timeline">
+        <article>
+          <span>01</span>
+          <h3>Sketch The Motion</h3>
+          <p>Start from a script or snippet, name the scene, and keep the first version intentionally small.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>Shape The Math</h3>
+          <p>Test equations in the sandbox, insert the <span translate="no">MathTex</span>, and keep visual syntax clean.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>Render A Draft</h3>
+          <p>Use eco or balanced quality to confirm timing before asking the machine for polished output.</p>
+        </article>
+        <article>
+          <span>04</span>
+          <h3>Read The Signals</h3>
+          <p>Progress, stdout, stderr, dependency checks, and file-ready messages tell you what happened.</p>
+        </article>
+        <article>
+          <span>05</span>
+          <h3>Ship The Scene</h3>
+          <p>Switch to a higher-quality profile, render the final pass, and review the video from the same workspace.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-band audience-section" aria-labelledby="audience-title">
+      <div class="container split-heading">
+        <div>
+          <p class="eyebrow">Who feels the difference</p>
+          <h2 id="audience-title">Built for people who teach ideas with motion.</h2>
+        </div>
+        <p>Whether you are preparing a lecture, a YouTube explainer, a technical demo, or a research visualization, the job is the same: make abstraction visible before the deadline catches you.</p>
+      </div>
+      <div class="container audience-grid">
+        <article>
+          <h3>Educators</h3>
+          <p>Spend class prep on the explanation, not the setup guide students will forget by week two.</p>
+        </article>
+        <article>
+          <h3>Creators</h3>
+          <p>Iterate on timing, camera moves, and equation reveals while the visual idea is still clear.</p>
+        </article>
+        <article>
+          <h3>Researchers</h3>
+          <p>Prototype visual arguments quickly, then render clean assets for talks and papers.</p>
+        </article>
+        <article>
+          <h3>Students</h3>
+          <p>Learn Manim’s scene model with fewer environment failures blocking the first success.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-band proof-section" aria-labelledby="proof-title">
+      <div class="container proof-grid">
+        <div>
+          <p class="eyebrow">The promise</p>
+          <h2 id="proof-title">A calmer way to create rigorous visual explanations.</h2>
+        </div>
+        <div class="quote-panel">
+          <blockquote>
+            “When the render loop is visible, Manim stops feeling like a black box. You can teach, test, and refine at the speed of thought.”
+          </blockquote>
+          <p>Positioning goal for Manim Composer</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-band faq-section" id="faq" aria-labelledby="faq-title">
+      <div class="container split-heading">
+        <div>
+          <p class="eyebrow">Questions</p>
+          <h2 id="faq-title">Clear answers before the first render.</h2>
+        </div>
+        <p>The app runs locally with a FastAPI backend and Vite frontend. It is designed to make the local Manim workflow easier, not replace Manim CE.</p>
+      </div>
+      <div class="container faq-list">
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
+              Does it still use real Manim CE?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Yes. The backend supervises Manim CE subprocesses, streams logs, and returns rendered media. Your scenes remain Python Manim scenes.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
+              What dependencies do I need?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Python, Node.js, Manim CE, FFmpeg, and LaTeX for full equation rendering. Diagnostics make missing pieces visible, and Windows users can trigger a MiKTeX install flow.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
+              Is this for beginners or advanced Manim users?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Both. Beginners get fewer setup obstacles. Experienced users get a faster edit-render-review loop without giving up Python control.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
+              Does it run in the cloud?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>The project is currently structured as a local web app: React in the browser, FastAPI on your machine, and rendered media written into the local workspace.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="download-section" id="download" aria-labelledby="download-title">
+      <div class="container download-panel">
+        <div>
+          <p class="eyebrow">Ready when the idea is</p>
+          <h2 id="download-title">Open the composer, write one scene, and let the first render teach you the next move.</h2>
+          <p>Use the local project scripts to start the backend and frontend, then keep the full animation loop inside the browser.</p>
+        </div>
+        <form class="launch-form" id="launch-form" novalidate>
+          <label for="email">Get A Local Setup Note</label>
+          <div class="input-row">
+            <input id="email" name="email" type="email" autocomplete="email" spellcheck="false" placeholder="you@example.com…" aria-describedby="form-status" />
+            <button class="button button-primary" type="submit">Send The Note</button>
+          </div>
+          <p class="form-status" id="form-status" aria-live="polite">No signup backend here yet. This demo confirms the interaction locally.</p>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <a class="brand" href="#top" aria-label="Back to top">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span translate="no">Manim Composer</span>
+      </a>
+      <p>Browser IDE for mathematical animation with Manim CE.</p>
+      <a href="#download">Start A Local Session</a>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
