@@ -46,11 +46,21 @@ workspace/media/
 workspace/logs/
 workspace/__pycache__/
 workspace/manim.cfg
+workspace/assets/
+workspace/_temp_run_*.py
 media/
+partial_movie_files/
+
+# Website dev artifacts
+website/_screenshots/
+
+# Frontend tooling caches
+frontend/.vite/
 
 # IDEs, System, and Agent files
 .vscode/
 .idea/
+.cursor/
 .gemini/
 .agents/
 skills-lock.json
