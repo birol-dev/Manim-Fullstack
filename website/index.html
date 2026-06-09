@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#12100d" />
   <meta
     name="description"
-    content="Manim Composer is a browser-based IDE for Manim CE with live preview, real-time render logs, LaTeX tooling, file management, and hardware-aware render presets."
+    content="Manim Composer is an open-source, MIT-licensed browser IDE for Manim CE — live preview, render logs, LaTeX tooling, and hardware-aware presets you can run, inspect, and extend locally."
   />
   <meta property="og:title" content="Manim Composer | Build Mathematical Animations Without Toolchain Drag" />
   <meta property="og:description" content="Write Python, preview equations, stream Manim render logs, and manage scenes from one focused local web workspace." />
@@ -23,7 +23,7 @@
   <header class="site-header" id="top">
     <nav class="nav-shell" aria-label="Main navigation">
       <a class="brand" href="#top" aria-label="Manim Composer home">
-        <span class="brand-mark" aria-hidden="true">M</span>
+        <img class="brand-mark" src="logo.svg" alt="" width="40" height="32" aria-hidden="true" />
         <span translate="no">Manim Composer</span>
       </a>
       <button class="nav-toggle" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="nav-menu">
@@ -31,13 +31,13 @@
         <span aria-hidden="true"></span>
       </button>
       <div class="nav-menu" id="nav-menu">
-        <a href="#pain">Pain</a>
+        <a href="#top">Home</a>
         <a href="#workspace">Workspace</a>
         <a href="#features">Features</a>
         <a href="#workflow">Workflow</a>
         <a href="#faq">FAQ</a>
       </div>
-      <a class="nav-cta" href="#download">Open The Workspace</a>
+      <a class="nav-cta" href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">View on GitHub</a>
     </nav>
   </header>
 
@@ -46,14 +46,14 @@
       <canvas class="equation-field" id="equation-field" width="1600" height="900" aria-hidden="true"></canvas>
       <div class="container hero-grid">
         <div class="hero-copy">
-          <p class="eyebrow">Local-first Manim CE studio</p>
+          <p class="eyebrow">Open-source Manim CE studio</p>
           <h1 id="hero-title">Build mathematical animations without losing the afternoon to your toolchain.</h1>
           <p class="hero-lede">
-            Manim Composer puts Python editing, scene discovery, LaTeX previews, live render logs, and video output in one focused browser workspace. Keep the creative loop tight: write the idea, render the scene, fix the frame.
+            Manim Composer puts Python editing, scene discovery, LaTeX previews, live render logs, and video output in one focused browser workspace. The full stack is MIT-licensed and public — clone it, read every layer, and run it on your own machine.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
-            <a class="button button-primary" href="#download">Start A Local Session</a>
-            <a class="button button-secondary" href="#workspace">See The Workspace</a>
+            <a class="button button-primary" href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">View on GitHub</a>
+            <a class="button button-secondary" href="#workspace">See how it works</a>
           </div>
           <dl class="hero-metrics" aria-label="Product metrics">
             <div>
@@ -77,21 +77,21 @@
               <span class="window-dot"></span>
               <span class="window-dot"></span>
               <span class="window-dot"></span>
-              <span class="app-title">workspace / eulers_identity.py</span>
-              <span class="render-pill">Rendering 78%</span>
+              <span class="app-title" id="app-title">workspace / eulers_identity.py</span>
+              <span class="render-pill" id="render-status">Rendering 78%</span>
             </div>
             <div class="app-layout">
               <aside class="app-sidebar" aria-label="Workspace files preview">
                 <p class="pane-label">Scenes</p>
-                <button type="button" class="file-row active">EulersIdentity</button>
-                <button type="button" class="file-row">VectorField</button>
-                <button type="button" class="file-row">FourierTrace</button>
+                <button type="button" class="file-row active" data-scene="eulers">EulersIdentity</button>
+                <button type="button" class="file-row" data-scene="vector">VectorField</button>
+                <button type="button" class="file-row" data-scene="fourier">FourierTrace</button>
                 <p class="pane-label lower">Assets</p>
                 <button type="button" class="file-row muted">logo.png</button>
                 <button type="button" class="file-row muted">voiceover.mp3</button>
               </aside>
               <section class="code-pane" aria-label="Python code preview">
-                <pre><code><span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
+                <pre><code><span id="code-content"><span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
 
 <span class="code-keyword">class</span> <span class="code-class">EulersIdentity</span>(Scene):
     <span class="code-keyword">def</span> <span class="code-fn">construct</span>(self):
@@ -101,13 +101,13 @@
         )
         box = SurroundingRectangle(eq)
         self.play(Write(eq))
-        self.play(Create(box))</code></pre>
+        self.play(Create(box))</span></code></pre>
               </section>
               <aside class="preview-pane" aria-label="Rendered video preview">
-                <div class="math-canvas">
+                <div class="math-canvas" id="canvas-preview">
                   <span>e<sup>iπ</sup> + 1 = 0</span>
                 </div>
-                <div class="log-stream" aria-label="Render log preview">
+                <div class="log-stream" id="log-stream" aria-label="Render log preview">
                   <p><span>stdout</span> Building EulersIdentity</p>
                   <p><span>progress</span> Animation 3 of 4</p>
                   <p><span>file</span> media/videos/1080p60.mp4</p>
@@ -121,9 +121,10 @@
 
     <section class="trust-strip" aria-label="Who Manim Composer is built for">
       <div class="container trust-grid">
+        <span>Open source</span>
+        <span>MIT licensed</span>
         <span>For educators</span>
         <span>For math YouTubers</span>
-        <span>For technical teams</span>
         <span>For researchers</span>
         <span>For students</span>
       </div>
@@ -351,17 +352,27 @@
       </div>
     </section>
 
-    <section class="section-band proof-section" aria-labelledby="proof-title">
+    <section class="section-band proof-section" id="opensource" aria-labelledby="opensource-title">
       <div class="container proof-grid">
         <div>
-          <p class="eyebrow">The promise</p>
-          <h2 id="proof-title">A calmer way to create rigorous visual explanations.</h2>
+          <p class="eyebrow">Open by design</p>
+          <h2 id="opensource-title">Your animation toolchain should not be a black box either.</h2>
+          <p>
+            Manim Composer is fully open source under the MIT license. The FastAPI backend, React frontend, and workspace tooling live in one public repository — no hidden services, no vendor lock-in, no mystery about what runs when you hit render.
+          </p>
+          <div class="hero-actions opensource-actions" aria-label="Open source links">
+            <a class="button button-primary" href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Browse the repository</a>
+            <a class="button button-secondary" href="https://github.com/birol-dev" target="_blank" rel="noopener noreferrer">Meet the developer</a>
+          </div>
         </div>
-        <div class="quote-panel">
-          <blockquote>
-            “When the render loop is visible, Manim stops feeling like a black box. You can teach, test, and refine at the speed of thought.”
-          </blockquote>
-          <p>Positioning goal for Manim Composer</p>
+        <div class="quote-panel opensource-panel">
+          <ul class="check-list">
+            <li>MIT licensed — use, modify, and ship freely.</li>
+            <li>Full stack on GitHub — backend, frontend, and workspace.</li>
+            <li>Local-first — your scenes and renders stay on your machine.</li>
+            <li>Community-ready — fork it, file issues, send pull requests.</li>
+          </ul>
+          <p class="opensource-credit">Created and maintained by <a href="https://github.com/birol-dev" target="_blank" rel="noopener noreferrer">Birol</a>.</p>
         </div>
       </div>
     </section>
@@ -372,7 +383,7 @@
           <p class="eyebrow">Questions</p>
           <h2 id="faq-title">Clear answers before the first render.</h2>
         </div>
-        <p>The app runs locally with a FastAPI backend and Vite frontend. It is designed to make the local Manim workflow easier, not replace Manim CE.</p>
+        <p>Manim Composer is open source, runs locally on your machine, and is designed to make the Manim workflow easier — not replace Manim CE.</p>
       </div>
       <div class="container faq-list">
         <article class="faq-item">
@@ -411,32 +422,25 @@
         <article class="faq-item">
           <h3>
             <button type="button" class="faq-trigger" aria-expanded="false">
+              Is Manim Composer open source?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Yes. The project is MIT-licensed and hosted at <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">github.com/birol-dev/Manim-Fullstack</a>. You can read the full codebase, run it locally, fork it for your own workflow, and contribute back through issues or pull requests.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
               Does it run in the cloud?
               <span aria-hidden="true">+</span>
             </button>
           </h3>
           <div class="faq-panel">
-            <p>The project is currently structured as a local web app: React in the browser, FastAPI on your machine, and rendered media written into the local workspace.</p>
+            <p>No hosted service — you clone the repo and run it yourself. React serves the UI in your browser, FastAPI runs on your machine, and rendered media stays in your local workspace.</p>
           </div>
         </article>
-      </div>
-    </section>
-
-    <section class="download-section" id="download" aria-labelledby="download-title">
-      <div class="container download-panel">
-        <div>
-          <p class="eyebrow">Ready when the idea is</p>
-          <h2 id="download-title">Open the composer, write one scene, and let the first render teach you the next move.</h2>
-          <p>Use the local project scripts to start the backend and frontend, then keep the full animation loop inside the browser.</p>
-        </div>
-        <form class="launch-form" id="launch-form" novalidate>
-          <label for="email">Get A Local Setup Note</label>
-          <div class="input-row">
-            <input id="email" name="email" type="email" autocomplete="email" spellcheck="false" placeholder="you@example.com…" aria-describedby="form-status" />
-            <button class="button button-primary" type="submit">Send The Note</button>
-          </div>
-          <p class="form-status" id="form-status" aria-live="polite">No signup backend here yet. This demo confirms the interaction locally.</p>
-        </form>
       </div>
     </section>
   </main>
@@ -444,11 +448,14 @@
   <footer class="site-footer">
     <div class="container footer-grid">
       <a class="brand" href="#top" aria-label="Back to top">
-        <span class="brand-mark" aria-hidden="true">M</span>
+        <img class="brand-mark" src="logo.svg" alt="" width="40" height="32" aria-hidden="true" />
         <span translate="no">Manim Composer</span>
       </a>
-      <p>Browser IDE for mathematical animation with Manim CE.</p>
-      <a href="#download">Start A Local Session</a>
+      <p>Open-source browser IDE for Manim CE. MIT licensed — inspect the code, run it locally, shape it to your workflow.</p>
+      <div class="footer-links">
+        <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Repository</a>
+        <a href="https://github.com/birol-dev" target="_blank" rel="noopener noreferrer">Birol</a>
+      </div>
     </div>
   </footer>
 
