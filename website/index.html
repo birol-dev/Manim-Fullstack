@@ -4,18 +4,163 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#12100d" />
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+  <meta name="author" content="Birol" />
   <meta
     name="description"
-    content="Manim Composer is an open-source, MIT-licensed browser IDE for Manim CE — live preview, render logs, LaTeX tooling, and hardware-aware presets you can run, inspect, and extend locally."
+    content="Manim Composer is a free, open-source browser IDE for Manim Community Edition. Edit Python scenes, preview LaTeX math, stream live render logs, and export video locally. MIT licensed."
   />
-  <meta property="og:title" content="Manim Composer | Build Mathematical Animations Without Toolchain Drag" />
-  <meta property="og:description" content="Write Python, preview equations, stream Manim render logs, and manage scenes from one focused local web workspace." />
+  <link rel="canonical" href="https://manimgui.birol.tech/" />
+  <meta property="og:site_name" content="Manim Composer" />
+  <meta property="og:title" content="Manim Composer | Open-Source Manim CE Browser IDE" />
+  <meta property="og:description" content="Free, local-first IDE for Manim Community Edition. Python editing, LaTeX previews, live render logs, and video output in one open-source workspace." />
   <meta property="og:type" content="website" />
-  <title>Manim Composer | Browser IDE for Mathematical Animation</title>
+  <meta property="og:url" content="https://manimgui.birol.tech/" />
+  <meta property="og:image" content="https://manimgui.birol.tech/og-image.svg" />
+  <meta property="og:image:alt" content="Manim Composer — open-source browser IDE for Manim CE" />
+  <meta property="og:locale" content="en_US" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Manim Composer | Open-Source Manim CE Browser IDE" />
+  <meta name="twitter:description" content="Free, local-first IDE for Manim Community Edition. Edit scenes, preview LaTeX, stream render logs, and export video on your machine." />
+  <meta name="twitter:image" content="https://manimgui.birol.tech/og-image.svg" />
+  <meta name="twitter:image:alt" content="Manim Composer — open-source browser IDE for Manim CE" />
+  <title>Manim Composer | Open-Source Manim CE Browser IDE</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="favicon.svg" />
+  <link rel="alternate" type="text/plain" href="llms.txt" title="LLM context" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,760&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://manimgui.birol.tech/#website",
+        "url": "https://manimgui.birol.tech/",
+        "name": "Manim Composer",
+        "description": "Open-source browser IDE for Manim Community Edition (Manim CE).",
+        "publisher": { "@id": "https://manimgui.birol.tech/#organization" },
+        "inLanguage": "en-US"
+      },
+      {
+        "@type": "Organization",
+        "@id": "https://manimgui.birol.tech/#organization",
+        "name": "Manim Composer",
+        "url": "https://manimgui.birol.tech/",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://manimgui.birol.tech/logo.svg"
+        },
+        "sameAs": [
+          "https://github.com/birol-dev/Manim-Fullstack",
+          "https://github.com/birol-dev"
+        ]
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://manimgui.birol.tech/#software",
+        "name": "Manim Composer",
+        "alternateName": "Manim GUI",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "Mathematical animation IDE",
+        "operatingSystem": "Windows, macOS, Linux",
+        "description": "Local-first browser IDE for Manim Community Edition with Python editing, LaTeX previews, live render logs, and hardware-aware render presets.",
+        "url": "https://manimgui.birol.tech/",
+        "downloadUrl": "https://github.com/birol-dev/Manim-Fullstack",
+        "softwareHelp": "https://manimgui.birol.tech/#faq",
+        "license": "https://spdx.org/licenses/MIT.html",
+        "isAccessibleForFree": true,
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD",
+          "availability": "https://schema.org/InStock"
+        },
+        "author": { "@id": "https://manimgui.birol.tech/#author" },
+        "maintainer": { "@id": "https://manimgui.birol.tech/#author" },
+        "featureList": [
+          "Monaco Python editor with scene class discovery",
+          "KaTeX LaTeX sandbox for MathTex drafting",
+          "WebSocket live render logs and progress",
+          "Hardware-aware eco, balanced, and workstation presets",
+          "Local file management for scripts, assets, and video output"
+        ]
+      },
+      {
+        "@type": "Person",
+        "@id": "https://manimgui.birol.tech/#author",
+        "name": "Birol",
+        "url": "https://github.com/birol-dev",
+        "sameAs": "https://github.com/birol-dev"
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://manimgui.birol.tech/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "What is Manim Composer?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Manim Composer is a free, open-source, local-first browser IDE for Manim Community Edition (Manim CE). It combines Python scene editing, LaTeX math previews, live render logs, and video review in one workspace you run on your own machine."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "How do I install Manim Composer?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Clone the Manim-Fullstack repository on GitHub, install Python backend dependencies with pip install -r backend/requirements.txt, start python backend/main.py, then in the frontend folder run npm install and npm run dev. You also need Manim CE, FFmpeg, and LaTeX for full equation rendering."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does it still use real Manim CE?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. The backend supervises Manim CE subprocesses, streams logs, and returns rendered media. Your scenes remain Python Manim scenes."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "What dependencies do I need?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Python, Node.js, Manim CE, FFmpeg, and LaTeX for full equation rendering. Diagnostics make missing pieces visible, and Windows users can trigger a MiKTeX install flow."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is this for beginners or advanced Manim users?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Both. Beginners get fewer setup obstacles. Experienced users get a faster edit-render-review loop without giving up Python control."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Is Manim Composer open source?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Yes. The project is MIT-licensed and hosted at github.com/birol-dev/Manim-Fullstack. You can read the full codebase, run it locally, fork it, and contribute through issues or pull requests."
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Does it run in the cloud?",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "No. Manim Composer is self-hosted. React serves the UI in your browser, FastAPI runs on your machine, and rendered media stays in your local workspace."
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip To Main Content</a>
@@ -23,7 +168,7 @@
   <header class="site-header" id="top">
     <nav class="nav-shell" aria-label="Main navigation">
       <a class="brand" href="#top" aria-label="Manim Composer home">
-        <img class="brand-mark" src="logo.svg" alt="" width="40" height="32" aria-hidden="true" />
+        <img class="brand-mark" src="logo.svg" alt="Manim Composer logo" width="40" height="32" />
         <span translate="no">Manim Composer</span>
       </a>
       <button class="nav-toggle" type="button" aria-label="Open navigation menu" aria-expanded="false" aria-controls="nav-menu">
@@ -32,6 +177,7 @@
       </button>
       <div class="nav-menu" id="nav-menu">
         <a href="#top">Home</a>
+        <a href="#about">About</a>
         <a href="#workspace">Workspace</a>
         <a href="#features">Features</a>
         <a href="#workflow">Workflow</a>
@@ -47,7 +193,7 @@
       <div class="container hero-grid">
         <div class="hero-copy">
           <p class="eyebrow">Open-source Manim CE studio</p>
-          <h1 id="hero-title">Build mathematical animations without losing the afternoon to your toolchain.</h1>
+          <h1 id="hero-title">Build Manim CE animations without losing the afternoon to your toolchain.</h1>
           <p class="hero-lede">
             Manim Composer puts Python editing, scene discovery, LaTeX previews, live render logs, and video output in one focused browser workspace. The full stack is MIT-licensed and public — clone it, read every layer, and run it on your own machine.
           </p>
@@ -127,6 +273,15 @@
         <span>For math YouTubers</span>
         <span>For researchers</span>
         <span>For students</span>
+      </div>
+    </section>
+
+    <section class="definition-section" id="about" aria-labelledby="what-is-title">
+      <div class="container">
+        <h2 id="what-is-title">What is Manim Composer?</h2>
+        <p>
+          <span translate="no">Manim Composer</span> is a free, open-source, local-first browser IDE for <span translate="no">Manim Community Edition</span> (<span translate="no">Manim CE</span>). It puts Python scene editing, LaTeX math previews, live render logs, and video review in one workspace you run on your own machine — not a hosted cloud service.
+        </p>
       </div>
     </section>
 
@@ -389,6 +544,28 @@
         <article class="faq-item">
           <h3>
             <button type="button" class="faq-trigger" aria-expanded="false">
+              What is Manim Composer?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Manim Composer is a free, open-source browser IDE for Manim Community Edition. It wraps real Manim CE rendering in a local web workspace with a Python editor, LaTeX sandbox, live logs, and video preview — so you edit, render, and review without leaving one screen.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
+              How do I install Manim Composer?
+              <span aria-hidden="true">+</span>
+            </button>
+          </h3>
+          <div class="faq-panel">
+            <p>Clone the <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Manim-Fullstack</a> repository, run <code>pip install -r backend/requirements.txt</code>, start the backend with <code>python backend/main.py</code>, then in <code>frontend/</code> run <code>npm install</code> and <code>npm run dev</code>. You will also need Manim CE, FFmpeg, and LaTeX installed locally.</p>
+          </div>
+        </article>
+        <article class="faq-item">
+          <h3>
+            <button type="button" class="faq-trigger" aria-expanded="false">
               Does it still use real Manim CE?
               <span aria-hidden="true">+</span>
             </button>
@@ -448,13 +625,14 @@
   <footer class="site-footer">
     <div class="container footer-grid">
       <a class="brand" href="#top" aria-label="Back to top">
-        <img class="brand-mark" src="logo.svg" alt="" width="40" height="32" aria-hidden="true" />
+        <img class="brand-mark" src="logo.svg" alt="Manim Composer logo" width="40" height="32" />
         <span translate="no">Manim Composer</span>
       </a>
-      <p>Open-source browser IDE for Manim CE. MIT licensed — inspect the code, run it locally, shape it to your workflow.</p>
+      <p>Open-source browser IDE for Manim CE. MIT licensed — inspect the code, run it locally, shape it to your workflow. <time datetime="2026-06-09">Updated June 2026</time>.</p>
       <div class="footer-links">
         <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Repository</a>
         <a href="https://github.com/birol-dev" target="_blank" rel="noopener noreferrer">Birol</a>
+        <a href="llms.txt">llms.txt</a>
       </div>
     </div>
   </footer>

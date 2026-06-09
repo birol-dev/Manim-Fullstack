@@ -1,0 +1,45 @@
+# Manim Composer
+
+> Open-source, local-first browser IDE for Manim Community Edition (Manim CE).
+
+Manim Composer is a free MIT-licensed developer tool that wraps Manim CE in a focused web workspace. You edit Python scenes in Monaco, preview LaTeX with KaTeX, stream render logs over WebSocket, and review exported video — all running on your own machine.
+
+## Key facts
+
+- Product: Manim Composer (also called Manim GUI)
+- Website: https://manimgui.birol.tech/
+- Repository: https://github.com/birol-dev/Manim-Fullstack
+- License: MIT
+- Author: Birol — https://github.com/birol-dev
+- Stack: FastAPI backend, React (Vite) frontend, Manim CE subprocess rendering
+- Pricing: Free and open source (self-hosted)
+
+## What it does
+
+- Python scene editing with Monaco and AST-based scene discovery
+- KaTeX LaTeX sandbox for drafting MathTex before compile
+- Live render logs, progress events, and cancellation
+- Hardware-aware render presets (eco, balanced, workstation)
+- Local file management for scripts, assets, and rendered media
+- Auto-render debounce (~2 seconds after typing stops)
+
+## Who it is for
+
+Educators, math YouTubers, researchers, students, and technical teams who create mathematical animations with Manim CE and want a faster edit-render-review loop without toolchain friction.
+
+## Requirements
+
+Python 3.9+, Node.js 18+, Manim CE, FFmpeg, and LaTeX (recommended for full equation rendering).
+
+## Install
+
+Clone https://github.com/birol-dev/Manim-Fullstack, install backend dependencies (`pip install -r backend/requirements.txt`), start `python backend/main.py`, then in `frontend/` run `npm install` and `npm run dev`.
+
+## Pages
+
+- Home / overview: https://manimgui.birol.tech/
+- Workspace details: https://manimgui.birol.tech/#workspace
+- Features: https://manimgui.birol.tech/#features
+- Workflow: https://manimgui.birol.tech/#workflow
+- Open source: https://manimgui.birol.tech/#opensource
+- FAQ: https://manimgui.birol.tech/#faq
