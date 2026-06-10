@@ -13,23 +13,55 @@ function setHeaderState() {
 setHeaderState();
 window.addEventListener("scroll", setHeaderState, { passive: true });
 
+function closeNavMenu() {
+  if (!navToggle || !navMenu) return;
+  navToggle.setAttribute("aria-expanded", "false");
+  navToggle.setAttribute("aria-label", "Open navigation menu");
+  navMenu.classList.remove("is-open");
+  document.body.classList.remove("nav-open");
+}
+
+function openNavMenu() {
+  if (!navToggle || !navMenu) return;
+  navToggle.setAttribute("aria-expanded", "true");
+  navToggle.setAttribute("aria-label", "Close navigation menu");
+  navMenu.classList.add("is-open");
+  document.body.classList.add("nav-open");
+}
+
 if (navToggle && navMenu) {
   navToggle.addEventListener("click", () => {
     const isOpen = navToggle.getAttribute("aria-expanded") === "true";
-    navToggle.setAttribute("aria-expanded", String(!isOpen));
-    navToggle.setAttribute("aria-label", isOpen ? "Open navigation menu" : "Close navigation menu");
-    navMenu.classList.toggle("is-open", !isOpen);
-    document.body.classList.toggle("nav-open", !isOpen);
+    if (isOpen) {
+      closeNavMenu();
+    } else {
+      openNavMenu();
+    }
   });
 
   navMenu.querySelectorAll("a").forEach((link) => {
-    link.addEventListener("click", () => {
-      navToggle.setAttribute("aria-expanded", "false");
-      navToggle.setAttribute("aria-label", "Open navigation menu");
-      navMenu.classList.remove("is-open");
-      document.body.classList.remove("nav-open");
-    });
+    link.addEventListener("click", closeNavMenu);
   });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeNavMenu();
+  });
+
+  document.addEventListener("click", (event) => {
+    if (navToggle.getAttribute("aria-expanded") !== "true") return;
+    const target = event.target;
+    if (target instanceof Node && !navMenu.contains(target) && !navToggle.contains(target)) {
+      closeNavMenu();
+    }
+  });
+
+  window.addEventListener(
+    "resize",
+    () => {
+      if (window.innerWidth > 820) closeNavMenu();
+    },
+    { passive: true }
+  );
 }
 
 document.querySelectorAll(".faq-trigger").forEach((trigger) => {
@@ -116,7 +148,10 @@ let animationFrame = 0;
 
 function seedParticles() {
   if (!canvas) return;
-  const count = Math.max(34, Math.min(80, Math.floor(canvasWidth / 22)));
+  const isNarrow = canvasWidth < 560;
+  const divisor = isNarrow ? 32 : 22;
+  const maxCount = isNarrow ? 42 : 80;
+  const count = Math.max(isNarrow ? 18 : 34, Math.min(maxCount, Math.floor(canvasWidth / divisor)));
 
   particles = Array.from({ length: count }, (_, index) => ({
     x: Math.random() * canvasWidth,
