@@ -60,7 +60,13 @@ def get_gpu_info():
     
     # 1. Try to run nvidia-smi to detect NVIDIA GPUs and CUDA
     try:
-        out = subprocess.check_output("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader", shell=True).decode()
+        kwargs = {}
+        if platform.system() == "Windows" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            **kwargs,
+        ).decode()
         for line in out.strip().split("\n"):
             if "," in line:
                 name, mem = line.split(",")

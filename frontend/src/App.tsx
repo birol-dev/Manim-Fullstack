@@ -57,6 +57,24 @@ const WS_BASE = BACKEND_HOST.startsWith("http")
   ? BACKEND_HOST.replace(/\/$/, "").replace(/^http/, "ws")
   : `${isProd ? "wss" : "ws"}://${BACKEND_HOST}`;
 
+function encodeMediaPath(relPath: string): string {
+  return relPath
+    .replace(/^\/+/, "")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+}
+
+function backendFileUrl(relPath: string): string {
+  if (relPath.startsWith("blob:") || /^https?:\/\//i.test(relPath)) {
+    return relPath;
+  }
+  if (relPath.startsWith("api/")) {
+    return `${API_BASE}/${relPath}`;
+  }
+  return `${API_BASE}/${encodeMediaPath(relPath)}`;
+}
+
 interface FileItem {
   name: string;
   size: number;
@@ -125,7 +143,8 @@ interface MonacoSelection {
 }
 
 interface MonacoEditorInstance {
-  getSelection: () => MonacoSelection;
+  getSelection: () => MonacoSelection | null;
+  getPosition?: () => { lineNumber: number; column: number } | null;
   executeEdits: (
     source: string,
     edits: Array<{
@@ -378,6 +397,13 @@ export default function App() {
   const hasAutoCheckedRef = useRef<boolean>(false);
   const shouldCancelRenameRef = useRef<boolean>(false);
   const isRenamingInProgressRef = useRef<boolean>(false);
+  const loadedFileRef = useRef<string | null>(null);
+  const videoObjectUrlRef = useRef<string | null>(null);
+  const activeFileRef = useRef(activeFile);
+
+  useEffect(() => {
+    activeFileRef.current = activeFile;
+  }, [activeFile]);
 
   // Sync Comparer state and callbacks
   const videoARef = useRef<HTMLVideoElement | null>(null);
@@ -407,6 +433,13 @@ export default function App() {
   const handleVideoTimeUpdate = () => {
     if (videoARef.current) {
       setCompareTime(videoARef.current.currentTime);
+      if (
+        videoBRef.current &&
+        Math.abs(videoBRef.current.currentTime - videoARef.current.currentTime) >
+          0.08
+      ) {
+        videoBRef.current.currentTime = videoARef.current.currentTime;
+      }
     }
   };
 
@@ -423,6 +456,17 @@ export default function App() {
     [],
   );
 
+  const updateVideoUrl = useCallback((url: string) => {
+    if (videoObjectUrlRef.current && videoObjectUrlRef.current !== url) {
+      URL.revokeObjectURL(videoObjectUrlRef.current);
+      videoObjectUrlRef.current = null;
+    }
+    if (url.startsWith("blob:")) {
+      videoObjectUrlRef.current = url;
+    }
+    setVideoUrl(url);
+  }, []);
+
   const fetchDiagnostics = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/diagnostics`);
@@ -431,12 +475,12 @@ export default function App() {
       setDiagnostics(data);
       setBackendError(false);
 
-      if (data.profile === "eco") setQuality("l");
-      else if (data.profile === "workstation") setQuality("h");
-      else setQuality("m");
-
       // Auto-show onboarding if critical dependencies are missing on first load
       if (!hasAutoCheckedRef.current) {
+        if (data.profile === "eco") setQuality("l");
+        else if (data.profile === "workstation") setQuality("h");
+        else setQuality("m");
+
         const hasManim =
           data.dependencies.manim && data.dependencies.manim !== "Not Found";
         const hasFFmpeg =
@@ -462,26 +506,25 @@ export default function App() {
     }
   }, [setIsInstallingManim, setIsInstallingFFmpeg, setIsInstallingLatex]);
 
-  const fetchFiles = useCallback(async () => {
+  const fetchFiles = useCallback(async (): Promise<FileListResponse | null> => {
     try {
       const res = await fetch(`${API_BASE}/api/files`);
       if (!res.ok) throw new Error();
-      const data = await res.json();
-      
+      const data = (await res.json()) as FileListResponse;
+
       if (storageLocation === "browser") {
         const localScripts = getBrowserFiles();
         const scriptsList = Object.entries(localScripts).map(([name, codeStr]) => ({
           name,
           size: codeStr.length,
-          type: "script" as const
+          type: "script" as const,
         }));
-        setFiles({
-          ...data,
-          scripts: scriptsList
-        });
-      } else {
-        setFiles(data);
+        const next = { ...data, scripts: scriptsList };
+        setFiles(next);
+        return next;
       }
+      setFiles(data);
+      return data;
     } catch {
       console.error("Failed to load workspace files.");
       if (storageLocation === "browser") {
@@ -489,13 +532,20 @@ export default function App() {
         const scriptsList = Object.entries(localScripts).map(([name, codeStr]) => ({
           name,
           size: codeStr.length,
-          type: "script" as const
+          type: "script" as const,
         }));
-        setFiles(prev => ({
+        const next: FileListResponse = {
+          scripts: scriptsList,
+          assets: [],
+          media: [],
+        };
+        setFiles((prev) => ({
           ...prev,
-          scripts: scriptsList
+          scripts: scriptsList,
         }));
+        return next;
       }
+      return null;
     }
   }, [storageLocation]);
 
@@ -505,6 +555,7 @@ export default function App() {
       const fileCode = localScripts[name] || "";
       setActiveFile(name);
       setCode(fileCode);
+      loadedFileRef.current = name;
       
       try {
         const res = await fetch(`${API_BASE}/api/parse-code`, {
@@ -527,11 +578,14 @@ export default function App() {
       }
     } else {
       try {
-        const res = await fetch(`${API_BASE}/api/file-content?filename=${name}`);
+        const res = await fetch(
+          `${API_BASE}/api/file-content?filename=${encodeURIComponent(name)}`,
+        );
         if (!res.ok) throw new Error();
         const data = await res.json();
         setActiveFile(data.filename);
         setCode(data.code);
+        loadedFileRef.current = data.filename;
         setScenes(data.scenes as string[]);
         setAnimations(data.animations || {});
         if ((data.scenes as string[]).length > 0) {
@@ -746,7 +800,9 @@ export default function App() {
 
   const downloadRenderedVideo = useCallback(
     async (relPath: string, providedName?: string) => {
-      const downloadUrl = relPath.startsWith("api/") ? `${API_BASE}/${relPath}` : `${API_BASE}/${relPath.replace(/^\/+/, "")}`;
+      const downloadUrl = relPath.startsWith("api/")
+        ? `${API_BASE}/${relPath}`
+        : backendFileUrl(relPath);
       const filename =
         providedName || relPath.split("/").pop() || "render.mp4";
 
@@ -804,17 +860,30 @@ export default function App() {
   const connectWebSocket = useCallback(
     (onConnectCallback?: () => void) => {
       try {
+        if (wsRef.current) {
+          const previous = wsRef.current;
+          wsRef.current = null;
+          previous.close();
+        }
+
         const ws = new WebSocket(`${WS_BASE}/api/render`);
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (wsRef.current !== ws) return;
           setWsConnected(true);
           setBackendError(false);
           if (onConnectCallback) onConnectCallback();
         };
 
         ws.onmessage = (event) => {
-          const data = JSON.parse(event.data) as LogLine;
+          if (wsRef.current !== ws) return;
+          let data: LogLine;
+          try {
+            data = JSON.parse(event.data) as LogLine;
+          } catch {
+            return;
+          }
 
           if (data.type === "log") {
             addLog("log", data.message || "", data.stream);
@@ -831,18 +900,20 @@ export default function App() {
             addLog("success", `Video ready! File saved to: ${data.filename}`);
             if (data.rel_path) {
               if (downloadOnlyMode) {
-                const downloadUrl = data.rel_path.startsWith("api/") ? `${API_BASE}/${data.rel_path}` : `${API_BASE}/${data.rel_path}`;
+                const downloadUrl = backendFileUrl(data.rel_path);
                 fetch(downloadUrl)
-                  .then(res => {
+                  .then((res) => {
                     if (!res.ok) throw new Error();
                     return res.blob();
                   })
-                  .then(blob => {
+                  .then((blob) => {
                     const objectUrl = URL.createObjectURL(blob);
-                    setVideoUrl(objectUrl);
+                    updateVideoUrl(objectUrl);
                     setVideoKey((prev) => prev + 1);
-                    setSavedPath("Downloaded locally (not stored on backend disk)");
-                    
+                    setSavedPath(
+                      "Downloaded locally (not stored on backend disk)",
+                    );
+
                     const anchor = document.createElement("a");
                     anchor.href = objectUrl;
                     anchor.download = data.filename || "render.mp4";
@@ -852,10 +923,13 @@ export default function App() {
                     anchor.remove();
                   })
                   .catch(() => {
-                    addLog("error", "Failed to download temporary video stream.");
+                    addLog(
+                      "error",
+                      "Failed to download temporary video stream.",
+                    );
                   });
               } else {
-                setVideoUrl(`${API_BASE}/${data.rel_path}?t=${Date.now()}`);
+                updateVideoUrl(`${backendFileUrl(data.rel_path)}?t=${Date.now()}`);
                 setVideoKey((prev) => prev + 1);
                 setSavedPath(`workspace/${data.rel_path}`);
                 void downloadRenderedVideo(data.rel_path, data.filename);
@@ -874,18 +948,22 @@ export default function App() {
         };
 
         ws.onclose = () => {
-          setWsConnected(false);
-          wsRef.current = null;
+          if (wsRef.current === ws) {
+            wsRef.current = null;
+            setWsConnected(false);
+          }
         };
 
         ws.onerror = () => {
-          setWsConnected(false);
+          if (wsRef.current === ws) {
+            setWsConnected(false);
+          }
         };
       } catch {
         console.error("WS error connecting.");
       }
     },
-    [fetchFiles, addLog, downloadRenderedVideo, downloadOnlyMode],
+    [fetchFiles, addLog, downloadRenderedVideo, downloadOnlyMode, updateVideoUrl],
   );
 
   const startRender = useCallback(async () => {
@@ -1038,31 +1116,39 @@ export default function App() {
 
   const handleInsertSnippet = useCallback(
     (snippetCode: string) => {
-      if (editorRef.current) {
-        const editor = editorRef.current as MonacoEditorInstance;
-        const selection = editor.getSelection();
+      const editor = editorRef.current as MonacoEditorInstance | null;
+      const monacoInstance =
+        (monacoRef.current as MonacoGlobal | null) ||
+        (window as unknown as GlobalWindow).monaco;
 
-        const globalWindow = window as unknown as GlobalWindow;
-        if (globalWindow.monaco) {
-          const range = new globalWindow.monaco.Range(
-            selection.startLineNumber,
-            selection.startColumn,
-            selection.endLineNumber,
-            selection.endColumn,
-          );
-          const id = { major: 1, minor: 1 };
-          const op = {
-            identifier: id,
-            range: range,
-            text: snippetCode,
-            forceMoveMarkers: true,
-          };
-          editor.executeEdits("my-source", [op]);
-          addLog("info", "Inserted template snippet into active buffer.");
-        }
+      if (editor && monacoInstance) {
+        const selection = editor.getSelection();
+        const position = editor.getPosition?.();
+        const range = selection
+          ? new monacoInstance.Range(
+              selection.startLineNumber,
+              selection.startColumn,
+              selection.endLineNumber,
+              selection.endColumn,
+            )
+          : new monacoInstance.Range(
+              position?.lineNumber ?? 1,
+              position?.column ?? 1,
+              position?.lineNumber ?? 1,
+              position?.column ?? 1,
+            );
+        const id = { major: 1, minor: 1 };
+        const op = {
+          identifier: id,
+          range: range,
+          text: snippetCode,
+          forceMoveMarkers: true,
+        };
+        editor.executeEdits("my-source", [op]);
+        addLog("info", "Inserted template snippet into active buffer.");
       } else {
-        setCode(snippetCode);
-        addLog("info", "Loaded template script.");
+        setCode((prev) => `${prev}${prev.endsWith("\n") || prev === "" ? "" : "\n"}${snippetCode}`);
+        addLog("info", "Appended template snippet to the editor buffer.");
       }
     },
     [addLog],
@@ -1084,7 +1170,7 @@ export default function App() {
 
   const handleInsertMathTex = useCallback(
     (latexCode: string) => {
-      const snippet = `MathTex(r"${latexCode}")`;
+      const snippet = `MathTex(r"${latexCode.replace(/"/g, '\\"')}")`;
       handleInsertSnippet(snippet);
     },
     [handleInsertSnippet],
@@ -1209,18 +1295,8 @@ export default function App() {
   const handleEditorDidMount = (editor: unknown, monacoInstance: unknown) => {
     editorRef.current = editor;
     monacoRef.current = monacoInstance;
+    (window as unknown as GlobalWindow).monaco = monacoInstance as MonacoGlobal;
   };
-
-  // Sync monaco instance to global window asynchronously via effect
-  useEffect(() => {
-    if (monacoRef.current) {
-      const targetMonaco = monacoRef.current;
-      setTimeout(() => {
-        const globalWindow = window as unknown as Record<string, unknown>;
-        globalWindow.monaco = targetMonaco;
-      }, 0);
-    }
-  }, [monacoRef]);
 
   // Handle Mounting Deferred Startup
   useEffect(() => {
@@ -1233,6 +1309,10 @@ export default function App() {
     return () => {
       clearTimeout(timer);
       if (wsRef.current) wsRef.current.close();
+      if (videoObjectUrlRef.current) {
+        URL.revokeObjectURL(videoObjectUrlRef.current);
+        videoObjectUrlRef.current = null;
+      }
     };
   }, [fetchDiagnostics, fetchFiles, connectWebSocket]);
 
@@ -1243,50 +1323,52 @@ export default function App() {
         loadFileContent(files.scripts[0].name);
       } else if (activeFile) {
         const exists = files.scripts.some((f) => f.name === activeFile);
-        if (exists && code === "") {
+        if (exists && loadedFileRef.current !== activeFile) {
           loadFileContent(activeFile);
         }
       }
     };
     const timer = setTimeout(listLoader, 0);
     return () => clearTimeout(timer);
-  }, [files.scripts, activeFile, code, loadFileContent]);
+  }, [files.scripts, activeFile, loadFileContent]);
 
   // Trigger file list reload and load active file when storageLocation toggles
   useEffect(() => {
     const reloadOnStorageChange = async () => {
-      await fetchFiles();
+      const nextFiles = await fetchFiles();
       if (storageLocation === "browser") {
         const localScripts = getBrowserFiles();
         const keys = Object.keys(localScripts);
+        const currentFile = activeFileRef.current;
         if (keys.length > 0) {
-          if (!keys.includes(activeFile)) {
+          if (!keys.includes(currentFile)) {
             await loadFileContent(keys[0]);
           } else {
-            await loadFileContent(activeFile);
+            await loadFileContent(currentFile);
           }
         } else {
           localScripts["main.py"] = `from manim import *\n\nclass MainScene(Scene):\n    def construct(self):\n        text = Text("Main Scene")\n        self.play(Write(text))\n`;
           saveBrowserFiles(localScripts);
           await loadFileContent("main.py");
         }
-      } else {
-        if (files.scripts.length > 0) {
-          if (!files.scripts.some(f => f.name === activeFile)) {
-            await loadFileContent(files.scripts[0].name);
-          }
+      } else if (nextFiles && nextFiles.scripts.length > 0) {
+        if (!nextFiles.scripts.some((f) => f.name === activeFileRef.current)) {
+          await loadFileContent(nextFiles.scripts[0].name);
         }
       }
     };
     void reloadOnStorageChange();
-  }, [storageLocation, fetchFiles]);
+  }, [storageLocation, fetchFiles, loadFileContent]);
 
   // Sync startRender callback to ref for auto-rendering
   useEffect(() => {
     startRenderRef.current = startRender;
   }, [startRender]);
 
-  // Clean up autoRender timeout on unmount
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ block: "end" });
+  }, [logs]);
+
   useEffect(() => {
     return () => {
       if (autoRenderTimeoutRef.current) {
@@ -1512,7 +1594,7 @@ export default function App() {
                         key={vid.url}
                         onClick={() => {
                           if (vid.url) {
-                            setVideoUrl(
+                            updateVideoUrl(
                               `${API_BASE}${vid.url}?t=${Date.now()}`,
                             );
                             setVideoKey((prev) => prev + 1);
@@ -2305,8 +2387,11 @@ export default function App() {
             <div className="flex items-center gap-2 text-xs">
               <span className="text-slate-500">Scene:</span>
               <Select
-                value={selectedScene}
-                onValueChange={setSelectedScene}
+                value={selectedScene || "__none__"}
+                onValueChange={(value) => {
+                  if (value === "__none__") return;
+                  setSelectedScene(value);
+                }}
                 disabled={scenes.length === 0}
               >
                 <SelectTrigger className="w-[150px] h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
@@ -2317,6 +2402,11 @@ export default function App() {
                   />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-900 border-zinc-800 text-xs">
+                  {scenes.length === 0 && (
+                    <SelectItem value="__none__" className="text-xs">
+                      No scenes
+                    </SelectItem>
+                  )}
                   {scenes.map((scene) => (
                     <SelectItem key={scene} value={scene} className="text-xs">
                       {scene}

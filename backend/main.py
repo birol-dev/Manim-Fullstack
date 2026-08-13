@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import sys
+from urllib.parse import quote
 
 # Ensure backend directory is in python search path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +12,7 @@ from typing import List
 
 from diagnostics import generate_profile, get_binary_paths, write_manim_config_file
 from executor import ManimExecutor
+from workspace_paths import UnsafePathError, safe_basename, safe_join
 from fastapi import (
     FastAPI,
     File,
@@ -194,22 +196,27 @@ def get_files():
 
     # 1. Scan for Python scripts
     for file in os.listdir(WORKSPACE_DIR):
-        if file.endswith(".py"):
-            full_path = os.path.join(WORKSPACE_DIR, file)
-            scripts.append(
-                {"name": file, "size": os.path.getsize(full_path), "type": "script"}
-            )
+        if not file.endswith(".py") or file.startswith("_temp_run_"):
+            continue
+        full_path = os.path.join(WORKSPACE_DIR, file)
+        if not os.path.isfile(full_path):
+            continue
+        scripts.append(
+            {"name": file, "size": os.path.getsize(full_path), "type": "script"}
+        )
 
     # 2. Scan for asset uploads (SVGs, PNGs, MP3s, etc.)
     if os.path.exists(ASSETS_DIR):
         for file in os.listdir(ASSETS_DIR):
             full_path = os.path.join(ASSETS_DIR, file)
+            if not os.path.isfile(full_path):
+                continue
             assets.append(
                 {
                     "name": file,
                     "size": os.path.getsize(full_path),
                     "type": "asset",
-                    "url": f"/assets/{file}",
+                    "url": f"/assets/{quote(file)}",
                 }
             )
 
@@ -224,12 +231,13 @@ def get_files():
                     full_path = os.path.join(root, file)
                     # Get path relative to MEDIA_DIR to form the static URL
                     rel_path = os.path.relpath(full_path, MEDIA_DIR).replace("\\", "/")
+                    encoded_rel = "/".join(quote(part) for part in rel_path.split("/"))
                     media_files.append(
                         {
                             "name": file,
                             "size": os.path.getsize(full_path),
                             "type": "video",
-                            "url": f"/media/{rel_path}",
+                            "url": f"/media/{encoded_rel}",
                         }
                     )
 
@@ -286,8 +294,12 @@ class WriteFormula(Scene):
 @app.get("/api/file-content")
 def get_file_content(filename: str):
     """Returns the code content of a specific script."""
-    filepath = os.path.join(WORKSPACE_DIR, filename)
-    if not os.path.exists(filepath) or not filename.endswith(".py"):
+    try:
+        filename = safe_basename(filename, required_suffix=".py")
+        filepath = safe_join(WORKSPACE_DIR, filename)
+    except UnsafePathError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+    if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Python script not found.")
 
     with open(filepath, "r", encoding="utf-8") as f:
@@ -320,12 +332,12 @@ def parse_code(req: ParseRequest):
 @app.get("/api/download-temp")
 def download_temp(path: str, background_tasks: BackgroundTasks):
     """Serves a rendered temporary file and deletes it once the download completes."""
-    # Ensure the path is inside MEDIA_DIR to prevent directory traversal
-    abs_path = os.path.abspath(os.path.join(MEDIA_DIR, path))
-    if not abs_path.startswith(os.path.abspath(MEDIA_DIR)):
+    try:
+        abs_path = safe_join(MEDIA_DIR, path)
+    except UnsafePathError:
         raise HTTPException(status_code=400, detail="Access denied")
 
-    if not os.path.exists(abs_path):
+    if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="File not found")
 
     def remove_file():
@@ -354,7 +366,11 @@ def save_file(req: SaveRequest):
     if not filename.endswith(".py"):
         filename += ".py"
 
-    filepath = os.path.join(WORKSPACE_DIR, filename)
+    try:
+        filename = safe_basename(filename, required_suffix=".py")
+        filepath = safe_join(WORKSPACE_DIR, filename)
+    except UnsafePathError:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
 
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -381,16 +397,16 @@ class RenameRequest(BaseModel):
 @app.post("/api/rename")
 def rename_file(req: RenameRequest):
     """Renames a python script in the workspace."""
-    old_name = req.old_name
-    new_name = req.new_name
-
-    if not old_name.endswith(".py") or not new_name.endswith(".py"):
+    try:
+        old_name = safe_basename(req.old_name, required_suffix=".py")
+        new_name = safe_basename(req.new_name, required_suffix=".py")
+        old_path = safe_join(WORKSPACE_DIR, old_name)
+        new_path = safe_join(WORKSPACE_DIR, new_name)
+    except UnsafePathError:
         raise HTTPException(
-            status_code=400, detail="Only python (.py) scripts can be renamed."
+            status_code=400,
+            detail="Only python (.py) scripts in the workspace can be renamed.",
         )
-
-    old_path = os.path.join(WORKSPACE_DIR, old_name)
-    new_path = os.path.join(WORKSPACE_DIR, new_name)
 
     if not os.path.exists(old_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
@@ -415,19 +431,19 @@ def rename_file(req: RenameRequest):
 @app.post("/api/upload-asset")
 async def upload_asset(file: UploadFile = File(...)):
     """Handles asset uploads (audio, SVGs, images) to workspace/assets/."""
-    filename = file.filename
-    if not filename:
+    try:
+        filename = safe_basename(file.filename)
+        dest_path = safe_join(ASSETS_DIR, filename)
+    except UnsafePathError:
         raise HTTPException(
-            status_code=400, detail="Uploaded file must include a filename."
+            status_code=400, detail="Uploaded file must include a valid filename."
         )
-
-    dest_path = os.path.join(ASSETS_DIR, filename)
 
     try:
         with open(dest_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        return {"success": True, "filename": filename, "url": f"/assets/{filename}"}
+        return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -480,6 +496,8 @@ def install_latex():
             "success": True,
             "message": "MiKTeX installer has been started in the background. It will install silently in your user profile (no UAC prompt required).",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -532,6 +550,8 @@ def install_ffmpeg():
             "success": True,
             "message": "FFmpeg installer has been started in the background. It will install silently in your user profile (no UAC prompt required).",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -568,6 +588,8 @@ def install_manim():
             "success": True,
             "message": "Manim CE installation started in the background via pip.",
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -581,7 +603,13 @@ async def websocket_render(websocket: WebSocket):
         while True:
             # Expect a JSON text frame from the client
             data = await websocket.receive_text()
-            message = json.loads(data)
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json(
+                    {"type": "error", "message": "Invalid JSON message."}
+                )
+                continue
 
             msg_type = message.get("type")
 
@@ -593,6 +621,35 @@ async def websocket_render(websocket: WebSocket):
                 use_opengl = message.get("use_opengl", False)
                 download_only = message.get("download_only", False)
                 code_content = message.get("code")
+
+                if not filename or not scene_name:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Render requests require both a filename and a scene name.",
+                        }
+                    )
+                    continue
+
+                if not isinstance(scene_name, str) or not scene_name.isidentifier():
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Scene name must be a valid Python identifier.",
+                        }
+                    )
+                    continue
+
+                try:
+                    safe_basename(filename, required_suffix=".py")
+                except UnsafePathError:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Invalid script filename.",
+                        }
+                    )
+                    continue
 
                 # Fetch absolute paths
                 binaries = get_binary_paths()
@@ -617,9 +674,11 @@ async def websocket_render(websocket: WebSocket):
                                 path_param = orig_rel_path[len("media/"):]
                             else:
                                 path_param = orig_rel_path
-                            
+
                             log_event = dict(log_event)
-                            log_event["rel_path"] = f"api/download-temp?path={path_param}"
+                            log_event["rel_path"] = (
+                                f"api/download-temp?path={quote(path_param)}"
+                            )
                             log_event["is_temp_download"] = True
 
                         await websocket.send_json(log_event)

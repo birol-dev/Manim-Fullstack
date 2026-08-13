@@ -189,24 +189,33 @@ function drawEquationField() {
   }
 }
 
-if (canvas && context) {
+function startEquationField() {
+  if (!canvas || !context) return;
+  if (animationFrame) {
+    window.cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+  }
   resizeCanvas();
   seedParticles();
   drawEquationField();
+}
+
+if (canvas && context) {
+  startEquationField();
 
   window.addEventListener(
     "resize",
     () => {
-      resizeCanvas();
-      seedParticles();
-      drawEquationField();
+      startEquationField();
     },
     { passive: true }
   );
 
   if (document.fonts) {
     document.fonts.ready.then(() => {
-      drawEquationField();
+      if (prefersReducedMotion) {
+        drawEquationField();
+      }
     });
   }
 }

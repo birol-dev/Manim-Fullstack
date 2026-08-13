@@ -1,9 +1,9 @@
 import asyncio
 import os
 import re
+import signal
 import subprocess
 import platform
-import time
 
 class ManimExecutor:
     def __init__(self, workspace_dir: str):
@@ -29,7 +29,7 @@ class ManimExecutor:
                 for f in files:
                     if not f.lower().endswith((".mp4", ".gif", ".webm")):
                         continue
-                    if scene_name and not f.startswith(scene_name):
+                    if scene_name and os.path.splitext(f)[0] != scene_name:
                         continue
                     full = os.path.join(root, f)
                     try:
@@ -61,6 +61,9 @@ class ManimExecutor:
         
         quality options: 'l' (low), 'm' (medium), 'h' (high), 'k' (4k)
         """
+        if self.current_process and self.current_process.returncode is None:
+            await self.cancel()
+
         self._cancelled = False
         self.current_process = None
         self._last_file_ready = None
@@ -89,13 +92,20 @@ class ManimExecutor:
         try:
             # Run the command asynchronously
             # We set stdout and stderr to PIPE so we can read them
+            popen_kwargs = {
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": self.workspace_dir,
+            }
+            if platform.system() == "Windows":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            else:
+                # New session so cancel() can signal the whole process group (ffmpeg children).
+                popen_kwargs["start_new_session"] = True
+
             self.current_process = await asyncio.create_subprocess_exec(
                 *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.workspace_dir,
-                # On Windows, hide the console window for child processes if running in GUI context
-                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+                **popen_kwargs,
             )
 
             # We create two tasks to read stdout and stderr concurrently
@@ -121,7 +131,7 @@ class ManimExecutor:
                     if latest:
                         # Wait one second so the file's mtime is reliably later than
                         # any partial_movie_files artifacts.
-                        time.sleep(1.0)
+                        await asyncio.sleep(1.0)
                         # Re-scan after the small delay to avoid picking up partial files.
                         latest = self._find_latest_render(script_name, scene_name) or latest
                         rel_path = self._to_media_rel_path(latest)
@@ -141,6 +151,8 @@ class ManimExecutor:
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
         except Exception as e:
+            if self.current_process and self.current_process.returncode is None:
+                await self.cancel()
             await log_callback({"type": "error", "message": f"Executor error: {str(e)}"})
             return {"success": False, "status": "error", "error": str(e)}
 
@@ -155,7 +167,17 @@ class ManimExecutor:
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 else:
-                    self.current_process.terminate()
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    except (ProcessLookupError, OSError):
+                        self.current_process.terminate()
+                    try:
+                        await asyncio.wait_for(self.current_process.wait(), timeout=2)
+                    except (asyncio.TimeoutError, ProcessLookupError, OSError):
+                        try:
+                            os.killpg(os.getpgid(pid), signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            self.current_process.kill()
             except Exception:
                 pass
 
@@ -205,31 +227,22 @@ class ManimExecutor:
             if file_match:
                 video_path = file_match.group(1)
                 if video_path:
-                    # Strip potential leftover quote/whitespace chars from the path
+                    # Strip leftover quote/whitespace before checking the extension
                     video_path = video_path.strip().strip("'\"")
-                    # Resolve relative to workspace if needed
-                    abs_video_path = os.path.abspath(os.path.join(self.workspace_dir, video_path))
-                    # Convert to web-friendly relative path or just return filename
-                    filename = os.path.basename(abs_video_path)
-                    
-                    # Compute relative path from media folder or just expose it
-                    # Manim writes to: media/videos/<script_name>/<quality>/<scene_name>.mp4
-                    # We will serve 'media' folder, so we want the path relative to media directory
-                    # Let's find index of 'media' in the path
-                    media_rel_path = ""
-                    normalized_path = abs_video_path.replace("\\", "/")
-                    if "/media/" in normalized_path:
-                        media_rel_path = "media" + normalized_path.split("/media")[-1]
-                    else:
-                        media_rel_path = filename
+                    if video_path.lower().endswith((".mp4", ".gif", ".webm", ".mov")):
+                        abs_video_path = os.path.abspath(
+                            os.path.join(self.workspace_dir, video_path)
+                        )
+                        filename = os.path.basename(abs_video_path)
+                        media_rel_path = self._to_media_rel_path(abs_video_path)
 
-                    await log_callback({
-                        "type": "file_ready", 
-                        "abs_path": abs_video_path,
-                        "rel_path": media_rel_path,
-                        "filename": filename
-                    })
-                    self._last_file_ready = (media_rel_path, filename, abs_video_path)
+                        await log_callback({
+                            "type": "file_ready",
+                            "abs_path": abs_video_path,
+                            "rel_path": media_rel_path,
+                            "filename": filename,
+                        })
+                        self._last_file_ready = (media_rel_path, filename, abs_video_path)
 
             # Check for LaTeX specific errors to give user helpful hints
             if latex_pattern.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
