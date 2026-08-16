@@ -2,6 +2,7 @@ import os
 import shutil
 import platform
 import subprocess
+import sys
 import psutil
 
 def get_cpu_info():
@@ -15,7 +16,7 @@ def get_cpu_info():
                 out = subprocess.check_output(
                     ["powershell", "-Command", "(Get-CimInstance Win32_Processor).Name"],
                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-                ).decode().strip()
+                ).decode("utf-8", errors="replace").strip()
                 if out:
                     cpu_model = out
             except Exception:
@@ -24,10 +25,9 @@ def get_cpu_info():
                     wmic_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "wbem", "wmic.exe")
                     if os.path.exists(wmic_path):
                         out = subprocess.check_output(
-                            f'"{wmic_path}" cpu get name', 
-                            shell=True,
+                            [wmic_path, "cpu", "get", "name"],
                             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-                        ).decode().strip()
+                        ).decode("utf-8", errors="replace").strip()
                         lines = [line.strip() for line in out.split("\n") if line.strip()]
                         if len(lines) > 1:
                             cpu_model = lines[1]
@@ -66,7 +66,7 @@ def get_gpu_info():
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
             **kwargs,
-        ).decode()
+        ).decode("utf-8", errors="replace")
         for line in out.strip().split("\n"):
             if "," in line:
                 name, mem = line.split(",")
@@ -84,7 +84,7 @@ def get_gpu_info():
                     out = subprocess.check_output(
                         ["powershell", "-Command", "(Get-CimInstance Win32_VideoController).Name"],
                         creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-                    ).decode().strip()
+                    ).decode("utf-8", errors="replace").strip()
                     for line in out.split("\n"):
                         name = line.strip()
                         if name and "Virtual" not in name and "Mirror" not in name:
@@ -94,10 +94,9 @@ def get_gpu_info():
                     wmic_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "wbem", "wmic.exe")
                     if os.path.exists(wmic_path):
                         out = subprocess.check_output(
-                            f'"{wmic_path}" path win32_VideoController get name',
-                            shell=True,
+                            [wmic_path, "path", "win32_VideoController", "get", "name"],
                             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-                        ).decode().strip()
+                        ).decode("utf-8", errors="replace").strip()
                         lines = [line.strip() for line in out.split("\n") if line.strip()]
                         for line in lines[1:]:
                             if line and "Virtual" not in line and "Mirror" not in line:
@@ -117,12 +116,33 @@ def get_binary_paths():
     latex_path = shutil.which("latex")
     dvisvgm_path = shutil.which("dvisvgm")
 
-    # Double check common paths on Windows if not in PATH
-    if not manim_path:
-        # Check specific path found in check
-        custom_manim = r"C:\tools\Manim\Scripts\manim.exe"
-        if os.path.exists(custom_manim):
-            manim_path = custom_manim
+    # Double check Python environment and common paths if not in system PATH
+    py_dir = os.path.dirname(sys.executable) if sys.executable else ""
+    if py_dir:
+        candidates_manim = [
+            os.path.join(py_dir, "Scripts", "manim.exe"),
+            os.path.join(py_dir, "manim.exe"),
+            os.path.join(py_dir, "Scripts", "manim"),
+            os.path.join(py_dir, "manim"),
+            r"C:\tools\Manim\Scripts\manim.exe",
+        ]
+        if not manim_path:
+            for cand in candidates_manim:
+                if os.path.exists(cand):
+                    manim_path = cand
+                    break
+
+        candidates_ffmpeg = [
+            os.path.join(py_dir, "Scripts", "ffmpeg.exe"),
+            os.path.join(py_dir, "ffmpeg.exe"),
+            os.path.join(py_dir, "Scripts", "ffmpeg"),
+            os.path.join(py_dir, "ffmpeg"),
+        ]
+        if not ffmpeg_path:
+            for cand in candidates_ffmpeg:
+                if os.path.exists(cand):
+                    ffmpeg_path = cand
+                    break
 
     if platform.system() == "Windows":
         local_appdata = os.environ.get("LOCALAPPDATA", "")
@@ -152,6 +172,7 @@ def get_binary_paths():
         "dvisvgm": dvisvgm_path or "Not Found",
         "latex_available": latex_path is not None and dvisvgm_path is not None
     }
+
 
 def generate_profile():
     """Generates a hardware-specific configuration profile for Manim rendering."""

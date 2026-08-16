@@ -184,7 +184,7 @@ function drawEquationField() {
     context.fillText(particle.glyph, particle.x, particle.y);
   });
 
-  if (!prefersReducedMotion) {
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     animationFrame = window.requestAnimationFrame(drawEquationField);
   }
 }
@@ -213,7 +213,7 @@ if (canvas && context) {
 
   if (document.fonts) {
     document.fonts.ready.then(() => {
-      if (prefersReducedMotion) {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         drawEquationField();
       }
     });
@@ -298,28 +298,35 @@ sceneButtons.forEach((btn) => {
 });
 
 /* --- Scroll Spy Navigation --- */
-const sections = document.querySelectorAll("section[id]");
+const spySections = document.querySelectorAll("header[id], section[id]");
 const navLinks = document.querySelectorAll(".nav-menu a");
 
 function scrollSpy() {
-  const scrollPosition = window.scrollY + 120; // account for header offset
+  const isNearTop = window.scrollY < 80;
 
-  sections.forEach((section) => {
-    const sectionTop = section.offsetTop;
-    const sectionHeight = section.offsetHeight;
-    const sectionId = section.getAttribute("id");
+  if (isNearTop) {
+    navLinks.forEach((link) => {
+      link.classList.toggle("active", link.getAttribute("href") === "#top");
+    });
+    return;
+  }
 
-    if (scrollPosition >= sectionTop && scrollPosition < sectionTop + sectionHeight) {
-      navLinks.forEach((link) => {
-        link.classList.remove("active");
-        if (link.getAttribute("href") === `#${sectionId}`) {
-          link.classList.add("active");
-        }
-      });
+  let currentId = "";
+  spySections.forEach((section) => {
+    const rect = section.getBoundingClientRect();
+    if (rect.top <= 140 && rect.bottom > 140) {
+      currentId = section.getAttribute("id") || "";
     }
   });
+
+  if (currentId) {
+    navLinks.forEach((link) => {
+      link.classList.toggle("active", link.getAttribute("href") === `#${currentId}`);
+    });
+  }
 }
 
 window.addEventListener("scroll", scrollSpy, { passive: true });
 scrollSpy();
+
 

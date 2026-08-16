@@ -26,6 +26,8 @@ class ManimExecutor:
 
             candidates = []
             for root, _dirs, files in os.walk(media_videos):
+                if "partial_movie_files" in root.replace("\\", "/").split("/"):
+                    continue
                 for f in files:
                     if not f.lower().endswith((".mp4", ".gif", ".webm")):
                         continue
@@ -50,10 +52,13 @@ class ManimExecutor:
         """Convert an absolute file path into a path that starts with 'media/...'
         so it can be served by the FastAPI /media static mount."""
         normalized = abs_path.replace("\\", "/")
-        idx = normalized.find("/media/")
+        idx = normalized.rfind("/media/")
         if idx >= 0:
             return "media" + normalized[idx + len("/media"):]
+        if normalized.startswith("media/"):
+            return normalized
         return os.path.basename(abs_path)
+
 
     async def execute(self, manim_path: str, script_name: str, scene_name: str, quality: str, use_opengl: bool, log_callback):
         """
@@ -217,10 +222,11 @@ class ManimExecutor:
             await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
 
             # Check for progress
-            progress_match = progress_pattern.search(clean_line)
-            if progress_match:
-                percent = int(progress_match.group(1))
+            progress_matches = progress_pattern.findall(clean_line)
+            if progress_matches:
+                percent = int(progress_matches[-1])
                 await log_callback({"type": "progress", "percent": percent, "line": clean_line})
+
 
             # Check for file path (output video)
             file_match = file_pattern.search(clean_line)

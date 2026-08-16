@@ -19,6 +19,13 @@ class MediaRelPathTests(unittest.TestCase):
         )
         self.assertEqual(rel, "media/videos/demo/clip.mp4")
 
+    def test_extracts_media_suffix_when_parent_has_media(self):
+        rel = ManimExecutor._to_media_rel_path(
+            "/home/media/workspace/media/videos/demo/clip.mp4"
+        )
+        self.assertEqual(rel, "media/videos/demo/clip.mp4")
+
+
 
 class FindLatestRenderTests(unittest.TestCase):
     def test_does_not_match_scene_name_prefix(self):
@@ -38,6 +45,25 @@ class FindLatestRenderTests(unittest.TestCase):
             latest = executor._find_latest_render("script.py", "Scene")
             self.assertEqual(os.path.basename(latest), "Scene.mp4")
 
+    def test_ignores_partial_movie_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            videos = os.path.join(tmp, "media", "videos", "script", "1080p60")
+            partial = os.path.join(videos, "partial_movie_files", "Scene")
+            os.makedirs(partial)
+            chunk = os.path.join(partial, "Scene.mp4")
+            final = os.path.join(videos, "Scene.mp4")
+            with open(final, "w", encoding="utf-8") as handle:
+                handle.write("final")
+            with open(chunk, "w", encoding="utf-8") as handle:
+                handle.write("chunk")
+            os.utime(final, (2, 2))
+            os.utime(chunk, (5, 5))
+
+            executor = ManimExecutor(tmp)
+            latest = executor._find_latest_render("script.py", "Scene")
+            self.assertEqual(latest, final)
+
 
 if __name__ == "__main__":
     unittest.main()
+

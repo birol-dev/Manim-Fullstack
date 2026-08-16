@@ -80,16 +80,14 @@ def get_scenes_from_code(code_content: str) -> List[str]:
         # If there's a syntax error, we just return empty list
         return []
 
-    scenes = []
+    scene_nodes = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             # Check if it inherits from something (most scenes inherit from Scene, ThreeDScene etc.)
-            if node.bases:
-                scenes.append(node.name)
-            # Or if it's explicitly named scene
-            elif "scene" in node.name.lower():
-                scenes.append(node.name)
-    return scenes
+            if node.bases or "scene" in node.name.lower():
+                scene_nodes.append((getattr(node, "lineno", 0), node.name))
+    scene_nodes.sort(key=lambda x: x[0])
+    return [name for _, name in scene_nodes]
 
 
 def get_scene_animations(code_content: str) -> dict:
@@ -107,7 +105,7 @@ def get_scene_animations(code_content: str) -> dict:
             # Check if it has a construct method
             construct_node = None
             for subnode in node.body:
-                if isinstance(subnode, ast.FunctionDef) and subnode.name == "construct":
+                if isinstance(subnode, (ast.FunctionDef, ast.AsyncFunctionDef)) and subnode.name == "construct":
                     construct_node = subnode
                     break
 
@@ -156,10 +154,11 @@ def get_scene_animations(code_content: str) -> dict:
                                         duration = duration_str
                                 except Exception:
                                     pass
+                            duration_label = f"{duration}s" if isinstance(duration, (int, float)) or (isinstance(duration, str) and not duration.endswith("s")) else f"{duration}"
                             anims.append(
                                 {
                                     "type": "wait",
-                                    "label": f"Wait {duration}s",
+                                    "label": f"Wait {duration_label}",
                                     "duration": duration,
                                     "line": line_no,
                                 }
@@ -171,8 +170,9 @@ def get_scene_animations(code_content: str) -> dict:
     return scene_anims
 
 
-@app.get("/")
-def read_root():
+@app.get("/api/status")
+@app.get("/api/health")
+def read_status():
     return {
         "status": "online",
         "service": "Manim Composer API",
@@ -224,7 +224,8 @@ def get_files():
     videos_dir = os.path.join(MEDIA_DIR, "videos")
     if os.path.exists(videos_dir):
         for root, dirs, files in os.walk(videos_dir):
-            if "partial_movie_files" in root.replace("\\", "/").split("/"):
+            root_parts = root.replace("\\", "/").split("/")
+            if "partial_movie_files" in root_parts or any(p.startswith("_temp_run_") for p in root_parts):
                 continue
             for file in files:
                 if file.endswith((".mp4", ".gif", ".mov", ".webm")):
@@ -240,6 +241,11 @@ def get_files():
                             "url": f"/media/{encoded_rel}",
                         }
                     )
+
+    scripts.sort(key=lambda s: s["name"].lower())
+    assets.sort(key=lambda a: a["name"].lower())
+    media_files.sort(key=lambda m: m["name"].lower())
+
 
     # If workspace is empty, write a default example script so the user starts with something
     if not scripts:
@@ -332,8 +338,12 @@ def parse_code(req: ParseRequest):
 @app.get("/api/download-temp")
 def download_temp(path: str, background_tasks: BackgroundTasks):
     """Serves a rendered temporary file and deletes it once the download completes."""
+    clean_path = path.strip().replace("\\", "/").lstrip("/")
+    if clean_path.startswith("media/"):
+        clean_path = clean_path[len("media/"):]
+
     try:
-        abs_path = safe_join(MEDIA_DIR, path)
+        abs_path = safe_join(MEDIA_DIR, clean_path)
     except UnsafePathError:
         raise HTTPException(status_code=400, detail="Access denied")
 
@@ -344,14 +354,16 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
         try:
             if os.path.exists(abs_path):
                 os.remove(abs_path)
-            # Remove parent directory if it's empty
+            # If parent or grandparent is a temporary render directory, remove the whole tree
             parent = os.path.dirname(abs_path)
-            if os.path.exists(parent) and not os.listdir(parent):
-                os.rmdir(parent)
-                # Remove grandparent if empty and is a temp folder
-                grandparent = os.path.dirname(parent)
-                if os.path.basename(grandparent).startswith("_temp_run_") and not os.listdir(grandparent):
-                    os.rmdir(grandparent)
+            grandparent = os.path.dirname(parent)
+            if os.path.basename(grandparent).startswith("_temp_run_") and os.path.isdir(grandparent):
+                shutil.rmtree(grandparent, ignore_errors=True)
+            elif os.path.basename(parent).startswith("_temp_run_") and os.path.isdir(parent):
+                shutil.rmtree(parent, ignore_errors=True)
+            else:
+                if os.path.exists(parent) and not os.listdir(parent):
+                    os.rmdir(parent)
         except Exception:
             pass
 
@@ -411,13 +423,22 @@ def rename_file(req: RenameRequest):
     if not os.path.exists(old_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
 
-    if os.path.exists(new_path):
+    is_case_only = os.path.normcase(old_path) == os.path.normcase(new_path)
+    if os.path.exists(new_path) and not is_case_only:
         raise HTTPException(
             status_code=400, detail="A file with the target name already exists."
         )
 
     try:
-        os.rename(old_path, new_path)
+        if is_case_only and old_name != new_name:
+            import uuid
+            temp_name = f"__tmp_rename_{uuid.uuid4().hex[:8]}_{old_name}"
+            temp_path = safe_join(WORKSPACE_DIR, temp_name)
+            os.rename(old_path, temp_path)
+            os.rename(temp_path, new_path)
+        else:
+            os.rename(old_path, new_path)
+
         return {
             "success": True,
             "old_name": old_name,
@@ -426,6 +447,7 @@ def rename_file(req: RenameRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.post("/api/upload-asset")
@@ -751,9 +773,14 @@ async def websocket_render(websocket: WebSocket):
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")
 if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    @app.get("/")
+    def read_root():
+        return read_status()
 
 if __name__ == "__main__":
     import uvicorn
 
     # Start server on local port 8000
     uvicorn.run(app, host="127.0.0.1", port=8000)
+

@@ -42,13 +42,17 @@ def main():
     # 2. Launch browser in a separate thread
     threading.Thread(target=open_browser, daemon=True).start()
 
-    # 3. Add backend directory to Python path and launch Uvicorn
+    # 3. Add project root and backend directory to Python path and launch Uvicorn
     backend_dir = os.path.join(root_dir, "backend")
-    sys.path.insert(0, backend_dir)
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
     
     import uvicorn
     print("Starting Manim Composer unified server on port 8000...")
     uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False)
+
 
 if __name__ == "__main__":
     main()

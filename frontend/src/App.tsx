@@ -1602,8 +1602,9 @@ export default function App() {
                             setSavedPath(`workspace${vid.url}`);
                           }
                         }}
-                        className={`p-2 rounded-lg cursor-pointer flex items-center justify-between border transition-all duration-200 ${videoUrl.split("?")[0].endsWith(vid.url || "") ? "bg-zinc-900 border-zinc-700 text-white" : "bg-zinc-950/40 border-zinc-900 hover:bg-zinc-900/30 text-slate-400"}`}
+                        className={`p-2 rounded-lg cursor-pointer flex items-center justify-between border transition-all duration-200 ${vid.url && videoUrl.split("?")[0].endsWith(vid.url) ? "bg-zinc-900 border-zinc-700 text-white" : "bg-zinc-950/40 border-zinc-900 hover:bg-zinc-900/30 text-slate-400"}`}
                       >
+
                         <div className="flex items-center gap-2 min-w-0">
                           <Video size={14} className="text-slate-400" />
                           <span className="text-xs truncate">{vid.name}</span>
