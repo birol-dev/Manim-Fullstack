@@ -202,6 +202,25 @@
             <a class="button button-primary" href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">View on GitHub</a>
             <a class="button button-secondary" href="#workspace">See how it works</a>
           </div>
+          <div class="hero-install" aria-label="Terminal install command">
+            <div class="terminal-bar">
+              <div class="terminal-bar-left">
+                <span class="terminal-prompt" aria-hidden="true">$</span>
+                <code class="terminal-command" id="hero-install-cmd">git clone https://github.com/birol-dev/Manim-Fullstack.git &amp;&amp; cd Manim-Fullstack &amp;&amp; pip install -r backend/requirements.txt &amp;&amp; python run.py</code>
+              </div>
+              <button class="terminal-copy-btn" id="hero-copy-btn" type="button" aria-label="Copy terminal install command" title="Copy to clipboard">
+                <svg class="copy-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16">
+                  <rect x="7" y="7" width="10" height="10" rx="2"></rect>
+                  <path d="M4 13V5a2 2 0 0 1 2-2h8"></path>
+                </svg>
+                <svg class="check-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" width="16" height="16">
+                  <path d="M4 10l4 4 8-8"></path>
+                </svg>
+                <span class="copy-text">Copy</span>
+              </button>
+            </div>
+            <p class="hero-install-hint">Clones repo, installs backend packages, builds frontend, and opens the app.</p>
+          </div>
           <dl class="hero-metrics" aria-label="Product metrics">
             <div>
               <dt>2 sec</dt>

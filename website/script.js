@@ -329,4 +329,54 @@ function scrollSpy() {
 window.addEventListener("scroll", scrollSpy, { passive: true });
 scrollSpy();
 
+/* --- Hero Terminal Command Copy --- */
+const heroCopyBtn = document.querySelector("#hero-copy-btn");
+const heroInstallCmd = document.querySelector("#hero-install-cmd");
 
+if (heroCopyBtn && heroInstallCmd) {
+  let copyTimeout = null;
+
+  heroCopyBtn.addEventListener("click", async () => {
+    const commandText = heroInstallCmd.textContent.trim();
+    let copied = false;
+
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(commandText);
+        copied = true;
+      } catch (err) {
+        copied = false;
+      }
+    }
+
+    if (!copied) {
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = commandText;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.top = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, 99999);
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      } catch (err) {
+        console.error("Copy fallback error: ", err);
+      }
+    }
+
+    heroCopyBtn.classList.add("copied");
+    const textSpan = heroCopyBtn.querySelector(".copy-text");
+    if (textSpan) textSpan.textContent = "Copied!";
+    heroCopyBtn.setAttribute("aria-label", "Command copied to clipboard");
+
+    if (copyTimeout) clearTimeout(copyTimeout);
+    copyTimeout = setTimeout(() => {
+      heroCopyBtn.classList.remove("copied");
+      if (textSpan) textSpan.textContent = "Copy";
+      heroCopyBtn.setAttribute("aria-label", "Copy terminal install command");
+    }, 2000);
+  });
+}
