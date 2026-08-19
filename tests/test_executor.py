@@ -59,11 +59,41 @@ class FindLatestRenderTests(unittest.TestCase):
             os.utime(final, (2, 2))
             os.utime(chunk, (5, 5))
 
+    def test_finds_latest_mov_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            videos = os.path.join(tmp, "media", "videos", "script", "1080p60")
+            os.makedirs(videos)
+            final = os.path.join(videos, "Scene.mov")
+            with open(final, "w", encoding="utf-8") as handle:
+                handle.write("mov content")
+            os.utime(final, (10, 10))
+
             executor = ManimExecutor(tmp)
             latest = executor._find_latest_render("script.py", "Scene")
             self.assertEqual(latest, final)
 
 
+class ProgressParsingTests(unittest.TestCase):
+    def test_extracts_rich_bracketed_progress(self):
+        import asyncio
+        executor = ManimExecutor("/tmp")
+        events = []
+
+        async def callback(evt):
+            events.append(evt)
+
+        async def run():
+            stream = asyncio.StreamReader()
+            stream.feed_data(b"Rendering Scene\n[ 42%] 25/60\n[100%] 60/60\n")
+            stream.feed_eof()
+            await executor._read_stream(stream, "stdout", callback)
+
+        asyncio.run(run())
+        progresses = [e["percent"] for e in events if e.get("type") == "progress"]
+        self.assertEqual(progresses, [42, 100])
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

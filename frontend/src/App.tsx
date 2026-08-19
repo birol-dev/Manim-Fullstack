@@ -224,6 +224,47 @@ const LATEX_TEMPLATES = [
   { name: "Summation", code: "\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}" },
 ];
 
+const ALLOWED_ASSET_EXTENSIONS = [
+  ".svg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".mp3",
+  ".wav",
+  ".ogg",
+  ".m4a",
+  ".ttf",
+  ".otf",
+];
+const MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
+
+const WINDOWS_RESERVED_NAMES = new Set([
+  "CON",
+  "PRN",
+  "AUX",
+  "NUL",
+  "COM1",
+  "COM2",
+  "COM3",
+  "COM4",
+  "COM5",
+  "COM6",
+  "COM7",
+  "COM8",
+  "COM9",
+  "LPT1",
+  "LPT2",
+  "LPT3",
+  "LPT4",
+  "LPT5",
+  "LPT6",
+  "LPT7",
+  "LPT8",
+  "LPT9",
+]);
+
 interface LaTeXProps {
   math: string;
   block?: boolean;
@@ -249,6 +290,7 @@ function LaTeX({ math, block = false }: LaTeXProps) {
           globalWindow.katex.render(math, containerRef.current, {
             displayMode: block,
             throwOnError: false,
+            errorColor: "#ef4444",
           });
         } catch {
           containerRef.current.textContent = math;
@@ -550,6 +592,11 @@ export default function App() {
   }, [storageLocation]);
 
   const loadFileContent = useCallback(async (name: string) => {
+    if (autoRenderTimeoutRef.current) {
+      clearTimeout(autoRenderTimeoutRef.current);
+      autoRenderTimeoutRef.current = null;
+    }
+
     if (storageLocation === "browser") {
       const localScripts = getBrowserFiles();
       const fileCode = localScripts[name] || "";
@@ -600,8 +647,8 @@ export default function App() {
   }, [storageLocation]);
 
   const handleSave = useCallback(
-    async (silent = false) => {
-      if (!activeFile) return;
+    async (silent = false): Promise<string[] | null> => {
+      if (!activeFile) return null;
       setIsSaving(true);
 
       if (storageLocation === "browser") {
@@ -618,24 +665,28 @@ export default function App() {
 
           if (res.ok) {
             const data = await res.json();
-            setScenes(data.scenes as string[]);
+            const parsedScenes = data.scenes as string[];
+            setScenes(parsedScenes);
             setAnimations(data.animations || {});
             if (
-              (data.scenes as string[]).length > 0 &&
-              !(data.scenes as string[]).includes(selectedScene)
+              parsedScenes.length > 0 &&
+              !parsedScenes.includes(selectedScene)
             ) {
-              setSelectedScene(data.scenes[0]);
+              setSelectedScene(parsedScenes[0]);
             }
             if (!silent) {
               addLog(
                 "info",
-                `File "${activeFile}" saved successfully to browser local storage. Found scenes: ${(data.scenes as string[]).join(", ")}`,
+                `File "${activeFile}" saved successfully to browser local storage. Found scenes: ${parsedScenes.join(", ")}`,
               );
             }
             fetchFiles();
+            return parsedScenes;
           }
+          return null;
         } catch {
           addLog("error", "Error saving file to browser local storage.");
+          return null;
         } finally {
           setIsSaving(false);
         }
@@ -648,24 +699,28 @@ export default function App() {
           });
           const data = await res.json();
           if (data.success) {
-            setScenes(data.scenes as string[]);
+            const parsedScenes = data.scenes as string[];
+            setScenes(parsedScenes);
             setAnimations(data.animations || {});
             if (
-              (data.scenes as string[]).length > 0 &&
-              !(data.scenes as string[]).includes(selectedScene)
+              parsedScenes.length > 0 &&
+              !parsedScenes.includes(selectedScene)
             ) {
-              setSelectedScene(data.scenes[0]);
+              setSelectedScene(parsedScenes[0]);
             }
             if (!silent) {
               addLog(
                 "info",
-                `File "${activeFile}" saved successfully. Found scenes: ${(data.scenes as string[]).join(", ")}`,
+                `File "${activeFile}" saved successfully. Found scenes: ${parsedScenes.join(", ")}`,
               );
             }
             fetchFiles();
+            return parsedScenes;
           }
+          return null;
         } catch {
           addLog("error", "Error saving file to workspace.");
+          return null;
         } finally {
           setIsSaving(false);
         }
@@ -680,6 +735,16 @@ export default function App() {
       if (!newFileName.trim()) return;
       let name = newFileName.trim();
       if (!name.endsWith(".py")) name += ".py";
+
+      const stem = name.replace(/\.py$/i, "").toUpperCase();
+      if (WINDOWS_RESERVED_NAMES.has(stem)) {
+        addLog("error", `Cannot create file: "${name}" is a reserved system device name.`);
+        return;
+      }
+      if (/[<>:"/\\|?*]/.test(name) || name.includes("\0") || name.endsWith(" ") || name.endsWith(".")) {
+        addLog("error", "Filename contains invalid characters or trailing spaces/dots.");
+        return;
+      }
 
       const defaultCode = `from manim import *\n\nclass NewScene(Scene):\n    def construct(self):\n        text = Text("New Project", font_size=36)\n        self.play(Write(text))\n        self.wait(1)\n        self.play(FadeOut(text))\n`;
 
@@ -707,6 +772,8 @@ export default function App() {
             await fetchFiles();
             await loadFileContent(name);
             addLog("info", `Created new script: ${name}`);
+          } else {
+            addLog("error", data.detail || "Error creating new file.");
           }
         } catch {
           addLog("error", "Error creating new file.");
@@ -778,6 +845,26 @@ export default function App() {
     async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || e.target.files.length === 0) return;
       const file = e.target.files[0];
+      const lowerName = file.name.toLowerCase();
+      const isAllowed = ALLOWED_ASSET_EXTENSIONS.some((ext) =>
+        lowerName.endsWith(ext),
+      );
+
+      if (!isAllowed) {
+        addLog(
+          "error",
+          `Unsupported asset file type. Allowed: ${ALLOWED_ASSET_EXTENSIONS.join(", ")}`,
+        );
+        e.target.value = "";
+        return;
+      }
+
+      if (file.size > MAX_ASSET_SIZE_BYTES) {
+        addLog("error", "Asset file size exceeds maximum limit of 50MB.");
+        e.target.value = "";
+        return;
+      }
+
       const formData = new FormData();
       formData.append("file", file);
 
@@ -787,12 +874,16 @@ export default function App() {
           body: formData,
         });
         const data = await res.json();
-        if (data.success) {
+        if (res.ok && data.success) {
           addLog("info", `Asset uploaded: ${data.filename}`);
           fetchFiles();
+        } else {
+          addLog("error", data.detail || "Failed to upload asset.");
         }
       } catch {
         addLog("error", "Failed to upload asset.");
+      } finally {
+        e.target.value = "";
       }
     },
     [fetchFiles, addLog],
@@ -834,14 +925,15 @@ export default function App() {
     [addLog],
   );
 
-  const sendRenderRequest = useCallback(() => {
+  const sendRenderRequest = useCallback((overrideScene?: string) => {
+    const sceneToRender = overrideScene || selectedScene;
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       const shouldSendCode = storageLocation === "browser" || !autoSaveOnRender;
       wsRef.current.send(
         JSON.stringify({
           type: "start",
           filename: activeFile,
-          scene: selectedScene,
+          scene: sceneToRender,
           quality: quality,
           use_opengl: useOpengl,
           code: shouldSendCode ? code : undefined,
@@ -968,11 +1060,23 @@ export default function App() {
 
   const startRender = useCallback(async () => {
     if (isRendering) return;
+    let effectiveScene = selectedScene;
     if (storageLocation === "backend" && autoSaveOnRender) {
-      await handleSave(true);
+      const savedScenes = await handleSave(true);
+      if (savedScenes && savedScenes.length > 0) {
+        if (!savedScenes.includes(effectiveScene)) {
+          effectiveScene = savedScenes[0];
+          setSelectedScene(effectiveScene);
+        }
+      }
+    } else if (storageLocation === "browser") {
+      if (scenes.length > 0 && !scenes.includes(effectiveScene)) {
+        effectiveScene = scenes[0];
+        setSelectedScene(effectiveScene);
+      }
     }
 
-    if (!selectedScene) {
+    if (!effectiveScene) {
       addLog(
         "error",
         "Please select or write a valid Scene class in the editor before rendering.",
@@ -985,20 +1089,21 @@ export default function App() {
     setLogs([]);
     addLog(
       "info",
-      `Initiating render for Scene "${selectedScene}" from file "${activeFile}"...`,
+      `Initiating render for Scene "${effectiveScene}" from file "${activeFile}"...`,
     );
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       connectWebSocket(() => {
-        sendRenderRequest();
+        sendRenderRequest(effectiveScene);
       });
     } else {
-      sendRenderRequest();
+      sendRenderRequest(effectiveScene);
     }
   }, [
     isRendering,
     activeFile,
     selectedScene,
+    scenes,
     handleSave,
     connectWebSocket,
     sendRenderRequest,
@@ -2014,6 +2119,7 @@ export default function App() {
                 </span>
                 <input
                   type="file"
+                  accept=".svg,.png,.jpg,.jpeg,.gif,.webp,.mp3,.wav,.ogg,.m4a,.ttf,.otf"
                   onChange={handleAssetUpload}
                   className="hidden"
                 />
@@ -2370,7 +2476,14 @@ export default function App() {
               <input
                 type="checkbox"
                 checked={autoRender}
-                onChange={(e) => setAutoRender(e.target.checked)}
+                onChange={(e) => {
+                  const nextVal = e.target.checked;
+                  setAutoRender(nextVal);
+                  if (!nextVal && autoRenderTimeoutRef.current) {
+                    clearTimeout(autoRenderTimeoutRef.current);
+                    autoRenderTimeoutRef.current = null;
+                  }
+                }}
                 className="rounded border-zinc-800 bg-zinc-900 focus:ring-0 text-white w-3 h-3"
               />
               <span

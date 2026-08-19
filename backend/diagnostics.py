@@ -12,10 +12,11 @@ def get_cpu_info():
         # On Windows, retrieve CPU name from PowerShell or registry
         if platform.system() == "Windows":
             try:
-                # Try PowerShell first
+                # Try PowerShell first with timeout
                 out = subprocess.check_output(
                     ["powershell", "-Command", "(Get-CimInstance Win32_Processor).Name"],
-                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                    timeout=4,
                 ).decode("utf-8", errors="replace").strip()
                 if out:
                     cpu_model = out
@@ -26,22 +27,42 @@ def get_cpu_info():
                     if os.path.exists(wmic_path):
                         out = subprocess.check_output(
                             [wmic_path, "cpu", "get", "name"],
-                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                            timeout=4,
                         ).decode("utf-8", errors="replace").strip()
                         lines = [line.strip() for line in out.split("\n") if line.strip()]
                         if len(lines) > 1:
                             cpu_model = lines[1]
                 except Exception:
                     pass
+        elif platform.system() == "Darwin":
+            try:
+                out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=2).decode("utf-8", errors="replace").strip()
+                if out:
+                    cpu_model = out
+            except Exception:
+                cpu_model = platform.processor() or "Apple Silicon / Intel Mac"
+        elif platform.system() == "Linux":
+            try:
+                if os.path.exists("/proc/cpuinfo"):
+                    with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as f:
+                        for line in f:
+                            if "model name" in line:
+                                cpu_model = line.split(":", 1)[1].strip()
+                                break
+            except Exception:
+                cpu_model = platform.processor() or "Linux Processor"
         else:
-            cpu_model = platform.processor()
+            cpu_model = platform.processor() or "Unknown CPU"
     except Exception:
         cpu_model = platform.processor() or "Unknown CPU"
 
+    physical = psutil.cpu_count(logical=False) or 1
+    logical = psutil.cpu_count(logical=True) or 1
     return {
         "model": cpu_model,
-        "physical_cores": psutil.cpu_count(logical=False) or 1,
-        "logical_threads": psutil.cpu_count(logical=True) or 1
+        "physical_cores": max(1, physical),
+        "logical_threads": max(1, logical),
     }
 
 def get_ram_info():
@@ -65,6 +86,7 @@ def get_gpu_info():
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            timeout=4,
             **kwargs,
         ).decode("utf-8", errors="replace")
         for line in out.strip().split("\n"):
@@ -83,7 +105,8 @@ def get_gpu_info():
                 try:
                     out = subprocess.check_output(
                         ["powershell", "-Command", "(Get-CimInstance Win32_VideoController).Name"],
-                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                        timeout=4,
                     ).decode("utf-8", errors="replace").strip()
                     for line in out.split("\n"):
                         name = line.strip()
@@ -95,7 +118,8 @@ def get_gpu_info():
                     if os.path.exists(wmic_path):
                         out = subprocess.check_output(
                             [wmic_path, "path", "win32_VideoController", "get", "name"],
-                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                            timeout=4,
                         ).decode("utf-8", errors="replace").strip()
                         lines = [line.strip() for line in out.split("\n") if line.strip()]
                         for line in lines[1:]:
@@ -241,13 +265,15 @@ def write_manim_config_file(workspace_path: str, profile_config: dict):
     """Generates a customized manim.cfg file inside the user's workspace to apply default speedups."""
     cfg_path = os.path.join(workspace_path, "manim.cfg")
     
-    # We optimize ffmpeg options, log directories, and rendering defaults
-    quality_profile = profile_config["profile"]
-    recommended_threads = profile_config["recommended_threads"]
+    quality_profile = profile_config.get("profile", "balanced")
+    cpu_model = profile_config.get("hardware", {}).get("cpu", {}).get("model", "Default CPU")
+    fps = profile_config.get("default_fps", 30)
+    res_parts = str(profile_config.get("default_resolution", "1280x720")).split("x")
+    pixel_width = res_parts[0] if len(res_parts) == 2 else "1280"
+    pixel_height = res_parts[1] if len(res_parts) == 2 else "720"
     
-    # Let's customize cache settings and thread count for FFMPEG encoding
     cfg_content = f"""[CLI]
-# Custom generated config optimized for your PC config: {profile_config['hardware']['cpu']['model']}
+# Custom generated config optimized for your PC config: {cpu_model}
 # Profile: {quality_profile}
 
 # Logging configuration
@@ -256,9 +282,9 @@ media_dir = ./media
 log_dir = ./logs
 
 # Frame parameters for defaults
-frame_rate = {profile_config['default_fps']}
-pixel_width = {profile_config['default_resolution'].split('x')[0]}
-pixel_height = {profile_config['default_resolution'].split('x')[1]}
+frame_rate = {fps}
+pixel_width = {pixel_width}
+pixel_height = {pixel_height}
 
 # Optimization settings
 # Use temporary file caching

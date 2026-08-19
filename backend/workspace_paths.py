@@ -29,14 +29,44 @@ def safe_join(directory: str, *parts: str) -> str:
     return candidate
 
 
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+}
+
+
 def safe_basename(
     filename: Optional[str], *, required_suffix: Optional[str] = None
 ) -> str:
-    """Return a single path segment, rejecting separators and parent references."""
+    """Return a single path segment, rejecting separators, parent references, and device names."""
     if filename is None or not str(filename).strip():
         raise UnsafePathError("Filename is required.")
 
-    raw = filename.strip().replace("\\", "/")
+    filename_str = str(filename)
+    if filename_str.endswith(".") or filename_str.endswith(" ") or filename_str.startswith(" "):
+        raise UnsafePathError("Filename cannot start or end with a dot or space.")
+
+    raw = filename_str.replace("\\", "/")
     if raw.startswith("/") or (len(raw) >= 2 and raw[1] == ":"):
         raise UnsafePathError("Absolute paths are not allowed.")
 
@@ -45,6 +75,12 @@ def safe_basename(
         raise UnsafePathError("Invalid filename.")
     if "\x00" in name:
         raise UnsafePathError("Invalid filename.")
+
+    # Disallow Windows reserved device names (e.g. CON, NUL, AUX, COM1)
+    stem = Path(name).stem.upper()
+    if stem in WINDOWS_RESERVED_NAMES:
+        raise UnsafePathError(f"Filename '{name}' is a reserved device name.")
+
     if required_suffix and not name.endswith(required_suffix):
         raise UnsafePathError(f"File must end with {required_suffix}.")
     return name

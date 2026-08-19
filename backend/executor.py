@@ -29,7 +29,7 @@ class ManimExecutor:
                 if "partial_movie_files" in root.replace("\\", "/").split("/"):
                     continue
                 for f in files:
-                    if not f.lower().endswith((".mp4", ".gif", ".webm")):
+                    if not f.lower().endswith((".mp4", ".gif", ".webm", ".mov")):
                         continue
                     if scene_name and os.path.splitext(f)[0] != scene_name:
                         continue
@@ -163,14 +163,21 @@ class ManimExecutor:
 
     async def cancel(self):
         """Cancels the active rendering process, killing it and all child processes recursively."""
-        if self.current_process:
+        if self.current_process and self.current_process.returncode is None:
             self._cancelled = True
             pid = self.current_process.pid
             try:
                 if platform.system() == "Windows":
-                    # On Windows, kill the process tree (/T) forcefully (/F)
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], 
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    # On Windows, kill the process tree (/T) forcefully (/F) with CREATE_NO_WINDOW
+                    kwargs = {}
+                    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        **kwargs,
+                    )
                 else:
                     try:
                         os.killpg(os.getpgid(pid), signal.SIGTERM)
@@ -189,8 +196,47 @@ class ManimExecutor:
     async def _read_stream(self, stream, stream_name, log_callback):
         """Asynchronously reads a stream line-by-line and extracts progress/errors."""
         # Regular expressions to parse progress and output files
-        # Manim CE typical progress: "[ 50%] 30/60"
-        progress_pattern = re.compile(r"\[\s*(\d+)%\]")
+        # Matches typical progress: "[ 50%] 30/60", "50%|████", "50% 30/60"
+        progress_pattern = re.compile(r"\[\s*(\d+)%\]|(\d+)%\s*(?:\||\d+/\d+)")
+        # Video file pattern: matches "File ready at 'path'", "File ready at: path", "File ready at path", and handles ANSI color codes
+        file_pattern = re.compile(
+            r"File ready at(?:\s+|:\s+)"
+            r"(?:\x1b\[[0-9;]*m)?"
+            r"['\"]?"
+            r"([^\x1b'\"\r\n\t]+)"
+            r"['\"]?"
+            r"(?:\x1b\[[0-9;]*m)?"
+        )
+        # LaTeX errors: "LaTeX compilation error" or "xelatex is not installed"
+        latex_pattern = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
+
+        while True:
+            line_bytes = await stream.readline()
+            if not line_bytes:
+                break
+            
+            # Decode line with fallback
+            try:
+                line = line_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                line = line_bytes.decode("latin-1", errors="replace")
+            
+            clean_line = line.rstrip()
+            if not clean_line:
+                continue
+
+            # Stream raw line to console log
+            await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
+
+            # Check for progress
+            progress_matches = progress_pattern.findall(clean_line)
+            if progress_matches:
+                # Group matches from regex alternation: find the first non-empty group
+                last_match = progress_matches[-1]
+                val_str = last_match[0] or last_match[1] if isinstance(last_match, tuple) else last_match
+                if val_str and val_str.isdigit():
+                    percent = int(val_str)
+                    await log_callback({"type": "progress", "percent": percent, "line": clean_line})
         # Video file pattern: matches "File ready at 'path'", "File ready at: path", "File ready at path", and handles ANSI color codes
         file_pattern = re.compile(
             r"File ready at(?:\s+|:\s+)"

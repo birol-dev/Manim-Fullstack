@@ -43,6 +43,18 @@ class SafeBasenameTests(unittest.TestCase):
         with self.assertRaises(UnsafePathError):
             safe_basename("notes.txt", required_suffix=".py")
 
+    def test_rejects_windows_reserved_device_names(self):
+        for name in ("con.py", "NUL.py", "aux.py", "com1.py", "lpt3.py"):
+            with self.subTest(name=name):
+                with self.assertRaises(UnsafePathError):
+                    safe_basename(name, required_suffix=".py")
+
+    def test_rejects_trailing_dots_and_spaces(self):
+        for name in ("test.py.", "test.py ", "asset.svg.", "asset.png "):
+            with self.subTest(name=name):
+                with self.assertRaises(UnsafePathError):
+                    safe_basename(name)
+
 
 class DirectoryBoundaryTests(unittest.TestCase):
     def test_rejects_sibling_prefix_directory(self):
