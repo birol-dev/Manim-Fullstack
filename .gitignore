@@ -32,6 +32,8 @@ build/
 .coverage
 .coverage.*
 htmlcov/
+coverage/
+frontend/coverage/
 
 # Local Environment Variables & Secrets
 .env

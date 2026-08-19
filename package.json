@@ -9,7 +9,10 @@
     "dev:full": "concurrently \"python backend/main.py\" \"npm --prefix frontend run dev\"",
     "check:frontend": "npm --prefix frontend run lint && npm --prefix frontend run build",
     "check:backend": "python -m compileall backend && python -c \"import backend.main; print('backend import ok')\"",
-    "check": "npm run check:frontend && npm run check:backend"
+    "check": "npm run check:frontend && npm run check:backend",
+    "test:backend": "python -m pytest tests --cov=backend --cov-branch --cov-report=term-missing",
+    "test:frontend": "npm --prefix frontend run test:coverage",
+    "test": "npm run test:backend && npm run test:frontend"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

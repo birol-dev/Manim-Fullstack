@@ -612,10 +612,11 @@ export default function App() {
         });
         if (res.ok) {
           const data = await res.json();
-          setScenes(data.scenes as string[]);
+          const parsedScenes = (data.scenes || []) as string[];
+          setScenes(parsedScenes);
           setAnimations(data.animations || {});
-          if ((data.scenes as string[]).length > 0) {
-            setSelectedScene(data.scenes[0]);
+          if (parsedScenes.length > 0) {
+            setSelectedScene(parsedScenes[0]);
           } else {
             setSelectedScene("");
           }
@@ -630,13 +631,14 @@ export default function App() {
         );
         if (!res.ok) throw new Error();
         const data = await res.json();
-        setActiveFile(data.filename);
-        setCode(data.code);
-        loadedFileRef.current = data.filename;
-        setScenes(data.scenes as string[]);
+        setActiveFile(data.filename || name);
+        setCode(data.code || "");
+        loadedFileRef.current = data.filename || name;
+        const parsedScenes = (data.scenes || []) as string[];
+        setScenes(parsedScenes);
         setAnimations(data.animations || {});
-        if ((data.scenes as string[]).length > 0) {
-          setSelectedScene(data.scenes[0]);
+        if (parsedScenes.length > 0) {
+          setSelectedScene(parsedScenes[0]);
         } else {
           setSelectedScene("");
         }
@@ -699,7 +701,7 @@ export default function App() {
           });
           const data = await res.json();
           if (data.success) {
-            const parsedScenes = data.scenes as string[];
+            const parsedScenes = (data.scenes || []) as string[];
             setScenes(parsedScenes);
             setAnimations(data.animations || {});
             if (
@@ -2506,22 +2508,22 @@ export default function App() {
                   if (value === "__none__") return;
                   setSelectedScene(value);
                 }}
-                disabled={scenes.length === 0}
+                disabled={(scenes || []).length === 0}
               >
                 <SelectTrigger className="w-[150px] h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
                   <SelectValue
                     placeholder={
-                      scenes.length === 0 ? "No scenes" : "Select Scene"
+                      (scenes || []).length === 0 ? "No scenes" : "Select Scene"
                     }
                   />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-900 border-zinc-800 text-xs">
-                  {scenes.length === 0 && (
+                  {(scenes || []).length === 0 && (
                     <SelectItem value="__none__" className="text-xs">
                       No scenes
                     </SelectItem>
                   )}
-                  {scenes.map((scene) => (
+                  {(scenes || []).map((scene) => (
                     <SelectItem key={scene} value={scene} className="text-xs">
                       {scene}
                     </SelectItem>
