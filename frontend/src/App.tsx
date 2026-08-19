@@ -2073,12 +2073,12 @@ export default function App() {
                   className="w-full bg-black border border-zinc-800 rounded-md p-2 text-[11px] text-slate-200 focus:outline-none focus:border-zinc-700 font-mono h-16 resize-none"
                 />
 
-                <div className="p-3 bg-zinc-950 border border-zinc-900 rounded-md flex items-center justify-center min-h-[50px] max-h-[80px] overflow-auto text-white">
+                <div className="p-3 bg-zinc-950 border border-zinc-900 rounded-md flex items-center justify-center min-h-12.5 max-h-20 overflow-auto text-white">
                   <LaTeX math={latexInput} block />
                 </div>
               </div>
 
-              <div className="flex-1 overflow-y-auto min-h-[120px] mt-3">
+              <div className="flex-1 overflow-y-auto min-h-30 mt-3">
                 <h4 className="text-[10px] font-semibold text-slate-500 tracking-wider mb-2">
                   Equation Templates
                 </h4>
@@ -2203,7 +2203,7 @@ export default function App() {
                     <div className="space-y-1.5 text-[11px]">
                       <div className="flex justify-between">
                         <span className="text-slate-500">CPU Name:</span>
-                        <span className="text-slate-250 font-medium text-right max-w-[160px] truncate">
+                        <span className="text-slate-250 font-medium text-right max-w-40 truncate">
                           {diagnostics.hardware.cpu.model}
                         </span>
                       </div>
@@ -2221,7 +2221,7 @@ export default function App() {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500">Graphics Device:</span>
-                        <span className="text-slate-250 text-right max-w-[160px] truncate">
+                        <span className="text-slate-250 text-right max-w-40 truncate">
                           {diagnostics.hardware.gpu.devices[0]?.name || "N/A"}
                         </span>
                       </div>
@@ -2365,7 +2365,7 @@ export default function App() {
                       onChange={(e) => handleAutoSaveOnRenderChange(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
+                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
                   </label>
                 </div>
 
@@ -2386,7 +2386,7 @@ export default function App() {
                       onChange={(e) => handleDownloadOnlyModeChange(e.target.checked)}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
+                    <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-slate-400 after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-zinc-700 peer-checked:bg-white peer-checked:after:bg-black peer-checked:after:border-black"></div>
                   </label>
                 </div>
 
@@ -2510,7 +2510,7 @@ export default function App() {
                 }}
                 disabled={(scenes || []).length === 0}
               >
-                <SelectTrigger className="w-[150px] h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
+                <SelectTrigger className="w-37.5 h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
                   <SelectValue
                     placeholder={
                       (scenes || []).length === 0 ? "No scenes" : "Select Scene"
@@ -2536,7 +2536,7 @@ export default function App() {
             <div className="flex items-center gap-2 text-xs">
               <span className="text-slate-500">Quality:</span>
               <Select value={quality} onValueChange={setQuality}>
-                <SelectTrigger className="w-[140px] h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
+                <SelectTrigger className="w-35 h-7 bg-zinc-900 border-zinc-800 text-xs text-slate-200">
                   <SelectValue placeholder="Select Quality" />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-900 border-zinc-800 text-xs">
@@ -2745,7 +2745,7 @@ export default function App() {
             <div className="flex items-center gap-4">
               {isRendering && (
                 <div className="flex items-center gap-3">
-                  <Progress value={renderPercent} className="w-[120px] h-1.5" />
+                  <Progress value={renderPercent} className="w-30 h-1.5" />
                   <span className="text-xs text-white font-bold font-mono">
                     {renderPercent}%
                   </span>
