@@ -57,6 +57,10 @@ def main():
     # 1. Build frontend
     try:
         build_frontend(force=args.build)
+    except FileNotFoundError:
+        print("\n[ERROR] npm executable not found on your system PATH.", file=sys.stderr)
+        print("Please install Node.js (>=18) from https://nodejs.org and ensure npm is available in your PATH.\n", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"\n[ERROR] Frontend build failed: {e}", file=sys.stderr)
         print("Please ensure Node.js (>=18) and npm are installed and run:", file=sys.stderr)
@@ -86,11 +90,15 @@ def main():
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
-    import uvicorn
-
-    print(f"Starting Manim Composer unified server on http://{args.host}:{args.port} ...")
-    uvicorn.run("backend.main:app", host=args.host, port=args.port, reload=False)
+    try:
+        import uvicorn
+        print(f"Starting Manim Composer unified server on http://{args.host}:{args.port} ...")
+        uvicorn.run("backend.main:app", host=args.host, port=args.port, reload=False)
+    except KeyboardInterrupt:
+        print("\nManim Composer server stopped. Goodbye!")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
     main()
+

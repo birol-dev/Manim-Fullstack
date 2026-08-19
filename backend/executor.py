@@ -214,13 +214,13 @@ class ManimExecutor:
             line_bytes = await stream.readline()
             if not line_bytes:
                 break
-            
+
             # Decode line with fallback
             try:
                 line = line_bytes.decode("utf-8")
             except UnicodeDecodeError:
                 line = line_bytes.decode("latin-1", errors="replace")
-            
+
             clean_line = line.rstrip()
             if not clean_line:
                 continue
@@ -237,42 +237,6 @@ class ManimExecutor:
                 if val_str and val_str.isdigit():
                     percent = int(val_str)
                     await log_callback({"type": "progress", "percent": percent, "line": clean_line})
-        # Video file pattern: matches "File ready at 'path'", "File ready at: path", "File ready at path", and handles ANSI color codes
-        file_pattern = re.compile(
-            r"File ready at(?:\s+|:\s+)"
-            r"(?:\x1b\[[0-9;]*m)?"
-            r"['\"]?"
-            r"([^\x1b'\"\r\n\t]+)"
-            r"['\"]?"
-            r"(?:\x1b\[[0-9;]*m)?"
-        )
-        # LaTeX errors: "LaTeX compilation error" or "xelatex is not installed"
-        latex_pattern = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
-
-        while True:
-            line_bytes = await stream.readline()
-            if not line_bytes:
-                break
-            
-            # Decode line with fallback
-            try:
-                line = line_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                line = line_bytes.decode("latin-1", errors="replace")
-            
-            clean_line = line.rstrip()
-            if not clean_line:
-                continue
-
-            # Stream raw line to console log
-            await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
-
-            # Check for progress
-            progress_matches = progress_pattern.findall(clean_line)
-            if progress_matches:
-                percent = int(progress_matches[-1])
-                await log_callback({"type": "progress", "percent": percent, "line": clean_line})
-
 
             # Check for file path (output video)
             file_match = file_pattern.search(clean_line)
@@ -302,3 +266,4 @@ class ManimExecutor:
                     "type": "latex_error_warning",
                     "message": "It looks like LaTeX rendering failed. If LaTeX is not installed or dvisvgm is missing, please replace MathTex elements with standard Text, or download MiKTeX/TeX Live."
                 })
+

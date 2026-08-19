@@ -165,7 +165,7 @@ function seedParticles() {
 }
 
 function drawEquationField() {
-  if (!canvas || !context) return;
+  if (!canvas || !context || canvasWidth <= 0 || canvasHeight <= 0) return;
 
   context.clearRect(0, 0, canvasWidth, canvasHeight);
 
@@ -184,7 +184,7 @@ function drawEquationField() {
     context.fillText(particle.glyph, particle.x, particle.y);
   });
 
-  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches && !document.hidden) {
     animationFrame = window.requestAnimationFrame(drawEquationField);
   }
 }
@@ -196,8 +196,10 @@ function startEquationField() {
     animationFrame = 0;
   }
   resizeCanvas();
-  seedParticles();
-  drawEquationField();
+  if (canvasWidth > 0 && canvasHeight > 0) {
+    seedParticles();
+    drawEquationField();
+  }
 }
 
 if (canvas && context) {
@@ -210,6 +212,17 @@ if (canvas && context) {
     },
     { passive: true }
   );
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+      }
+    } else if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      startEquationField();
+    }
+  });
 
   if (document.fonts) {
     document.fonts.ready.then(() => {
@@ -289,11 +302,11 @@ sceneButtons.forEach((btn) => {
     sceneButtons.forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
 
-    if (appTitle) appTitle.textContent = sceneData.title;
-    if (renderStatus) renderStatus.textContent = sceneData.status;
-    if (codeContent) codeContent.innerHTML = sceneData.code;
-    if (canvasPreview) canvasPreview.innerHTML = sceneData.preview;
-    if (logStream) logStream.innerHTML = sceneData.logs;
+    if (appTitle) appTitle.textContent = sceneData.title || "";
+    if (renderStatus) renderStatus.textContent = sceneData.status || "";
+    if (codeContent) codeContent.innerHTML = sceneData.code || "";
+    if (canvasPreview) canvasPreview.innerHTML = sceneData.preview || "";
+    if (logStream) logStream.innerHTML = sceneData.logs || "";
   });
 });
 
@@ -356,21 +369,39 @@ if (heroCopyBtn && heroInstallCmd) {
         textarea.style.position = "fixed";
         textarea.style.left = "-9999px";
         textarea.style.top = "0";
+        textarea.setAttribute("readonly", "true");
         document.body.appendChild(textarea);
         textarea.focus();
         textarea.select();
         textarea.setSelectionRange(0, 99999);
-        document.execCommand("copy");
+        copied = document.execCommand("copy");
         document.body.removeChild(textarea);
       } catch (err) {
-        console.error("Copy fallback error: ", err);
+        copied = false;
       }
     }
 
-    heroCopyBtn.classList.add("copied");
     const textSpan = heroCopyBtn.querySelector(".copy-text");
-    if (textSpan) textSpan.textContent = "Copied!";
-    heroCopyBtn.setAttribute("aria-label", "Command copied to clipboard");
+
+    if (copied) {
+      heroCopyBtn.classList.add("copied");
+      if (textSpan) textSpan.textContent = "Copied!";
+      heroCopyBtn.setAttribute("aria-label", "Command copied to clipboard");
+    } else {
+      // Failsafe: select the text in the terminal element so the user can easily press Ctrl+C / Cmd+C
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(heroInstallCmd);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+      } catch (err) {
+        // Selection fallback handled silently
+      }
+      heroCopyBtn.classList.add("copied");
+      if (textSpan) textSpan.textContent = "Press Ctrl+C";
+      heroCopyBtn.setAttribute("aria-label", "Press Ctrl+C to copy selected command");
+    }
 
     if (copyTimeout) clearTimeout(copyTimeout);
     copyTimeout = setTimeout(() => {

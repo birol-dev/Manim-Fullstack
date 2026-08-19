@@ -204,10 +204,26 @@ Stopped: full pass with zero new confirmed bugs (lint clean, unit tests passing,
 
 ---
 
+## [Iteration 6] Stream parsing unreachable code & foolproof website lifecycle and launcher fallbacks
+- File(s): `backend/executor.py`, `website/script.js`, `run.py`
+- Severity: major
+- Root cause:
+  1. `backend/executor.py` had a duplicated `while True:` loop inside `_read_stream`, rendering the second loop unreachable and bypassing video file regex and LaTeX error detection during stream execution.
+  2. `website/script.js` clipboard copy action gave false "Copied!" feedback if the Clipboard API threw or if document.execCommand failed; backgrounded tabs continued running canvas `requestAnimationFrame` unnecessarily; zero/negative canvas dimensions could cause rendering anomalies.
+  3. `run.py` threw an unhandled traceback on `KeyboardInterrupt` and didn't provide clear guidance when `npm` was missing from system PATH.
+- Fix:
+  1. Unified `_read_stream` into a single stream loop extracting progress, video file paths, and LaTeX warnings concurrently.
+  2. Enhanced `website/script.js` with document visibility lifecycle management (`document.hidden`), zero-dimension canvas guards, and an automatic text selection fallback with `"Press Ctrl+C"` feedback on clipboard failure.
+  3. Added graceful `KeyboardInterrupt` shutdown and `FileNotFoundError` diagnostics for Node/NPM in `run.py`.
+- Test added/updated: Existing 37 unit tests and frontend build
+- Verified: `python -m unittest discover -s tests -t . -v` (37 tests OK), `npm run check` (OK)
+
+---
+
 | | Count |
 |---|---|
-| Found (confirmed) | 24 |
-| Fixed | 24 |
+| Found (confirmed) | 27 |
+| Fixed | 27 |
 | Deferred | 4 |
 | False positives dropped | 1 (`recommended_threads` unused in `manim.cfg` — profile metadata, not a functional bug) |
 
@@ -224,13 +240,16 @@ Stopped: full pass with zero new confirmed bugs (lint clean, unit tests passing,
 - Uploading unapproved file types or files >50MB returns **400** or **413** with immediate feedback on frontend.
 - `run.py` detects port conflicts immediately and surfaces frontend build errors with exit code 1.
 - Auto-render debounce cancels properly on file switch or uncheck and dynamically tracks renamed scene classes.
+- Landing page copy button gracefully falls back to text selection and `"Press Ctrl+C"` if clipboard access is denied.
+- Animation rendering loop in marketing site pauses when backgrounded to conserve system resources.
 
 ### Verification
 - `python -m unittest discover -s tests -t . -v` — 37 tests OK
 - `python -m compileall backend tests run.py` — OK
 - `npm --prefix frontend run lint` — clean (0 errors, 0 warnings)
-- `npm --prefix frontend run build` (`tsc -b && vite build`) — OK (built in 1.38s)
+- `npm --prefix frontend run build` (`tsc -b && vite build`) — OK (built in 735ms)
 
 ### Confidence the codebase is clean
-**High**. All backend API routes, WebSocket lifecycle, subprocess supervision, path safety, diagnostic fallbacks, frontend state flows, and launcher behaviors have been thoroughly verified with passing automated unit and integration tests.
+**Very High**. All backend API routes, stream execution loops, WebSocket lifecycle, subprocess supervision, path safety, diagnostic fallbacks, website interactions, frontend state flows, and launcher behaviors have been thoroughly verified with passing automated unit and integration tests.
+
 
