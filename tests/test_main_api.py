@@ -297,6 +297,15 @@ def test_install_endpoints_success_and_failures(client):
             assert res_no_winget.status_code == 400
 
 
+MOCK_BINARIES = {
+    "manim": "/usr/local/bin/manim",
+    "ffmpeg": "/usr/local/bin/ffmpeg",
+    "latex": "/usr/local/bin/latex",
+    "dvisvgm": "/usr/local/bin/dvisvgm",
+    "latex_available": True,
+}
+
+
 def test_websocket_render_lifecycle_success(client, tmp_path):
     media_dir = tmp_path / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
@@ -315,27 +324,32 @@ def test_websocket_render_lifecycle_success(client, tmp_path):
                 await log_callback({"type": "status", "status": "success", "message": "Rendering completed."})
                 return {"success": True, "status": "success"}
 
-            with patch.object(main.executor, "execute", side_effect=mock_execute):
-                with client.websocket_connect("/api/render") as ws:
-                    ws.send_json({
-                        "type": "start",
-                        "filename": "script.py",
-                        "scene": "MyScene",
-                        "quality": "l",
-                        "use_opengl": False,
-                    })
+            with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                    with client.websocket_connect("/api/render") as ws:
+                        ws.send_json({
+                            "type": "start",
+                            "filename": "script.py",
+                            "scene": "MyScene",
+                            "quality": "l",
+                            "use_opengl": False,
+                        })
 
-                    received = []
-                    while True:
-                        msg = ws.receive_json()
-                        received.append(msg)
-                        if msg.get("type") == "result":
-                            break
+                        received = []
+                        for _ in range(20):
+                            msg = ws.receive_json()
+                            received.append(msg)
+                            if msg.get("type") == "result":
+                                break
+                            if msg.get("type") == "error":
+                                pytest.fail(f"Unexpected websocket error: {msg.get('message')}")
+                        else:
+                            pytest.fail("Websocket render did not produce a 'result' message within expected steps.")
 
-                    msg_types = [m["type"] for m in received]
-                    assert "file_ready" in msg_types
-                    assert "result" in msg_types
-                    assert received[-1]["success"] is True
+                        msg_types = [m["type"] for m in received]
+                        assert "file_ready" in msg_types
+                        assert "result" in msg_types
+                        assert received[-1]["success"] is True
 
 
 def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
@@ -353,26 +367,31 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
                 })
                 return {"success": True, "status": "success"}
 
-            with patch.object(main.executor, "execute", side_effect=mock_execute):
-                with client.websocket_connect("/api/render") as ws:
-                    ws.send_json({
-                        "type": "start",
-                        "filename": "adhoc.py",
-                        "scene": "TempScene",
-                        "download_only": True,
-                        "code": "class TempScene(Scene): pass",
-                    })
+            with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                    with client.websocket_connect("/api/render") as ws:
+                        ws.send_json({
+                            "type": "start",
+                            "filename": "adhoc.py",
+                            "scene": "TempScene",
+                            "download_only": True,
+                            "code": "class TempScene(Scene): pass",
+                        })
 
-                    received = []
-                    while True:
-                        msg = ws.receive_json()
-                        received.append(msg)
-                        if msg.get("type") == "result":
-                            break
+                        received = []
+                        for _ in range(20):
+                            msg = ws.receive_json()
+                            received.append(msg)
+                            if msg.get("type") == "result":
+                                break
+                            if msg.get("type") == "error":
+                                pytest.fail(f"Unexpected websocket error: {msg.get('message')}")
+                        else:
+                            pytest.fail("Websocket render did not produce a 'result' message within expected steps.")
 
-                    file_ready_msg = next(m for m in received if m.get("type") == "file_ready")
-                    assert file_ready_msg.get("is_temp_download") is True
-                    assert "api/download-temp" in file_ready_msg.get("rel_path")
+                        file_ready_msg = next(m for m in received if m.get("type") == "file_ready")
+                        assert file_ready_msg.get("is_temp_download") is True
+                        assert "api/download-temp" in file_ready_msg.get("rel_path")
 
 
 def test_websocket_render_validation_errors(client):
@@ -416,22 +435,27 @@ def test_websocket_render_cancellation(client, tmp_path):
                 await log_callback({"type": "status", "status": "cancelled", "message": "Cancelled"})
                 return {"success": False, "status": "cancelled"}
 
-            with patch.object(main.executor, "execute", side_effect=mock_execute):
-                with client.websocket_connect("/api/render") as ws:
-                    ws.send_json({
-                        "type": "start",
-                        "filename": "cancel_scene.py",
-                        "scene": "CancelScene",
-                    })
-                    ws.send_json({"type": "cancel"})
+            with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                    with client.websocket_connect("/api/render") as ws:
+                        ws.send_json({
+                            "type": "start",
+                            "filename": "cancel_scene.py",
+                            "scene": "CancelScene",
+                        })
+                        ws.send_json({"type": "cancel"})
 
-                    received = []
-                    while True:
-                        msg = ws.receive_json()
-                        received.append(msg)
-                        if msg.get("type") == "result":
-                            break
+                        received = []
+                        for _ in range(20):
+                            msg = ws.receive_json()
+                            received.append(msg)
+                            if msg.get("type") == "result":
+                                break
+                            if msg.get("type") == "error":
+                                pytest.fail(f"Unexpected websocket error: {msg.get('message')}")
+                        else:
+                            pytest.fail("Websocket render did not produce a 'result' message within expected steps.")
 
-                    assert received[-1]["type"] == "result"
-                    assert received[-1]["success"] is False
-                    assert received[-1]["status"] == "cancelled"
+                        assert received[-1]["type"] == "result"
+                        assert received[-1]["success"] is False
+                        assert received[-1]["status"] == "cancelled"
