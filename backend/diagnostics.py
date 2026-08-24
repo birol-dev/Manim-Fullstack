@@ -3,38 +3,64 @@ import shutil
 import platform
 import subprocess
 import sys
+import time
+import functools
 import psutil
+
+# Cached hardware / binary detection
+_PROFILE_CACHE = None
+_PROFILE_CACHE_TIME = 0.0
+_BINARY_PATHS_CACHE = None
+_BINARY_PATHS_CACHE_TIME = 0.0
+_CACHE_TTL_SECONDS = 300.0  # 5 minutes cache for system hardware profile
+
+def _get_cpu_from_registry():
+    """Fast registry lookup for CPU name on Windows (< 0.05ms)."""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+        val, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+        winreg.CloseKey(key)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+    except Exception:
+        pass
+    return None
 
 def get_cpu_info():
     """Returns CPU model, physical cores, and logical threads."""
     cpu_model = "Unknown Processor"
     try:
-        # On Windows, retrieve CPU name from PowerShell or registry
+        # On Windows, first try instant registry lookup (< 0.05 ms) before spawning slow subprocesses
         if platform.system() == "Windows":
-            try:
-                # Try PowerShell first with timeout
-                out = subprocess.check_output(
-                    ["powershell", "-Command", "(Get-CimInstance Win32_Processor).Name"],
-                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-                    timeout=4,
-                ).decode("utf-8", errors="replace").strip()
-                if out:
-                    cpu_model = out
-            except Exception:
-                # Fallback to direct path of wmic
+            reg_model = _get_cpu_from_registry()
+            if reg_model:
+                cpu_model = reg_model
+            else:
                 try:
-                    wmic_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "wbem", "wmic.exe")
-                    if os.path.exists(wmic_path):
-                        out = subprocess.check_output(
-                            [wmic_path, "cpu", "get", "name"],
-                            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-                            timeout=4,
-                        ).decode("utf-8", errors="replace").strip()
-                        lines = [line.strip() for line in out.split("\n") if line.strip()]
-                        if len(lines) > 1:
-                            cpu_model = lines[1]
+                    # Try PowerShell first with timeout
+                    out = subprocess.check_output(
+                        ["powershell", "-Command", "(Get-CimInstance Win32_Processor).Name"],
+                        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                        timeout=4,
+                    ).decode("utf-8", errors="replace").strip()
+                    if out:
+                        cpu_model = out
                 except Exception:
-                    pass
+                    # Fallback to direct path of wmic
+                    try:
+                        wmic_path = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "wbem", "wmic.exe")
+                        if os.path.exists(wmic_path):
+                            out = subprocess.check_output(
+                                [wmic_path, "cpu", "get", "name"],
+                                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                                timeout=4,
+                            ).decode("utf-8", errors="replace").strip()
+                            lines = [line.strip() for line in out.split("\n") if line.strip()]
+                            if len(lines) > 1:
+                                cpu_model = lines[1]
+                    except Exception:
+                        pass
         elif platform.system() == "Darwin":
             try:
                 out = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"], timeout=2).decode("utf-8", errors="replace").strip()
@@ -52,7 +78,7 @@ def get_cpu_info():
                                 break
             except Exception:
                 cpu_model = platform.processor() or "Linux Processor"
-        else:
+        elif platform.system() != "Windows":
             cpu_model = platform.processor() or "Unknown CPU"
     except Exception:
         cpu_model = platform.processor() or "Unknown CPU"
@@ -133,8 +159,9 @@ def get_gpu_info():
         "has_cuda": has_cuda
     }
 
-def get_binary_paths():
+def get_binary_paths(force_refresh: bool = False):
     """Locates manim, ffmpeg, latex, and dvisvgm paths."""
+    global _BINARY_PATHS_CACHE, _BINARY_PATHS_CACHE_TIME
     manim_path = shutil.which("manim")
     ffmpeg_path = shutil.which("ffmpeg")
     latex_path = shutil.which("latex")
@@ -189,14 +216,24 @@ def get_binary_paths():
                     if os.path.exists(cand_dvisvgm):
                         dvisvgm_path = cand_dvisvgm
 
-    return {
+    result = {
         "manim": manim_path or "Not Found",
         "ffmpeg": ffmpeg_path or "Not Found",
         "latex": latex_path or "Not Found",
         "dvisvgm": dvisvgm_path or "Not Found",
         "latex_available": latex_path is not None and dvisvgm_path is not None
     }
+    _BINARY_PATHS_CACHE = result
+    _BINARY_PATHS_CACHE_TIME = time.time()
+    return result
 
+def get_cached_binary_paths(force_refresh: bool = False) -> dict:
+    """Returns cached binary paths when valid, otherwise refreshes."""
+    global _BINARY_PATHS_CACHE, _BINARY_PATHS_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _BINARY_PATHS_CACHE is not None and (now - _BINARY_PATHS_CACHE_TIME < _CACHE_TTL_SECONDS):
+        return dict(_BINARY_PATHS_CACHE)
+    return get_binary_paths(force_refresh=True)
 
 def generate_profile():
     """Generates a hardware-specific configuration profile for Manim rendering."""
@@ -258,8 +295,18 @@ def generate_profile():
         },
         "dependencies": binaries
     }
-
     return config
+
+def get_cached_profile(force_refresh: bool = False) -> dict:
+    """Returns cached hardware profile if within TTL, else regenerates."""
+    global _PROFILE_CACHE, _PROFILE_CACHE_TIME
+    now = time.time()
+    if not force_refresh and _PROFILE_CACHE is not None and (now - _PROFILE_CACHE_TIME < _CACHE_TTL_SECONDS):
+        return dict(_PROFILE_CACHE)
+    config = generate_profile()
+    _PROFILE_CACHE = config
+    _PROFILE_CACHE_TIME = now
+    return dict(config)
 
 def write_manim_config_file(workspace_path: str, profile_config: dict):
     """Generates a customized manim.cfg file inside the user's workspace to apply default speedups."""

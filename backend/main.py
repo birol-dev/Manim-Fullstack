@@ -9,9 +9,16 @@ from urllib.parse import quote
 # Ensure backend directory is in python search path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from functools import lru_cache
 from typing import List, Optional
 
-from diagnostics import generate_profile, get_binary_paths, write_manim_config_file
+from diagnostics import (
+    generate_profile,
+    get_binary_paths,
+    get_cached_profile,
+    get_cached_binary_paths,
+    write_manim_config_file,
+)
 from executor import ManimExecutor
 from workspace_paths import UnsafePathError, safe_basename, safe_join
 from fastapi import (
@@ -73,37 +80,25 @@ class FileInfo(BaseModel):
     is_media: bool
 
 
-def get_scenes_from_code(code_content: str) -> List[str]:
-    """Parses Python code using AST to find all classes representing Scenes."""
+@lru_cache(maxsize=512)
+def _parse_code_ast(code_content: str) -> tuple:
+    """
+    Parses Python code using AST in a single pass to extract scenes and animation timeline.
+    Cached via LRU cache for instantaneous subsequent lookups.
+    """
     try:
         tree = ast.parse(code_content)
     except Exception:
-        # If there's a syntax error, we just return empty list
-        return []
+        return ((), ())
 
     scene_nodes = []
+    scene_anims = {}
+
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            # Check if it inherits from something (most scenes inherit from Scene, ThreeDScene etc.)
             if node.bases or "scene" in node.name.lower():
                 scene_nodes.append((getattr(node, "lineno", 0), node.name))
-    scene_nodes.sort(key=lambda x: x[0])
-    return [name for _, name in scene_nodes]
 
-
-def get_scene_animations(code_content: str) -> dict:
-    """Parses Python code using AST to find self.play and self.wait calls in each Scene's construct method."""
-    try:
-        tree = ast.parse(code_content)
-    except Exception:
-        return {}
-
-    scene_anims = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            scene_name = node.name
-
-            # Check if it has a construct method
             construct_node = None
             for subnode in node.body:
                 if isinstance(subnode, (ast.FunctionDef, ast.AsyncFunctionDef)) and subnode.name == "construct":
@@ -124,7 +119,6 @@ def get_scene_animations(code_content: str) -> dict:
                         if subnode.func.attr == "play":
                             line_no = subnode.lineno
                             try:
-                                # ast.unparse is available in Python 3.9+
                                 args_str = ", ".join(
                                     ast.unparse(arg) for arg in subnode.args
                                 )
@@ -166,7 +160,12 @@ def get_scene_animations(code_content: str) -> dict:
                                                 duration = duration_str
                                         except Exception:
                                             pass
-                            duration_label = f"{duration}s" if isinstance(duration, (int, float)) or (isinstance(duration, str) and not duration.endswith("s")) else f"{duration}"
+                            duration_label = (
+                                f"{duration}s"
+                                if isinstance(duration, (int, float))
+                                or (isinstance(duration, str) and not duration.endswith("s"))
+                                else f"{duration}"
+                            )
                             anims.append(
                                 {
                                     "type": "wait",
@@ -176,10 +175,26 @@ def get_scene_animations(code_content: str) -> dict:
                                 }
                             )
             if anims:
-                # Sort animations by line number chronologically
                 anims.sort(key=lambda x: x["line"])
-                scene_anims[scene_name] = anims
-    return scene_anims
+                scene_anims[node.name] = tuple(tuple(d.items()) for d in anims)
+
+    scene_nodes.sort(key=lambda x: x[0])
+    return (tuple(name for _, name in scene_nodes), tuple(scene_anims.items()))
+
+
+def get_scenes_from_code(code_content: str) -> List[str]:
+    """Parses Python code using AST to find all classes representing Scenes."""
+    scenes_tuple, _ = _parse_code_ast(code_content)
+    return list(scenes_tuple)
+
+
+def get_scene_animations(code_content: str) -> dict:
+    """Parses Python code using AST to find self.play and self.wait calls in each Scene's construct method."""
+    _, anims_tuple = _parse_code_ast(code_content)
+    res = {}
+    for scene_name, anim_items in anims_tuple:
+        res[scene_name] = [dict(item) for item in anim_items]
+    return res
 
 
 @app.get("/api/status")
@@ -196,7 +211,7 @@ def read_status():
 @app.get("/api/diagnostics")
 def get_diagnostics():
     """Returns hardware diagnostics and rendering configuration profile."""
-    return generate_profile()
+    return get_cached_profile()
 
 
 @app.get("/api/files")
@@ -206,31 +221,39 @@ def get_files():
     assets = []
     media_files = []
 
-    # 1. Scan for Python scripts
-    for file in os.listdir(WORKSPACE_DIR):
-        if not file.endswith(".py") or file.startswith("_temp_run_"):
-            continue
-        full_path = os.path.join(WORKSPACE_DIR, file)
-        if not os.path.isfile(full_path):
-            continue
-        scripts.append(
-            {"name": file, "size": os.path.getsize(full_path), "type": "script"}
-        )
+    # 1. Scan for Python scripts using fast scandir
+    try:
+        with os.scandir(WORKSPACE_DIR) as entries:
+            for entry in entries:
+                if entry.is_file() and entry.name.endswith(".py") and not entry.name.startswith("_temp_run_"):
+                    try:
+                        scripts.append(
+                            {"name": entry.name, "size": entry.stat().st_size, "type": "script"}
+                        )
+                    except OSError:
+                        pass
+    except OSError:
+        pass
 
     # 2. Scan for asset uploads (SVGs, PNGs, MP3s, etc.)
     if os.path.exists(ASSETS_DIR):
-        for file in os.listdir(ASSETS_DIR):
-            full_path = os.path.join(ASSETS_DIR, file)
-            if not os.path.isfile(full_path):
-                continue
-            assets.append(
-                {
-                    "name": file,
-                    "size": os.path.getsize(full_path),
-                    "type": "asset",
-                    "url": f"/assets/{quote(file)}",
-                }
-            )
+        try:
+            with os.scandir(ASSETS_DIR) as entries:
+                for entry in entries:
+                    if entry.is_file():
+                        try:
+                            assets.append(
+                                {
+                                    "name": entry.name,
+                                    "size": entry.stat().st_size,
+                                    "type": "asset",
+                                    "url": f"/assets/{quote(entry.name)}",
+                                }
+                            )
+                        except OSError:
+                            pass
+        except OSError:
+            pass
 
     # 3. Recursively find rendered videos (MP4, GIF, WebM) in media/videos/
     videos_dir = os.path.join(MEDIA_DIR, "videos")
@@ -242,13 +265,16 @@ def get_files():
             for file in files:
                 if file.endswith((".mp4", ".gif", ".mov", ".webm")):
                     full_path = os.path.join(root, file)
-                    # Get path relative to MEDIA_DIR to form the static URL
+                    try:
+                        file_size = os.path.getsize(full_path)
+                    except OSError:
+                        file_size = 0
                     rel_path = os.path.relpath(full_path, MEDIA_DIR).replace("\\", "/")
                     encoded_rel = "/".join(quote(part) for part in rel_path.split("/"))
                     media_files.append(
                         {
                             "name": file,
-                            "size": os.path.getsize(full_path),
+                            "size": file_size,
                             "type": "video",
                             "url": f"/media/{encoded_rel}",
                         }

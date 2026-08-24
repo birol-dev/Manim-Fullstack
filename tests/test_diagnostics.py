@@ -21,11 +21,19 @@ def test_get_cpu_info_returns_valid_dict():
     assert info["logical_threads"] >= 1
 
 
+def test_get_cpu_info_windows_registry_success():
+    with patch("platform.system", return_value="Windows"):
+        with patch("diagnostics._get_cpu_from_registry", return_value="AMD Ryzen 9 7950X3D"):
+            info = get_cpu_info()
+            assert info["model"] == "AMD Ryzen 9 7950X3D"
+
+
 def test_get_cpu_info_windows_powershell_success():
     with patch("platform.system", return_value="Windows"):
-        with patch("subprocess.check_output", return_value=b"Intel Core i9-13900K\r\n"):
-            info = get_cpu_info()
-            assert info["model"] == "Intel Core i9-13900K"
+        with patch("diagnostics._get_cpu_from_registry", return_value=None):
+            with patch("subprocess.check_output", return_value=b"Intel Core i9-13900K\r\n"):
+                info = get_cpu_info()
+                assert info["model"] == "Intel Core i9-13900K"
 
 
 def test_get_cpu_info_windows_wmic_fallback():
@@ -37,18 +45,20 @@ def test_get_cpu_info_windows_wmic_fallback():
         raise RuntimeError("Unknown cmd")
 
     with patch("platform.system", return_value="Windows"):
-        with patch("os.path.exists", return_value=True):
-            with patch("subprocess.check_output", side_effect=mock_check_output):
-                info = get_cpu_info()
-                assert info["model"] == "AMD Ryzen 9 5950X"
+        with patch("diagnostics._get_cpu_from_registry", return_value=None):
+            with patch("os.path.exists", return_value=True):
+                with patch("subprocess.check_output", side_effect=mock_check_output):
+                    info = get_cpu_info()
+                    assert info["model"] == "AMD Ryzen 9 5950X"
 
 
 def test_get_cpu_info_windows_all_fail():
     with patch("platform.system", return_value="Windows"):
-        with patch("subprocess.check_output", side_effect=Exception("Failed")):
-            with patch("os.path.exists", return_value=False):
-                info = get_cpu_info()
-                assert info["model"] == "Unknown Processor"
+        with patch("diagnostics._get_cpu_from_registry", return_value=None):
+            with patch("subprocess.check_output", side_effect=Exception("Failed")):
+                with patch("os.path.exists", return_value=False):
+                    info = get_cpu_info()
+                    assert info["model"] == "Unknown Processor"
 
 
 def test_get_cpu_info_darwin_sysctl():

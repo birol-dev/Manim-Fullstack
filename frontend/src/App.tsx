@@ -491,11 +491,47 @@ export default function App() {
     setCompareDuration(Math.max(durA, durB) || 10);
   };
 
+  const MAX_LOG_LINES = 1000;
+  const logBatchRef = useRef<LogLine[]>([]);
+  const logFlushTimeoutRef = useRef<number | null>(null);
+
+  const flushLogs = useCallback(() => {
+    if (logBatchRef.current.length === 0) return;
+    const batch = logBatchRef.current;
+    logBatchRef.current = [];
+    logFlushTimeoutRef.current = null;
+    setLogs((prev) => {
+      const next = [...prev, ...batch];
+      return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (logFlushTimeoutRef.current !== null) {
+        cancelAnimationFrame(logFlushTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const addLog = useCallback(
     (type: LogLine["type"], msg: string, stream?: string) => {
-      setLogs((prev) => [...prev, { type, message: msg, stream }]);
+      logBatchRef.current.push({ type, message: msg, stream });
+      if (type === "error" || type === "success" || type === "warning" || type === "info") {
+        if (logFlushTimeoutRef.current !== null) {
+          cancelAnimationFrame(logFlushTimeoutRef.current);
+          logFlushTimeoutRef.current = null;
+        }
+        flushLogs();
+      } else {
+        if (logFlushTimeoutRef.current === null) {
+          logFlushTimeoutRef.current = requestAnimationFrame(() => {
+            flushLogs();
+          });
+        }
+      }
     },
-    [],
+    [flushLogs],
   );
 
   const updateVideoUrl = useCallback((url: string) => {

@@ -5,6 +5,18 @@ import signal
 import subprocess
 import platform
 
+# Pre-compiled regular expressions for stream parsing
+PROGRESS_PATTERN = re.compile(r"\[\s*(\d+)%\]|(\d+)%\s*(?:\||\d+/\d+)")
+FILE_PATTERN = re.compile(
+    r"File ready at(?:\s+|:\s+)"
+    r"(?:\x1b\[[0-9;]*m)?"
+    r"['\"]?"
+    r"([^\x1b'\"\r\n\t]+)"
+    r"['\"]?"
+    r"(?:\x1b\[[0-9;]*m)?"
+)
+LATEX_PATTERN = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
+
 class ManimExecutor:
     def __init__(self, workspace_dir: str):
         self.workspace_dir = workspace_dir
@@ -134,11 +146,6 @@ class ManimExecutor:
                 if not self._last_file_ready:
                     latest = self._find_latest_render(script_name, scene_name)
                     if latest:
-                        # Wait one second so the file's mtime is reliably later than
-                        # any partial_movie_files artifacts.
-                        await asyncio.sleep(1.0)
-                        # Re-scan after the small delay to avoid picking up partial files.
-                        latest = self._find_latest_render(script_name, scene_name) or latest
                         rel_path = self._to_media_rel_path(latest)
                         filename = os.path.basename(latest)
                         self._last_file_ready = (rel_path, filename, latest)
@@ -195,21 +202,6 @@ class ManimExecutor:
 
     async def _read_stream(self, stream, stream_name, log_callback):
         """Asynchronously reads a stream line-by-line and extracts progress/errors."""
-        # Regular expressions to parse progress and output files
-        # Matches typical progress: "[ 50%] 30/60", "50%|████", "50% 30/60"
-        progress_pattern = re.compile(r"\[\s*(\d+)%\]|(\d+)%\s*(?:\||\d+/\d+)")
-        # Video file pattern: matches "File ready at 'path'", "File ready at: path", "File ready at path", and handles ANSI color codes
-        file_pattern = re.compile(
-            r"File ready at(?:\s+|:\s+)"
-            r"(?:\x1b\[[0-9;]*m)?"
-            r"['\"]?"
-            r"([^\x1b'\"\r\n\t]+)"
-            r"['\"]?"
-            r"(?:\x1b\[[0-9;]*m)?"
-        )
-        # LaTeX errors: "LaTeX compilation error" or "xelatex is not installed"
-        latex_pattern = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
-
         while True:
             line_bytes = await stream.readline()
             if not line_bytes:
@@ -229,7 +221,7 @@ class ManimExecutor:
             await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
 
             # Check for progress
-            progress_matches = progress_pattern.findall(clean_line)
+            progress_matches = PROGRESS_PATTERN.findall(clean_line)
             if progress_matches:
                 # Group matches from regex alternation: find the first non-empty group
                 last_match = progress_matches[-1]
@@ -239,7 +231,7 @@ class ManimExecutor:
                     await log_callback({"type": "progress", "percent": percent, "line": clean_line})
 
             # Check for file path (output video)
-            file_match = file_pattern.search(clean_line)
+            file_match = FILE_PATTERN.search(clean_line)
             if file_match:
                 video_path = file_match.group(1)
                 if video_path:
@@ -261,7 +253,7 @@ class ManimExecutor:
                         self._last_file_ready = (media_rel_path, filename, abs_video_path)
 
             # Check for LaTeX specific errors to give user helpful hints
-            if latex_pattern.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
+            if LATEX_PATTERN.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
                 await log_callback({
                     "type": "latex_error_warning",
                     "message": "It looks like LaTeX rendering failed. If LaTeX is not installed or dvisvgm is missing, please replace MathTex elements with standard Text, or download MiKTeX/TeX Live."
