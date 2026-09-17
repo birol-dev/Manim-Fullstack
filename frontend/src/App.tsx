@@ -436,6 +436,7 @@ export default function App() {
     null,
   );
   const startRenderRef = useRef<(() => void) | null>(null);
+  const downloadOnlyModeRef = useRef(downloadOnlyMode);
   const hasAutoCheckedRef = useRef<boolean>(false);
   const shouldCancelRenameRef = useRef<boolean>(false);
   const isRenamingInProgressRef = useRef<boolean>(false);
@@ -446,6 +447,10 @@ export default function App() {
   useEffect(() => {
     activeFileRef.current = activeFile;
   }, [activeFile]);
+
+  useEffect(() => {
+    downloadOnlyModeRef.current = downloadOnlyMode;
+  }, [downloadOnlyMode]);
 
   // Sync Comparer state and callbacks
   const videoARef = useRef<HTMLVideoElement | null>(null);
@@ -736,7 +741,7 @@ export default function App() {
             body: JSON.stringify({ filename: activeFile, code }),
           });
           const data = await res.json();
-          if (data.success) {
+          if (res.ok && data.success) {
             const parsedScenes = (data.scenes || []) as string[];
             setScenes(parsedScenes);
             setAnimations(data.animations || {});
@@ -754,6 +759,13 @@ export default function App() {
             }
             fetchFiles();
             return parsedScenes;
+          }
+          if (!silent) {
+            addLog(
+              "error",
+              (typeof data.detail === "string" && data.detail) ||
+                "Error saving file to workspace.",
+            );
           }
           return null;
         } catch {
@@ -1029,7 +1041,7 @@ export default function App() {
           } else if (data.type === "file_ready") {
             addLog("success", `Video ready! File saved to: ${data.filename}`);
             if (data.rel_path) {
-              if (downloadOnlyMode) {
+              if (downloadOnlyModeRef.current) {
                 const downloadUrl = backendFileUrl(data.rel_path);
                 fetch(downloadUrl)
                   .then((res) => {
@@ -1093,7 +1105,7 @@ export default function App() {
         console.error("WS error connecting.");
       }
     },
-    [fetchFiles, addLog, downloadRenderedVideo, downloadOnlyMode, updateVideoUrl],
+    [fetchFiles, addLog, downloadRenderedVideo, updateVideoUrl],
   );
 
   const startRender = useCallback(async () => {
@@ -1101,11 +1113,20 @@ export default function App() {
     let effectiveScene = selectedScene;
     if (storageLocation === "backend" && autoSaveOnRender) {
       const savedScenes = await handleSave(true);
-      if (savedScenes && savedScenes.length > 0) {
+      if (savedScenes === null) {
+        addLog(
+          "error",
+          "Save failed before render; aborting so the editor and disk stay in sync.",
+        );
+        return;
+      }
+      if (savedScenes.length > 0) {
         if (!savedScenes.includes(effectiveScene)) {
           effectiveScene = savedScenes[0];
           setSelectedScene(effectiveScene);
         }
+      } else {
+        effectiveScene = "";
       }
     } else if (storageLocation === "browser") {
       if (scenes.length > 0 && !scenes.includes(effectiveScene)) {
@@ -1169,14 +1190,18 @@ export default function App() {
         method: "POST",
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         addLog("success", data.message);
         addLog(
           "info",
           "The installation runs silently in your user profile directory (no UAC prompt required).",
         );
       } else {
-        addLog("error", "LaTeX setup call returned failure state.");
+        addLog(
+          "error",
+          (typeof data.detail === "string" && data.detail) ||
+            "LaTeX setup call returned failure state.",
+        );
         setIsInstallingLatex(false);
       }
     } catch {
@@ -1197,14 +1222,18 @@ export default function App() {
         method: "POST",
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         addLog("success", data.message);
         addLog(
           "info",
           "The installation runs silently in your user profile directory (no UAC prompt required).",
         );
       } else {
-        addLog("error", "FFmpeg setup call returned failure state.");
+        addLog(
+          "error",
+          (typeof data.detail === "string" && data.detail) ||
+            "FFmpeg setup call returned failure state.",
+        );
         setIsInstallingFFmpeg(false);
       }
     } catch {
@@ -1225,10 +1254,14 @@ export default function App() {
         method: "POST",
       });
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         addLog("success", data.message);
       } else {
-        addLog("error", "Manim CE setup call returned failure state.");
+        addLog(
+          "error",
+          (typeof data.detail === "string" && data.detail) ||
+            "Manim CE setup call returned failure state.",
+        );
         setIsInstallingManim(false);
       }
     } catch {
