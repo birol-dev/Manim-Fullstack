@@ -275,3 +275,31 @@ async def test_execute_cancellation_during_run(tmp_path):
             assert res["success"] is False
             assert res["status"] == "error"
             mock_cancel.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_times_out(tmp_path):
+    """Hung manim stdout should not block forever when render_timeout is set."""
+    executor = ManimExecutor(str(tmp_path), render_timeout=0.05)
+
+    mock_process = MagicMock()
+    mock_process.pid = 9090
+    mock_process.returncode = None
+    # Never EOF — simulates a hung process
+    mock_process.stdout = asyncio.StreamReader()
+    mock_process.stderr = asyncio.StreamReader()
+    mock_process.wait = AsyncMock(return_value=0)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+        with patch.object(executor, "cancel", new_callable=AsyncMock) as mock_cancel:
+            res = await executor.execute(
+                manim_path="/usr/bin/manim",
+                script_name="script.py",
+                scene_name="Scene",
+                quality="l",
+                use_opengl=False,
+                log_callback=AsyncMock(),
+            )
+            assert res["success"] is False
+            assert res["status"] == "timeout"
+            mock_cancel.assert_called()
