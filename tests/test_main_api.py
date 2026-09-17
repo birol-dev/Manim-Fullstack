@@ -262,12 +262,23 @@ def test_download_temp_endpoint(client, tmp_path):
     temp_clip = temp_dir / "clip.mp4"
     temp_clip.write_text("videocontent", encoding="utf-8")
 
+    permanent_dir = media_dir / "videos" / "scene_a"
+    permanent_dir.mkdir(parents=True, exist_ok=True)
+    permanent_clip = permanent_dir / "render.mp4"
+    permanent_clip.write_text("keepme", encoding="utf-8")
+
     with patch.object(main, "MEDIA_DIR", str(media_dir)):
         res = client.get(f"/api/download-temp?path=_temp_run_12345/clip.mp4")
         assert res.status_code == 200
         assert res.text == "videocontent"
 
-        res_404 = client.get("/api/download-temp?path=nonexistent.mp4")
+        # Permanent media must not be served (or deleted) via download-temp
+        res_perm = client.get("/api/download-temp?path=videos/scene_a/render.mp4")
+        assert res_perm.status_code == 400
+        assert permanent_clip.exists()
+        assert permanent_clip.read_text(encoding="utf-8") == "keepme"
+
+        res_404 = client.get("/api/download-temp?path=_temp_run_missing/clip.mp4")
         assert res_404.status_code == 404
 
         res_unsafe = client.get("/api/download-temp?path=../secret.mp4")
@@ -275,26 +286,33 @@ def test_download_temp_endpoint(client, tmp_path):
 
 
 def test_install_endpoints_success_and_failures(client):
-    with patch("shutil.which", return_value="winget.exe"):
-        with patch("subprocess.Popen") as mock_popen:
-            mock_popen.return_value = MagicMock()
+    with patch.dict("os.environ", {"RUNNING_IN_DOCKER": "", "RENDER": "", "MANIM_ALLOW_INSTALLS": "1"}, clear=False):
+        # Clear docker/cloud markers for the success path
+        with patch.object(main, "_installers_allowed", return_value=None):
+            with patch("shutil.which", return_value="winget.exe"):
+                with patch("subprocess.Popen") as mock_popen:
+                    mock_popen.return_value = MagicMock()
 
-            res_latex = client.post("/api/install-latex")
-            assert res_latex.status_code == 200
-            assert res_latex.json()["success"] is True
+                    res_latex = client.post("/api/install-latex")
+                    assert res_latex.status_code == 200
+                    assert res_latex.json()["success"] is True
 
-            res_ffmpeg = client.post("/api/install-ffmpeg")
-            assert res_ffmpeg.status_code == 200
-            assert res_ffmpeg.json()["success"] is True
+                    res_ffmpeg = client.post("/api/install-ffmpeg")
+                    assert res_ffmpeg.status_code == 200
+                    assert res_ffmpeg.json()["success"] is True
 
-            res_manim = client.post("/api/install-manim")
-            assert res_manim.status_code == 200
-            assert res_manim.json()["success"] is True
+                    res_manim = client.post("/api/install-manim")
+                    assert res_manim.status_code == 200
+                    assert res_manim.json()["success"] is True
 
-    with patch("shutil.which", return_value=None):
-        with patch("os.path.exists", return_value=False):
-            res_no_winget = client.post("/api/install-latex")
-            assert res_no_winget.status_code == 400
+            with patch("shutil.which", return_value=None):
+                with patch("os.path.exists", return_value=False):
+                    res_no_winget = client.post("/api/install-latex")
+                    assert res_no_winget.status_code == 400
+
+    with patch.object(main, "_installers_allowed", return_value="disabled in docker"):
+        res_blocked = client.post("/api/install-manim")
+        assert res_blocked.status_code == 403
 
 
 MOCK_BINARIES = {
@@ -304,6 +322,14 @@ MOCK_BINARIES = {
     "dvisvgm": "/usr/local/bin/dvisvgm",
     "latex_available": True,
 }
+
+
+def _patch_conn_executor(mock_execute):
+    """Patch ManimExecutor so each websocket gets a controllable instance."""
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=mock_execute)
+    instance.cancel = AsyncMock()
+    return patch.object(main, "ManimExecutor", return_value=instance)
 
 
 def test_websocket_render_lifecycle_success(client, tmp_path):
@@ -325,7 +351,7 @@ def test_websocket_render_lifecycle_success(client, tmp_path):
                 return {"success": True, "status": "success"}
 
             with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
-                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                with _patch_conn_executor(mock_execute):
                     with client.websocket_connect("/api/render") as ws:
                         ws.send_json({
                             "type": "start",
@@ -368,7 +394,7 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
                 return {"success": True, "status": "success"}
 
             with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
-                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                with _patch_conn_executor(mock_execute):
                     with client.websocket_connect("/api/render") as ws:
                         ws.send_json({
                             "type": "start",
@@ -436,7 +462,7 @@ def test_websocket_render_cancellation(client, tmp_path):
                 return {"success": False, "status": "cancelled"}
 
             with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
-                with patch.object(main.executor, "execute", side_effect=mock_execute):
+                with _patch_conn_executor(mock_execute):
                     with client.websocket_connect("/api/render") as ws:
                         ws.send_json({
                             "type": "start",
@@ -459,3 +485,24 @@ def test_websocket_render_cancellation(client, tmp_path):
                         assert received[-1]["type"] == "result"
                         assert received[-1]["success"] is False
                         assert received[-1]["status"] == "cancelled"
+
+
+def test_is_temp_media_relpath_helper():
+    assert main._is_temp_media_relpath("_temp_run_abc/clip.mp4") is True
+    assert main._is_temp_media_relpath("videos/_temp_run_abc/1080p60/Scene.mp4") is True
+    assert main._is_temp_media_relpath("videos/scene_a/render.mp4") is False
+    assert main._is_temp_media_relpath("media/_temp_run_x/a.mp4") is True
+
+
+def test_installers_allowed_cloud_and_env(monkeypatch):
+    monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("MANIM_ALLOW_INSTALLS", raising=False)
+    assert main._installers_allowed() is None
+
+    monkeypatch.setenv("RUNNING_IN_DOCKER", "true")
+    assert main._installers_allowed() is not None
+
+    monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
+    monkeypatch.setenv("MANIM_ALLOW_INSTALLS", "false")
+    assert main._installers_allowed() is not None
