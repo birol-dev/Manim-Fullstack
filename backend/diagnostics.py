@@ -4,7 +4,6 @@ import platform
 import subprocess
 import sys
 import time
-import functools
 import psutil
 
 # Cached hardware / binary detection
