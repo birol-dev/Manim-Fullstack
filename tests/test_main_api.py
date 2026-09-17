@@ -80,6 +80,38 @@ def test_get_scenes_handles_syntax_errors_gracefully():
     assert get_scene_animations(malformed_code) == {}
 
 
+
+def test_get_scenes_ignores_non_scene_base_classes():
+    """Helper / model classes with bases must not pollute the scene dropdown."""
+    code = """from manim import *
+
+class Config(BaseModel):
+    pass
+
+class Helper(dict):
+    pass
+
+class Boom(Exception):
+    pass
+
+class MyScene(Scene):
+    def construct(self):
+        pass
+
+class CameraDemo(MovingCameraScene):
+    def construct(self):
+        pass
+
+class NameOnlyScene:
+    pass
+"""
+    scenes = get_scenes_from_code(code)
+    assert scenes == ["MyScene", "CameraDemo", "NameOnlyScene"]
+    assert "Config" not in scenes
+    assert "Helper" not in scenes
+    assert "Boom" not in scenes
+
+
 def test_get_scene_animations_unparse_fallbacks():
     code = """from manim import *
 class RobustScene(Scene):

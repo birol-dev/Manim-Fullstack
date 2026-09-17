@@ -366,6 +366,46 @@ describe("Frontend App Component", () => {
     expect(ws.sentMessages).toContain(JSON.stringify({ type: "cancel" }));
   });
 
+  it("aborts render when auto-save before render fails", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockImplementation((url: RequestInfo | URL | string) => {
+      const urlStr =
+        typeof url === "string" ? url : "url" in url ? (url as Request).url : String(url);
+      if (urlStr.includes("/api/save")) {
+        return Promise.resolve({
+          ok: false,
+          json: () => Promise.resolve({ detail: "disk full" }),
+        });
+      }
+      return defaultFetchHandler(url);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("SquareToCircle")).toBeDefined());
+    await waitFor(() => {
+      expect(MockWebSocket.instances.length).toBeGreaterThan(0);
+    });
+
+    // Mark socket open so Render is enabled
+    const ws = MockWebSocket.instances[0];
+    act(() => {
+      ws.readyState = 1;
+      if (ws.onopen) ws.onopen();
+    });
+
+    const renderBtn = await screen.findByRole("button", { name: /^Render$/i });
+    await user.click(renderBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Save failed before render/i)).toBeDefined();
+    });
+
+    // Should not have kicked off a render request after the failed save
+    expect(ws.sentMessages.some((m) => m.includes('"type":"render"') || m.includes('"scene"'))).toBe(
+      false,
+    );
+  });
+
   it("handles asset upload validation, errors, and clipboard actions", async () => {
     const user = userEvent.setup();
     render(<App />);
