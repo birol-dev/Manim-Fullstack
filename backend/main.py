@@ -56,6 +56,10 @@ ASSETS_DIR = os.path.join(WORKSPACE_DIR, "assets")
 for path in [WORKSPACE_DIR, MEDIA_DIR, ASSETS_DIR]:
     os.makedirs(path, exist_ok=True)
 
+# Max size for ad-hoc render code sent over the WebSocket
+MAX_CODE_BYTES = int(os.environ.get("MANIM_MAX_CODE_BYTES", str(2 * 1024 * 1024)))
+ALLOWED_QUALITIES = frozenset({"l", "m", "h", "k"})
+
 # Generate config profile and write manim.cfg to workspace
 sys_profile = generate_profile()
 write_manim_config_file(WORKSPACE_DIR, sys_profile)
@@ -378,12 +382,22 @@ def parse_code(req: ParseRequest):
 
 @app.get("/api/download-temp")
 def download_temp(path: str, background_tasks: BackgroundTasks):
-    """Serves a rendered temporary file and deletes it once the download completes."""
+    """Serves a rendered temporary file and deletes it once the download completes.
+
+    Only paths under a `_temp_run_*` directory inside MEDIA_DIR are allowed. This
+    prevents clients from deleting permanent renders via the download-temp API.
+    """
     import mimetypes
 
     clean_path = path.strip().replace("\\", "/").lstrip("/")
     if clean_path.startswith("media/"):
         clean_path = clean_path[len("media/"):]
+
+    if not _is_temp_media_relpath(clean_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Only temporary render outputs (_temp_run_*) can be downloaded via this endpoint.",
+        )
 
     try:
         abs_path = safe_join(MEDIA_DIR, clean_path)
@@ -398,9 +412,7 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
 
     def remove_file():
         try:
-            if os.path.exists(abs_path):
-                os.remove(abs_path)
-            # If parent or grandparent is a temporary render directory, remove the whole tree
+            # Prefer removing the whole temp tree; never touch non-temp parents.
             parent = os.path.dirname(abs_path)
             grandparent = os.path.dirname(parent)
             if os.path.basename(grandparent).startswith("_temp_run_") and os.path.isdir(grandparent):
@@ -408,8 +420,8 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
             elif os.path.basename(parent).startswith("_temp_run_") and os.path.isdir(parent):
                 shutil.rmtree(parent, ignore_errors=True)
             else:
-                if os.path.exists(parent) and not os.listdir(parent):
-                    os.rmdir(parent)
+                if os.path.exists(abs_path):
+                    os.remove(abs_path)
         except Exception:
             pass
 
@@ -496,6 +508,21 @@ def rename_file(req: RenameRequest):
 
 
 
+def _is_temp_media_relpath(rel_path: str) -> bool:
+    """Return True if *rel_path* (relative to MEDIA_DIR) is under a _temp_run_* dir."""
+    parts = [p for p in rel_path.replace("\\", "/").split("/") if p and p != "."]
+    return any(part.startswith("_temp_run_") for part in parts)
+
+
+def _installers_allowed() -> Optional[str]:
+    """Return an error message if package-install endpoints must be refused, else None."""
+    if os.environ.get("RUNNING_IN_DOCKER") == "true" or os.environ.get("RENDER") == "true":
+        return "Package installation endpoints are disabled in container/cloud deployments."
+    if os.environ.get("MANIM_ALLOW_INSTALLS", "").lower() in ("0", "false", "no"):
+        return "Package installation endpoints are disabled by MANIM_ALLOW_INSTALLS."
+    return None
+
+
 ALLOWED_ASSET_EXTENSIONS = {
     ".svg",
     ".png",
@@ -567,6 +594,9 @@ async def upload_asset(file: UploadFile = File(...)):
 @app.post("/api/install-latex")
 def install_latex():
     """Triggers the silent installation of MiKTeX via winget in a separate process."""
+    blocked = _installers_allowed()
+    if blocked:
+        raise HTTPException(status_code=403, detail=blocked)
     try:
         # Check if winget is available
         winget_path = shutil.which("winget")
@@ -621,6 +651,9 @@ def install_latex():
 @app.post("/api/install-ffmpeg")
 def install_ffmpeg():
     """Triggers the silent installation of FFmpeg via winget in a separate process."""
+    blocked = _installers_allowed()
+    if blocked:
+        raise HTTPException(status_code=403, detail=blocked)
     try:
         # Check if winget is available
         winget_path = shutil.which("winget")
@@ -675,6 +708,9 @@ def install_ffmpeg():
 @app.post("/api/install-manim")
 def install_manim():
     """Triggers the pip installation of manim CE in the current python environment in a separate process."""
+    blocked = _installers_allowed()
+    if blocked:
+        raise HTTPException(status_code=403, detail=blocked)
     try:
         import subprocess
         import sys
@@ -712,9 +748,25 @@ def install_manim():
 
 @app.websocket("/api/render")
 async def websocket_render(websocket: WebSocket):
-    """Handles real-time rendering processes over WebSockets."""
+    """Handles real-time rendering processes over WebSockets.
+
+    Each connection gets its own ManimExecutor so concurrent clients cannot
+    cancel or interleave each other's subprocesses.
+    """
     await websocket.accept()
     current_render_task: Optional[asyncio.Task] = None
+    conn_executor = ManimExecutor(WORKSPACE_DIR)
+
+    async def _cleanup_render_task():
+        nonlocal current_render_task
+        await conn_executor.cancel()
+        if current_render_task and not current_render_task.done():
+            current_render_task.cancel()
+            try:
+                await current_render_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        current_render_task = None
 
     async def run_render(
         manim_path: str,
@@ -727,26 +779,29 @@ async def websocket_render(websocket: WebSocket):
     ):
         async def log_callback(log_event):
             try:
-                if download_only and log_event.get("type") == "file_ready":
-                    orig_rel_path = log_event.get("rel_path", "")
+                outbound = dict(log_event)
+                # Never leak host absolute paths to the browser client.
+                outbound.pop("abs_path", None)
+
+                if download_only and outbound.get("type") == "file_ready":
+                    orig_rel_path = outbound.get("rel_path", "")
                     if orig_rel_path.startswith("media/"):
                         path_param = orig_rel_path[len("media/"):]
                     else:
                         path_param = orig_rel_path
 
-                    log_event = dict(log_event)
-                    log_event["rel_path"] = (
+                    outbound["rel_path"] = (
                         f"api/download-temp?path={quote(path_param)}"
                     )
-                    log_event["is_temp_download"] = True
+                    outbound["is_temp_download"] = True
 
-                await websocket.send_json(log_event)
+                await websocket.send_json(outbound)
             except (WebSocketDisconnect, RuntimeError):
                 # Socket dropped or closed: signal cancel immediately
-                await executor.cancel()
+                await conn_executor.cancel()
 
         try:
-            result = await executor.execute(
+            result = await conn_executor.execute(
                 manim_path=manim_path,
                 script_name=actual_script_name,
                 scene_name=scene_name,
@@ -763,7 +818,8 @@ async def websocket_render(websocket: WebSocket):
                 }
             )
         except asyncio.CancelledError:
-            await executor.cancel()
+            await conn_executor.cancel()
+            raise
         except Exception as e:
             try:
                 await websocket.send_json(
@@ -801,12 +857,7 @@ async def websocket_render(websocket: WebSocket):
             if msg_type == "start":
                 # If a previous render is still running on this connection, cancel it first
                 if current_render_task and not current_render_task.done():
-                    await executor.cancel()
-                    current_render_task.cancel()
-                    try:
-                        await current_render_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
+                    await _cleanup_render_task()
 
                 filename = message.get("filename")
                 scene_name = message.get("scene")
@@ -833,6 +884,15 @@ async def websocket_render(websocket: WebSocket):
                     )
                     continue
 
+                if not isinstance(quality, str) or quality not in ALLOWED_QUALITIES:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Quality must be one of: l, m, h, k.",
+                        }
+                    )
+                    continue
+
                 try:
                     safe_basename(filename, required_suffix=".py")
                 except UnsafePathError:
@@ -843,6 +903,24 @@ async def websocket_render(websocket: WebSocket):
                         }
                     )
                     continue
+
+                if code_content is not None:
+                    if not isinstance(code_content, str):
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": "Code payload must be a string.",
+                            }
+                        )
+                        continue
+                    if len(code_content.encode("utf-8")) > MAX_CODE_BYTES:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
+                            }
+                        )
+                        continue
 
                 binaries = get_binary_paths()
                 manim_path = binaries["manim"]
@@ -859,8 +937,44 @@ async def websocket_render(websocket: WebSocket):
                 temp_filepath = None
                 actual_script_name = filename
 
-                if code_content is not None:
+                # download_only renders must land under media/.../_temp_run_* so
+                # /api/download-temp can serve+delete them without touching
+                # permanent outputs. Always isolate via a temp script copy.
+                if download_only or code_content is not None:
                     import uuid
+
+                    if code_content is None:
+                        try:
+                            src_name = safe_basename(filename, required_suffix=".py")
+                            src_path = safe_join(WORKSPACE_DIR, src_name)
+                        except UnsafePathError:
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "message": "Invalid script filename.",
+                                }
+                            )
+                            continue
+                        if not os.path.isfile(src_path):
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "message": "Python script not found.",
+                                }
+                            )
+                            continue
+                        try:
+                            with open(src_path, "r", encoding="utf-8", errors="replace") as f:
+                                code_content = f.read()
+                        except Exception as e:
+                            await websocket.send_json(
+                                {
+                                    "type": "error",
+                                    "message": f"Failed to read script: {e}",
+                                }
+                            )
+                            continue
+
                     temp_id = uuid.uuid4().hex[:8]
                     actual_script_name = f"_temp_run_{temp_id}.py"
                     temp_filepath = os.path.join(WORKSPACE_DIR, actual_script_name)
@@ -880,7 +994,7 @@ async def websocket_render(websocket: WebSocket):
                 )
 
             elif msg_type == "cancel":
-                await executor.cancel()
+                await conn_executor.cancel()
                 if current_render_task and not current_render_task.done():
                     current_render_task.cancel()
                 await websocket.send_json(
@@ -891,13 +1005,9 @@ async def websocket_render(websocket: WebSocket):
                 )
 
     except WebSocketDisconnect:
-        await executor.cancel()
-        if current_render_task and not current_render_task.done():
-            current_render_task.cancel()
+        await _cleanup_render_task()
     except Exception as e:
-        await executor.cancel()
-        if current_render_task and not current_render_task.done():
-            current_render_task.cancel()
+        await _cleanup_render_task()
         try:
             await websocket.send_json(
                 {"type": "error", "message": f"Server WebSocket error: {str(e)}"}

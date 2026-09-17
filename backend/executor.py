@@ -17,12 +17,18 @@ FILE_PATTERN = re.compile(
 )
 LATEX_PATTERN = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
 
+# Default render wall-clock timeout (seconds). Override with MANIM_RENDER_TIMEOUT.
+DEFAULT_RENDER_TIMEOUT_SECONDS = float(os.environ.get("MANIM_RENDER_TIMEOUT", "600"))
+
 class ManimExecutor:
-    def __init__(self, workspace_dir: str):
+    def __init__(self, workspace_dir: str, render_timeout=None):
         self.workspace_dir = workspace_dir
         self.current_process = None
         self._cancelled = False
         self._last_file_ready = None  # Track the most recent file_ready callback for fallback
+        self.render_timeout = (
+            DEFAULT_RENDER_TIMEOUT_SECONDS if render_timeout is None else float(render_timeout)
+        )
 
     def _find_latest_render(self, script_name: str, scene_name: str):
         """
@@ -129,8 +135,30 @@ class ManimExecutor:
             stdout_task = asyncio.create_task(self._read_stream(self.current_process.stdout, "stdout", log_callback))
             stderr_task = asyncio.create_task(self._read_stream(self.current_process.stderr, "stderr", log_callback))
 
-            await asyncio.gather(stdout_task, stderr_task)
-            
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(stdout_task, stderr_task),
+                    timeout=self.render_timeout,
+                )
+            except asyncio.TimeoutError:
+                await log_callback({
+                    "type": "error",
+                    "message": f"Rendering timed out after {self.render_timeout:.0f}s.",
+                })
+                await self.cancel()
+                # Drain reader tasks so they do not linger after kill
+                for task in (stdout_task, stderr_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+                if self.current_process is not None:
+                    try:
+                        await asyncio.wait_for(self.current_process.wait(), timeout=5)
+                    except Exception:
+                        pass
+                    self.current_process = None
+                return {"success": False, "status": "timeout", "timeout": self.render_timeout}
+
             # Wait for exit code
             exit_code = await self.current_process.wait()
             self.current_process = None
@@ -199,6 +227,10 @@ class ManimExecutor:
                             self.current_process.kill()
             except Exception:
                 pass
+            finally:
+                # Drop the handle once we have signalled the process so a new
+                # execute() cannot race on a half-dead Process object.
+                self.current_process = None
 
     async def _read_stream(self, stream, stream_name, log_callback):
         """Asynchronously reads a stream line-by-line and extracts progress/errors."""
