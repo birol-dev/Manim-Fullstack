@@ -108,20 +108,34 @@ class FileInfo(BaseModel):
 
 
 
+def _identifier_looks_like_scene(name: str) -> bool:
+    """True if *name* is exactly Scene or ends with Scene (not a mid-string substring)."""
+    return name == "Scene" or name.endswith("Scene")
+
+
 def _base_looks_like_scene(base: ast.AST) -> bool:
     """True if an AST base expression names something Scene-like (Scene, ThreeDScene, ...)."""
     if isinstance(base, ast.Name):
-        return "scene" in base.id.lower()
+        return _identifier_looks_like_scene(base.id)
     if isinstance(base, ast.Attribute):
-        return "scene" in base.attr.lower()
+        return _identifier_looks_like_scene(base.attr)
     return False
 
 
 def _class_looks_like_scene(node: ast.ClassDef) -> bool:
-    """Detect Manim Scene subclasses without treating every subclassed helper as a scene."""
-    if "scene" in node.name.lower():
+    """Detect Manim Scene subclasses without treating every subclassed helper as a scene.
+
+    Prefer Scene-like bases (Scene, ThreeDScene, MovingCameraScene, manim.Scene, ...).
+    If the class declares bases and none look Scene-like, reject it even when the
+    class name contains or ends with ``Scene`` (e.g. ``NotAScene(dict)``).
+    Only fall back to the class name (exactly ``Scene`` or ending with ``Scene`` —
+    never a mid-string substring) when there are no bases.
+    """
+    if any(_base_looks_like_scene(base) for base in node.bases):
         return True
-    return any(_base_looks_like_scene(base) for base in node.bases)
+    if node.bases:
+        return False
+    return _identifier_looks_like_scene(node.name)
 
 
 @lru_cache(maxsize=512)
@@ -408,9 +422,19 @@ class ParseRequest(BaseModel):
     code: str
 
 
+def _ensure_code_within_limit(code: str) -> None:
+    """Reject oversized code payloads with a clear HTTP error (shared with WebSocket path)."""
+    if len(code.encode("utf-8")) > MAX_CODE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
+        )
+
+
 @app.post("/api/parse-code")
 def parse_code(req: ParseRequest):
     """Parses code on the fly to return scenes and animations without writing to disk."""
+    _ensure_code_within_limit(req.code)
     scenes = get_scenes_from_code(req.code)
     animations = get_scene_animations(req.code)
     return {
@@ -472,6 +496,7 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
 @app.post("/api/save")
 def save_file(req: SaveRequest):
     """Saves code to a python script, returning parsed scenes."""
+    _ensure_code_within_limit(req.code)
     filename = req.filename
     if not filename.endswith(".py"):
         filename += ".py"
