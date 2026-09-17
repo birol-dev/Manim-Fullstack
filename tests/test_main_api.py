@@ -82,7 +82,11 @@ def test_get_scenes_handles_syntax_errors_gracefully():
 
 
 def test_get_scenes_ignores_non_scene_base_classes():
-    """Helper / model classes with bases must not pollute the scene dropdown."""
+    """Helper / model classes with bases must not pollute the scene dropdown.
+
+    Prefer Scene-like bases; name fallback is exact ``Scene`` / ``*Scene`` only
+    (no substring-anywhere), and never overrides a non-Scene base list.
+    """
     code = """from manim import *
 
 class Config(BaseModel):
@@ -94,7 +98,17 @@ class Helper(dict):
 class Boom(Exception):
     pass
 
+class NotAScene(dict):
+    pass
+
+class ScenicHelper:
+    pass
+
 class MyScene(Scene):
+    def construct(self):
+        pass
+
+class MyThreeDScene(ThreeDScene):
     def construct(self):
         pass
 
@@ -102,14 +116,20 @@ class CameraDemo(MovingCameraScene):
     def construct(self):
         pass
 
+class AttrScene(manim.Scene):
+    def construct(self):
+        pass
+
 class NameOnlyScene:
     pass
 """
     scenes = get_scenes_from_code(code)
-    assert scenes == ["MyScene", "CameraDemo", "NameOnlyScene"]
+    assert scenes == ["MyScene", "MyThreeDScene", "CameraDemo", "AttrScene", "NameOnlyScene"]
     assert "Config" not in scenes
     assert "Helper" not in scenes
     assert "Boom" not in scenes
+    assert "NotAScene" not in scenes
+    assert "ScenicHelper" not in scenes
 
 
 def test_get_scene_animations_unparse_fallbacks():
@@ -286,6 +306,32 @@ def test_parse_code_endpoint(client):
     assert "LiveScene" in data["scenes"]
     assert len(data["animations"]["LiveScene"]) == 1
 
+
+def test_parse_code_rejects_oversized_payload(client):
+    limit = 64
+    with patch.object(main, "MAX_CODE_BYTES", limit):
+        oversized = "x" * (limit + 1)
+        res = client.post("/api/parse-code", json={"code": oversized})
+        assert res.status_code == 413
+        detail = res.json()["detail"]
+        assert "maximum size" in detail
+        assert str(limit) in detail
+
+
+def test_save_rejects_oversized_payload(client, tmp_path):
+    limit = 64
+    with patch.object(main, "WORKSPACE_DIR", str(tmp_path)), patch.object(
+        main, "MAX_CODE_BYTES", limit
+    ):
+        oversized = "x" * (limit + 1)
+        res = client.post(
+            "/api/save",
+            json={"filename": "huge.py", "code": oversized},
+        )
+        assert res.status_code == 413
+        detail = res.json()["detail"]
+        assert "maximum size" in detail
+        assert not (tmp_path / "huge.py").exists()
 
 
 def test_spa_assets_not_shadowed_by_workspace_uploads(client, tmp_path, monkeypatch):
