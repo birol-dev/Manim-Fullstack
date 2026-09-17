@@ -64,9 +64,33 @@ ALLOWED_QUALITIES = frozenset({"l", "m", "h", "k"})
 sys_profile = generate_profile()
 write_manim_config_file(WORKSPACE_DIR, sys_profile)
 
-# Mount static files to serve media (rendered videos) and assets (uploaded SVGs/audio)
+# Mount static files to serve media (rendered videos).
+# NOTE: Do NOT mount workspace uploads at /assets — that path is also used by the
+# Vite SPA bundles under frontend/dist/assets. User uploads are served by the
+# /assets/{path} route below, which prefers SPA files then falls back to uploads.
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
-app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIR, "assets")
+
+
+@app.get("/assets/{asset_path:path}")
+def serve_asset(asset_path: str):
+    """Serve Vite build assets first, then workspace user uploads."""
+    if os.path.isdir(FRONTEND_ASSETS_DIR):
+        try:
+            spa_file = safe_join(FRONTEND_ASSETS_DIR, asset_path)
+            if os.path.isfile(spa_file):
+                return FileResponse(spa_file)
+        except UnsafePathError:
+            pass
+    try:
+        user_file = safe_join(ASSETS_DIR, asset_path)
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not os.path.isfile(user_file):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return FileResponse(user_file)
 
 # Active executor instance
 executor = ManimExecutor(WORKSPACE_DIR)
@@ -1016,9 +1040,8 @@ async def websocket_render(websocket: WebSocket):
             pass
 
 
-# Serve frontend static assets if they exist (built React SPA)
-FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")
-if os.path.exists(FRONTEND_DIR):
+# Serve frontend SPA (index.html + non-/assets static files). /assets is handled above.
+if os.path.isdir(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 else:
     @app.get("/")

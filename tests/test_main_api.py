@@ -255,6 +255,36 @@ def test_parse_code_endpoint(client):
     assert len(data["animations"]["LiveScene"]) == 1
 
 
+
+def test_spa_assets_not_shadowed_by_workspace_uploads(client, tmp_path, monkeypatch):
+    """Vite bundles under /assets/*.js must win over workspace/assets uploads."""
+    import main as main_mod
+
+    frontend_assets = tmp_path / "frontend" / "dist" / "assets"
+    frontend_assets.mkdir(parents=True)
+    bundle = frontend_assets / "index-testbundle.js"
+    bundle.write_text("console.log('spa')", encoding="utf-8")
+
+    workspace_assets = tmp_path / "workspace" / "assets"
+    workspace_assets.mkdir(parents=True)
+    # Conflicting name would previously be served from workspace (or 404 if empty)
+    (workspace_assets / "other.txt").write_text("upload", encoding="utf-8")
+
+    monkeypatch.setattr(main_mod, "FRONTEND_DIR", str(tmp_path / "frontend" / "dist"))
+    monkeypatch.setattr(main_mod, "FRONTEND_ASSETS_DIR", str(frontend_assets))
+    monkeypatch.setattr(main_mod, "ASSETS_DIR", str(workspace_assets))
+
+    res = client.get("/assets/index-testbundle.js")
+    assert res.status_code == 200
+    assert b"spa" in res.content
+
+    res_upload = client.get("/assets/other.txt")
+    assert res_upload.status_code == 200
+    assert res_upload.content == b"upload"
+
+    assert client.get("/assets/missing-file.js").status_code == 404
+
+
 def test_download_temp_endpoint(client, tmp_path):
     media_dir = tmp_path / "media"
     temp_dir = media_dir / "_temp_run_12345"
