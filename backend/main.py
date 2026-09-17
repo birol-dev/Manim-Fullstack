@@ -16,7 +16,6 @@ from diagnostics import (
     generate_profile,
     get_binary_paths,
     get_cached_profile,
-    get_cached_binary_paths,
     write_manim_config_file,
 )
 from executor import ManimExecutor
@@ -108,6 +107,23 @@ class FileInfo(BaseModel):
     is_media: bool
 
 
+
+def _base_looks_like_scene(base: ast.AST) -> bool:
+    """True if an AST base expression names something Scene-like (Scene, ThreeDScene, ...)."""
+    if isinstance(base, ast.Name):
+        return "scene" in base.id.lower()
+    if isinstance(base, ast.Attribute):
+        return "scene" in base.attr.lower()
+    return False
+
+
+def _class_looks_like_scene(node: ast.ClassDef) -> bool:
+    """Detect Manim Scene subclasses without treating every subclassed helper as a scene."""
+    if "scene" in node.name.lower():
+        return True
+    return any(_base_looks_like_scene(base) for base in node.bases)
+
+
 @lru_cache(maxsize=512)
 def _parse_code_ast(code_content: str) -> tuple:
     """
@@ -124,7 +140,7 @@ def _parse_code_ast(code_content: str) -> tuple:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
-            if node.bases or "scene" in node.name.lower():
+            if _class_looks_like_scene(node):
                 scene_nodes.append((getattr(node, "lineno", 0), node.name))
 
             construct_node = None
