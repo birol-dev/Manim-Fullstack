@@ -551,4 +551,45 @@ describe("Frontend App Component", () => {
 
     expect(screen.getByText(/Loading video file: example.mp4/i)).toBeDefined();
   });
+
+  it("surfaces parse-code 413 after browser localStorage save instead of silent failure", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockImplementation((url: RequestInfo | URL | string, init?: RequestInit) => {
+      const urlStr = typeof url === "string" ? url : "url" in (url as Request) ? (url as Request).url : String(url);
+      if (urlStr.includes("parse-code")) {
+        const body = typeof init?.body === "string" ? init.body : "";
+        // Oversized/failing parse only when saving non-empty custom payloads; keep default happy for loads of defaults
+        if (body.includes('"code":"') && body.length > 80) {
+          return Promise.resolve({
+            ok: false,
+            status: 413,
+            json: () =>
+              Promise.resolve({
+                detail: "Code payload exceeds maximum size (200000 bytes).",
+              }),
+          });
+        }
+      }
+      return defaultFetchHandler(url);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole("tab", { name: /config/i })).toBeDefined());
+    await user.click(screen.getByRole("tab", { name: /config/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Local Browser/i })).toBeDefined());
+    await user.click(screen.getByRole("button", { name: /Local Browser/i }));
+
+    // Switch back to scripts/editor area and save
+    const saveBtn = await screen.findByRole("button", { name: /^Save$/i });
+    await user.click(saveBtn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Scene parse failed after browser save.*maximum size/i),
+      ).toBeDefined();
+    });
+    expect(screen.getByText(/saved to browser local storage/i)).toBeDefined();
+  });
+
+
 });
