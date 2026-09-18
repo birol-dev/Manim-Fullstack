@@ -661,9 +661,30 @@ export default function App() {
           } else {
             setSelectedScene("");
           }
+        } else {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const errBody = await res.json();
+            if (typeof errBody?.detail === "string" && errBody.detail) {
+              detail = errBody.detail;
+            }
+          } catch {
+            /* ignore non-JSON error bodies */
+          }
+          addLog(
+            "error",
+            `Could not parse browser script "${name}" for scenes (${detail}).`,
+          );
+          setScenes([]);
+          setAnimations({});
+          setSelectedScene("");
         }
       } catch {
         console.error("Failed to parse local code from backend.");
+        addLog(
+          "error",
+          `Could not parse browser script "${name}" (network/backend error).`,
+        );
       }
     } else {
       try {
@@ -687,7 +708,7 @@ export default function App() {
         console.error("Failed to load file contents.");
       }
     }
-  }, [storageLocation]);
+  }, [storageLocation, addLog]);
 
   const handleSave = useCallback(
     async (silent = false): Promise<string[] | null> => {
@@ -726,7 +747,29 @@ export default function App() {
             fetchFiles();
             return parsedScenes;
           }
-          return null;
+
+          // localStorage write already succeeded; surface parse failure (e.g. 413) instead of silent null.
+          let detail = `HTTP ${res.status}`;
+          try {
+            const errBody = await res.json();
+            if (typeof errBody?.detail === "string" && errBody.detail) {
+              detail = errBody.detail;
+            }
+          } catch {
+            /* ignore non-JSON error bodies */
+          }
+          if (!silent) {
+            addLog(
+              "info",
+              `File "${activeFile}" saved to browser local storage.`,
+            );
+          }
+          addLog(
+            "error",
+            `Scene parse failed after browser save (${detail}). File is stored locally; fix size/content to refresh scenes.`,
+          );
+          fetchFiles();
+          return [];
         } catch {
           addLog("error", "Error saving file to browser local storage.");
           return null;
