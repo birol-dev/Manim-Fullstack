@@ -49,9 +49,9 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
 
   return (
-    <section aria-label="Editor" className="flex h-full min-h-0 flex-col bg-surface">
+    <section aria-label="Editor" className="@container flex h-full min-h-0 flex-col bg-surface">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line pl-1 pr-2">
-        <div className="flex h-full min-w-0 items-center">
+        <div className="flex h-full min-w-0 flex-1 items-center overflow-hidden">
           {activeFile && (
             <div className="relative flex h-full min-w-0 items-center gap-2 px-2.5 text-xs text-fg after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-surface">
               <FileCode2 className="size-3.5 shrink-0 text-accent" />
@@ -66,7 +66,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Tooltip>
         </div>
 
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <Tooltip content={props.autoRender ? "Auto-render on (renders when you pause typing)" : "Auto-render when you pause typing"}>
             <Button
               variant="ghost"
@@ -81,7 +81,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Tooltip>
 
           <Select value={selectedScene} onValueChange={props.onSceneChange} disabled={scenes.length === 0}>
-            <SelectTrigger aria-label="Scene" className="w-40">
+            <SelectTrigger aria-label="Scene" className="w-40 @max-[600px]:w-28">
               <SelectValue placeholder={activeFile ? "No scenes found" : "Scene"} />
             </SelectTrigger>
             <SelectContent>
@@ -110,15 +110,22 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           {rendering ? (
-            <Button variant="secondary" size="sm" onClick={props.onCancel} className="w-[92px]">
+            <Button variant="secondary" size="sm" onClick={props.onCancel} className="w-[92px] @max-[520px]:w-auto" aria-label="Cancel">
               <Square className="fill-current" />
-              Cancel
+              <span className="@max-[520px]:hidden">Cancel</span>
             </Button>
           ) : (
             <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`}>
-              <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender} className="w-[92px]">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={props.onRender}
+                disabled={!props.canRender}
+                className="w-[92px] @max-[520px]:w-auto"
+                aria-label="Render"
+              >
                 <Play className="fill-current" />
-                Render
+                <span className="@max-[520px]:hidden">Render</span>
               </Button>
             </Tooltip>
           )}

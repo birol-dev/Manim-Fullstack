@@ -490,6 +490,8 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
     with patch.object(main, "WORKSPACE_DIR", str(tmp_path)):
         with patch.object(main, "MEDIA_DIR", str(media_dir)):
             async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+                stem = script_name[:-3]
+                await log_callback({"type": "log", "message": f"Traceback in /w/{script_name}:3; output in videos/{stem}/"})
                 await log_callback({
                     "type": "file_ready",
                     "abs_path": str(media_dir / "TempScene.mp4"),
@@ -519,6 +521,11 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
                                 pytest.fail(f"Unexpected websocket error: {msg.get('message')}")
                         else:
                             pytest.fail("Websocket render did not produce a 'result' message within expected steps.")
+
+                        log_msg = next(m for m in received if m.get("type") == "log")["message"]
+                        # The script name is the user's; the folder really is a scratch one.
+                        assert "/w/adhoc.py:3" in log_msg
+                        assert "videos/_temp_run_" in log_msg
 
                         file_ready_msg = next(m for m in received if m.get("type") == "file_ready")
                         assert file_ready_msg.get("is_temp_download") is True
