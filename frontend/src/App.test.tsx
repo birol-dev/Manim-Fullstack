@@ -168,6 +168,27 @@ describe("App", () => {
     expect(server.scripts["example.py"]).toBe(EXAMPLE_CODE);
   });
 
+  it("finishes a save correctly when another file is opened while it is in flight", async () => {
+    const { user, editor, server } = await renderApp();
+    let release = () => {};
+    server.gates["/api/save"] = new Promise<void>((resolve) => (release = resolve));
+
+    fireEvent.change(editor, { target: { value: "# saved while switching" } });
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    await user.click(screen.getByRole("button", { name: "notes.py" }));
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveValue(server.scripts["notes.py"]));
+
+    await act(async () => release());
+    await waitFor(() => expect(server.scripts["example.py"]).toBe("# saved while switching"));
+    // notes.py is not dirty, keeps its own scenes, and example.py has no stale draft.
+    await waitFor(() => expect(screen.queryAllByLabelText("Unsaved changes")).toHaveLength(0));
+    expect(screen.getByRole("combobox", { name: "Scene" })).toHaveTextContent("Notes");
+
+    await user.click(screen.getByRole("button", { name: "example.py" }));
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveValue("# saved while switching"));
+    expect(screen.queryAllByLabelText("Unsaved changes")).toHaveLength(0);
+  });
+
   it("creates a script from the New script dialog with inline validation", async () => {
     const { user, server } = await renderApp();
     await user.click(screen.getByRole("button", { name: "New script" }));

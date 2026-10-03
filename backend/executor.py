@@ -52,6 +52,17 @@ READ_CHUNK_BYTES = 8192
 DEFAULT_RENDER_TIMEOUT_SECONDS = float(os.environ.get("MANIM_RENDER_TIMEOUT", "600"))
 
 
+def media_rel_path(abs_path: str) -> str:
+    """Convert an absolute output path into a ``media/...`` path served by /media."""
+    normalized = abs_path.replace("\\", "/")
+    idx = normalized.rfind("/media/")
+    if idx >= 0:
+        return "media" + normalized[idx + len("/media"):]
+    if normalized.startswith("media/"):
+        return normalized
+    return os.path.basename(abs_path)
+
+
 def output_kind(path: str) -> str:
     """Return ``"image"`` or ``"video"`` for a rendered output path."""
     return "image" if path.lower().endswith(IMAGE_EXTENSIONS) else "video"
@@ -65,6 +76,8 @@ class ManimExecutor:
             DEFAULT_RENDER_TIMEOUT_SECONDS if render_timeout is None else float(render_timeout)
         )
         self._cancelled = False
+        self._executing = False
+        self._cancel_pending = False
         self._last_file_ready = None
         self._latex_warned = False
         self._last_progress = None
@@ -115,16 +128,7 @@ class ManimExecutor:
             return None
         return max(candidates)[1]
 
-    @staticmethod
-    def _to_media_rel_path(abs_path: str) -> str:
-        """Convert an absolute output path into a ``media/...`` path served by /media."""
-        normalized = abs_path.replace("\\", "/")
-        idx = normalized.rfind("/media/")
-        if idx >= 0:
-            return "media" + normalized[idx + len("/media"):]
-        if normalized.startswith("media/"):
-            return normalized
-        return os.path.basename(abs_path)
+    _to_media_rel_path = staticmethod(media_rel_path)
 
     @staticmethod
     def build_args(script_name, scene_name, quality, use_opengl):
@@ -146,7 +150,7 @@ class ManimExecutor:
         return env
 
     async def _emit_file_ready(self, abs_path: str, log_callback):
-        rel_path = self._to_media_rel_path(abs_path)
+        rel_path = media_rel_path(abs_path)
         filename = os.path.basename(abs_path)
         self._last_file_ready = (rel_path, filename, abs_path)
         await log_callback({
@@ -167,6 +171,8 @@ class ManimExecutor:
             await self.cancel()
 
         self._cancelled = False
+        self._executing = True
+        self._cancel_pending = False
         self._last_file_ready = None
         self._latex_warned = False
         self._last_progress = None
@@ -193,6 +199,9 @@ class ManimExecutor:
         try:
             process = await asyncio.create_subprocess_exec(*cmd, **popen_kwargs)
             self.current_process = process
+            if self._cancel_pending:
+                # cancel() arrived while the process was being spawned.
+                await self.cancel()
 
             readers = asyncio.gather(
                 self._read_stream(process.stdout, "stdout", log_callback),
@@ -240,6 +249,8 @@ class ManimExecutor:
             await log_callback({"type": "error", "message": f"Executor error: {exc}"})
             return {"success": False, "status": "error", "error": str(exc)}
         finally:
+            self._executing = False
+            self._cancel_pending = False
             if self.current_process is process:
                 self.current_process = None
 
@@ -247,6 +258,8 @@ class ManimExecutor:
         """Stop the active render, including ffmpeg and other child processes."""
         process = self.current_process
         if process is None or process.returncode is not None:
+            if self._executing:
+                self._cancel_pending = True
             return
         self._cancelled = True
         pid = process.pid

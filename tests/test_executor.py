@@ -457,3 +457,32 @@ async def test_rich_source_column_is_stripped():
         "NameError: name 'x' is not defined",
     ]
     assert any(e["type"] == "file_ready" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_spawn_is_not_lost(tmp_path):
+    """A cancel that arrives before the process exists stops it as soon as it starts."""
+    executor = ManimExecutor(str(tmp_path))
+    proc = MagicMock()
+    proc.pid = 77
+    proc.returncode = None
+    proc.stdout = asyncio.StreamReader()
+    proc.stdout.feed_eof()
+    proc.stderr = asyncio.StreamReader()
+    proc.stderr.feed_eof()
+    proc.wait = AsyncMock(return_value=-15)
+
+    async def spawn(*args, **kwargs):
+        await executor.cancel()  # user pressed Cancel while Manim was starting
+        return proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=spawn):
+        with patch("platform.system", return_value="Linux"):
+            with patch("os.killpg", create=True) as killpg, patch("os.getpgid", return_value=77, create=True):
+                result = await executor.execute("/bin/manim", "a.py", "S", "l", False, AsyncMock())
+
+    assert result == {"success": False, "status": "cancelled"}
+    killpg.assert_called()
+    # Outside a render, cancel() is a no-op and leaves no pending state behind.
+    await executor.cancel()
+    assert executor._cancel_pending is False

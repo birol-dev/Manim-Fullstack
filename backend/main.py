@@ -16,8 +16,8 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
-from executor import OUTPUT_EXTENSIONS, ManimExecutor, output_kind
-from origins import configured_origins, is_origin_allowed
+from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
+from origins import is_host_allowed, is_origin_allowed
 from scene_parser import get_scene_animations, get_scenes_from_code
 from workspace_paths import UnsafePathError, safe_basename, safe_join
 from fastapi import (
@@ -122,18 +122,28 @@ class SineWave(Scene):
 app = FastAPI(title="Manim Composer API", version=APP_VERSION)
 
 
+def _request_allowed(headers) -> bool:
+    host = headers.get("host")
+    return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
+
+
 @app.middleware("http")
-async def reject_untrusted_origins(request: Request, call_next):
-    origin = request.headers.get("origin")
-    if origin and not is_origin_allowed(origin, request.headers.get("host")):
-        return JSONResponse({"detail": "Origin not allowed."}, status_code=403)
+async def reject_untrusted_requests(request: Request, call_next):
+    if not _request_allowed(request.headers):
+        return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
     return await call_next(request)
 
 
+class _PolicyCORSMiddleware(CORSMiddleware):
+    """CORS headers for exactly the cross-origin callers the origin policy accepts."""
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        return is_origin_allowed(origin)
+
+
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=sorted(configured_origins() - {"*"}),
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$",
+    _PolicyCORSMiddleware,
+    allow_origins=[],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -490,6 +500,12 @@ def delete_asset(filename: str):
     return {"success": True, "filename": filename}
 
 
+def _media_request_path(path: str) -> str:
+    """Normalize a client-supplied media path to be relative to MEDIA_DIR."""
+    clean = path.strip().replace("\\", "/").lstrip("/")
+    return clean[len("media/"):] if clean.startswith("media/") else clean
+
+
 def _is_temp_media_relpath(rel_path: str) -> bool:
     """True if *rel_path* (relative to MEDIA_DIR) lies under a _temp_run_* directory."""
     parts = [p for p in rel_path.replace("\\", "/").split("/") if p and p != "."]
@@ -509,9 +525,7 @@ def _prune_empty_dirs(start_dir: str, stop_dir: str) -> None:
 @app.delete("/api/media")
 def delete_media(path: str):
     """Delete a rendered video or image (path relative to workspace/media)."""
-    rel_path = path.strip().replace("\\", "/").lstrip("/")
-    if rel_path.startswith("media/"):
-        rel_path = rel_path[len("media/"):]
+    rel_path = _media_request_path(path)
     top = rel_path.split("/", 1)[0]
     if top not in MEDIA_SUBDIRS or not rel_path.lower().endswith(OUTPUT_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only rendered videos and images can be deleted.")
@@ -544,9 +558,7 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
     Only paths under a ``_temp_run_*`` directory are accepted, so permanent
     renders can never be deleted through this endpoint.
     """
-    clean_path = path.strip().replace("\\", "/").lstrip("/")
-    if clean_path.startswith("media/"):
-        clean_path = clean_path[len("media/"):]
+    clean_path = _media_request_path(path)
 
     if not _is_temp_media_relpath(clean_path):
         raise HTTPException(
@@ -701,10 +713,6 @@ def _remove_temp_media(temp_stem: str) -> None:
         shutil.rmtree(os.path.join(MEDIA_DIR, sub, temp_stem), ignore_errors=True)
 
 
-def _media_rel_path(abs_path: str) -> str:
-    return "media/" + os.path.relpath(abs_path, MEDIA_DIR).replace("\\", "/")
-
-
 def _file_ready_event(abs_path: str, rel_path: str) -> dict:
     parts = rel_path.split("/")
     return {
@@ -762,7 +770,7 @@ async def websocket_render(websocket: WebSocket):
     ``id`` so clients can ignore events from a render they already abandoned.
     Each connection gets its own executor so clients never interfere.
     """
-    if not is_origin_allowed(websocket.headers.get("origin"), websocket.headers.get("host")):
+    if not _request_allowed(websocket.headers):
         await websocket.close(code=1008)
         return
 
@@ -788,33 +796,20 @@ async def websocket_render(websocket: WebSocket):
                 pass
         current_render_task = None
 
+    # What the current render is doing: "preparing" (writing the scratch copy),
+    # "rendering" (Manim running), or "finishing" (moving/announcing the output).
+    phase: dict = {"value": None}
+
     async def run_render(request: dict, render_id, manim_command: List[str]):
         filename = request["filename"]
-        code_content = request["code"]
         download_only = request["download_only"]
-        script_name = filename
-        temp_filepath = None
-
-        # Unsaved code and download-only renders run from a scratch copy so that
-        # their output lands under media/*/_temp_run_*.
-        if download_only or code_content is not None:
-            if code_content is None:
-                src_path = os.path.join(WORKSPACE_DIR, filename)
-                if not os.path.isfile(src_path):
-                    await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
-                    await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
-                    return
-                with open(src_path, "r", encoding="utf-8", errors="replace") as f:
-                    code_content = f.read()
-            script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
-            temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
-            with open(temp_filepath, "w", encoding="utf-8") as f:
-                f.write(code_content)
-
-        temp_stem = os.path.splitext(script_name)[0] if temp_filepath else None
         target_stem = os.path.splitext(filename)[0]
-        relocate = temp_stem is not None and not download_only
+        script_name = filename
+        temp_filepath: Optional[str] = None
+        temp_stem: Optional[str] = None
+        relocate = False
         held_output: List[str] = []
+        result: dict = {"success": False, "status": "error"}
 
         async def log_callback(event: dict):
             outbound = dict(event)
@@ -842,8 +837,28 @@ async def websocket_render(websocket: WebSocket):
             if not await send(outbound):
                 await conn_executor.cancel()
 
-        result = {"success": False, "status": "error"}
+        phase["value"] = "preparing"
         try:
+            # Unsaved code and download-only renders run from a scratch copy so that
+            # their output lands under media/*/_temp_run_*.
+            code_content = request["code"]
+            if download_only or code_content is not None:
+                if code_content is None:
+                    src_path = os.path.join(WORKSPACE_DIR, filename)
+                    if not os.path.isfile(src_path):
+                        await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
+                        result = {"success": False, "status": "rejected"}
+                        return
+                    with open(src_path, "r", encoding="utf-8", errors="replace") as f:
+                        code_content = f.read()
+                script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
+                temp_stem = os.path.splitext(script_name)[0]
+                relocate = not download_only
+                temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
+                with open(temp_filepath, "w", encoding="utf-8") as f:
+                    f.write(code_content)
+
+            phase["value"] = "rendering"
             result = await conn_executor.execute(
                 manim_path=manim_command,
                 script_name=script_name,
@@ -852,18 +867,28 @@ async def websocket_render(websocket: WebSocket):
                 use_opengl=request["use_opengl"],
                 log_callback=log_callback,
             )
+            phase["value"] = "finishing"
             if relocate and held_output and result.get("success"):
-                moved = _relocate_temp_output(held_output[-1], temp_stem, target_stem)
+                moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_stem)
                 final_path = moved or held_output[-1]
-                event = _file_ready_event(final_path, _media_rel_path(final_path))
-                await send({**event, "render_id": render_id})
+                await send({**_file_ready_event(final_path, media_rel_path(final_path)), "render_id": render_id})
         except asyncio.CancelledError:
             await conn_executor.cancel()
             result = {"success": False, "status": "cancelled"}
             raise
         except Exception as e:
+            result = {"success": False, "status": "error", "error": str(e)}
             await send({"type": "error", "render_id": render_id, "message": f"Render execution error: {e}"})
         finally:
+            phase["value"] = None
+            # Clean up before the last await, so a cancellation during the send can't skip it.
+            if temp_filepath:
+                try:
+                    os.remove(temp_filepath)
+                except OSError:
+                    pass
+            if relocate and temp_stem:
+                _remove_temp_media(temp_stem)
             await send(
                 {
                     "type": "result",
@@ -873,13 +898,6 @@ async def websocket_render(websocket: WebSocket):
                     "details": result,
                 }
             )
-            if temp_filepath:
-                try:
-                    os.remove(temp_filepath)
-                except OSError:
-                    pass
-            if relocate:
-                _remove_temp_media(temp_stem)
 
     try:
         while True:
@@ -900,7 +918,8 @@ async def websocket_render(websocket: WebSocket):
                     await stop_current_render()
                 try:
                     request = _validate_start_message(message)
-                    manim_command = _manim_command(get_binary_paths())
+                    # PATH lookups can be slow (network drives); keep them off the event loop.
+                    manim_command = _manim_command(await asyncio.to_thread(get_binary_paths))
                     if not manim_command:
                         raise _RenderRequestError(
                             "Manim executable not found. Install Manim CE (pip install manim) and restart."
@@ -915,11 +934,15 @@ async def websocket_render(websocket: WebSocket):
 
             elif msg_type == "cancel":
                 if current_render_task and not current_render_task.done():
-                    if conn_executor.is_running:
-                        # The render task reports the "cancelled" result once Manim exits.
+                    if phase["value"] == "preparing":
+                        current_render_task.cancel()
+                    elif phase["value"] == "rendering":
+                        # Stops Manim (or stops it as soon as it has been spawned); the
+                        # render task then reports the "cancelled" result.
                         await conn_executor.cancel()
                     else:
-                        current_render_task.cancel()
+                        # Manim already finished; let the output and result through.
+                        continue
                     await send({"type": "info", "message": "Stopping render..."})
 
     except WebSocketDisconnect:
