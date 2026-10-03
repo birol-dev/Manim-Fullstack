@@ -500,7 +500,7 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <div className="flex h-dvh min-h-0 flex-col bg-canvas text-fg">
-        <TopBar needsSetup={manimMissing || !latexAvailable} onOpenSetup={() => setSetupOpen(true)} />
+        <TopBar needsSetup={manimMissing} onOpenSetup={() => setSetupOpen(true)} />
 
         <div className="flex min-h-0 flex-1">
           <ActivityBar
