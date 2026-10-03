@@ -4,8 +4,8 @@
  * editor worker are needed.
  */
 import { loader } from "@monaco-editor/react";
-import EditorWorker from "monaco-editor-esm/editor/editor.worker.start.js?worker";
 import { monaco } from "./monacoCore";
+import EditorWorker from "./monaco.worker?worker";
 
 self.MonacoEnvironment = {
   getWorker: () => new EditorWorker(),
