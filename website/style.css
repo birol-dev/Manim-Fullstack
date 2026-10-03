@@ -1228,7 +1228,8 @@ blockquote {
   .hero-grid,
   .workspace-grid,
   .proof-grid {
-    grid-template-columns: 1fr;
+    /* minmax(0, …) so the nowrap install command scrolls instead of widening the page */
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .hero {
@@ -1478,6 +1479,11 @@ blockquote {
 
   .section-band {
     padding: 56px 0;
+  }
+
+  /* Keep the hero clear of the fixed header (section-band above would reset it). */
+  .hero.section-band {
+    padding-top: 100px;
   }
 
   .eyebrow {

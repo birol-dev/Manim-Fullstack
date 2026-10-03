@@ -21,7 +21,7 @@ Manim Composer is a free MIT-licensed developer tool that wraps Manim CE in a fo
 - Live render logs, progress events, and cancellation
 - Hardware-aware render presets (eco, balanced, workstation)
 - Local file management for scripts, assets, and rendered media
-- Auto-render debounce (~2 seconds after typing stops)
+- Auto-render debounce (~1.5 seconds after typing stops)
 
 ## Who it is for
 
@@ -29,11 +29,11 @@ Educators, math YouTubers, researchers, students, and technical teams who create
 
 ## Requirements
 
-Python 3.9+, Node.js 18+, Manim CE, FFmpeg, and LaTeX (recommended for full equation rendering).
+Python 3.9+, Node.js 18+, and Manim CE 0.19+. LaTeX is optional (MathTex, numbered axes); FFmpeg is only needed for scenes with sound.
 
 ## Install
 
-Clone https://github.com/birol-dev/Manim-Fullstack, install backend dependencies (`pip install -r backend/requirements.txt`), start `python backend/main.py`, then in `frontend/` run `npm install` and `npm run dev`.
+Clone https://github.com/birol-dev/Manim-Fullstack, install the Python dependencies (`pip install -r backend/requirements.txt`, which includes Manim CE), then run `python run.py`. It builds the frontend on first launch and opens the app.
 
 ## Pages
 

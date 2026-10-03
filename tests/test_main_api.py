@@ -1,14 +1,10 @@
-import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
-from fastapi.testclient import TestClient
 
 import main
 from main import (
-    ALLOWED_ASSET_EXTENSIONS,
     MAX_ASSET_SIZE_BYTES,
-    app,
     get_scene_animations,
     get_scenes_from_code,
 )
@@ -142,7 +138,8 @@ class RobustScene(Scene):
     with patch("ast.unparse", side_effect=Exception("Unparse error")):
         anims = get_scene_animations(code)
         assert len(anims["RobustScene"]) == 2
-        assert "Play" in anims["RobustScene"][0]["label"]
+        assert anims["RobustScene"][0]["type"] == "play"
+        assert anims["RobustScene"][0]["label"] == "animation"
 
 
 def test_status_and_health_endpoints(client):
@@ -376,7 +373,7 @@ def test_download_temp_endpoint(client, tmp_path):
     permanent_clip.write_text("keepme", encoding="utf-8")
 
     with patch.object(main, "MEDIA_DIR", str(media_dir)):
-        res = client.get(f"/api/download-temp?path=_temp_run_12345/clip.mp4")
+        res = client.get("/api/download-temp?path=_temp_run_12345/clip.mp4")
         assert res.status_code == 200
         assert res.text == "videocontent"
 
@@ -493,6 +490,8 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
     with patch.object(main, "WORKSPACE_DIR", str(tmp_path)):
         with patch.object(main, "MEDIA_DIR", str(media_dir)):
             async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+                stem = script_name[:-3]
+                await log_callback({"type": "log", "message": f"Traceback in /w/{script_name}:3; output in videos/{stem}/"})
                 await log_callback({
                     "type": "file_ready",
                     "abs_path": str(media_dir / "TempScene.mp4"),
@@ -523,38 +522,42 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
                         else:
                             pytest.fail("Websocket render did not produce a 'result' message within expected steps.")
 
+                        log_msg = next(m for m in received if m.get("type") == "log")["message"]
+                        # The script name is the user's; the folder really is a scratch one.
+                        assert "/w/adhoc.py:3" in log_msg
+                        assert "videos/_temp_run_" in log_msg
+
                         file_ready_msg = next(m for m in received if m.get("type") == "file_ready")
                         assert file_ready_msg.get("is_temp_download") is True
                         assert "api/download-temp" in file_ready_msg.get("rel_path")
 
 
 def test_websocket_render_validation_errors(client):
+    def rejected(ws):
+        error, result = ws.receive_json(), ws.receive_json()
+        assert error["type"] == "error"
+        assert result == {"type": "result", "render_id": None, "success": False, "status": "rejected"}
+        return error
+
     with patch.object(main, "get_binary_paths", return_value={"manim": "Not Found"}):
         with client.websocket_connect("/api/render") as ws:
             ws.send_text("not json")
-            msg = ws.receive_json()
-            assert msg["type"] == "error"
+            assert ws.receive_json()["type"] == "error"
 
             ws.send_text("12345")
-            msg2 = ws.receive_json()
-            assert msg2["type"] == "error"
+            assert ws.receive_json()["type"] == "error"
 
             ws.send_json({"type": "start", "filename": "test.py"})
-            msg3 = ws.receive_json()
-            assert msg3["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "test.py", "scene": "123_invalid_id"})
-            msg4 = ws.receive_json()
-            assert msg4["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "../secret.py", "scene": "Scene"})
-            msg5 = ws.receive_json()
-            assert msg5["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "test.py", "scene": "Scene"})
-            msg6 = ws.receive_json()
-            assert msg6["type"] == "error"
-            assert "Manim executable not found" in msg6["message"]
+            assert "Manim executable not found" in rejected(ws)["message"]
 
 
 def test_websocket_render_cancellation(client, tmp_path):
@@ -614,3 +617,318 @@ def test_installers_allowed_cloud_and_env(monkeypatch):
     monkeypatch.delenv("RUNNING_IN_DOCKER", raising=False)
     monkeypatch.setenv("MANIM_ALLOW_INSTALLS", "false")
     assert main._installers_allowed() is not None
+
+
+# --------------------------------------------------------------------------- #
+# Scene parsing extras
+# --------------------------------------------------------------------------- #
+
+
+def test_subclasses_of_local_scenes_are_scenes():
+    code = """from manim import *
+
+class BaseSlide(Scene):
+    def setup(self):
+        pass
+
+class Intro(BaseSlide):
+    def construct(self):
+        self.play(FadeIn(Dot()), run_time=2)
+
+class Outro(Intro):
+    def construct(self):
+        self.wait()
+
+class Helper(dict):
+    pass
+
+def make():
+    class Nested(Scene):
+        pass
+"""
+    assert get_scenes_from_code(code) == ["BaseSlide", "Intro", "Outro"]
+    anims = get_scene_animations(code)
+    assert anims["Intro"] == [{"type": "play", "label": "FadeIn(Dot())", "line": 9, "duration": 2.0}]
+    assert anims["Outro"][0]["label"] == "Wait 1s"
+
+
+def test_default_script_matches_workspace_example():
+    example = os.path.join(main.WORKSPACE_DIR, "example.py")
+    with open(example, encoding="utf-8") as f:
+        assert f.read() == main.DEFAULT_SCRIPT
+    assert get_scenes_from_code(main.DEFAULT_SCRIPT) == ["SquareToCircle", "TitleCard", "SineWave"]
+
+
+# --------------------------------------------------------------------------- #
+# Listing and deleting files
+# --------------------------------------------------------------------------- #
+
+
+def _write(path, content="x", mtime=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if mtime is not None:
+        os.utime(str(path), (mtime, mtime))
+    return path
+
+
+@pytest.fixture
+def ws_dirs(tmp_path):
+    media = tmp_path / "media"
+    assets = tmp_path / "assets"
+    media.mkdir()
+    assets.mkdir()
+    with patch.object(main, "WORKSPACE_DIR", str(tmp_path)), patch.object(
+        main, "MEDIA_DIR", str(media)
+    ), patch.object(main, "ASSETS_DIR", str(assets)):
+        yield tmp_path, media, assets
+
+
+def test_media_listing_metadata_and_order(client, ws_dirs):
+    root, media, _ = ws_dirs
+    _write(root / "demo.py")
+    _write(media / "videos" / "demo" / "480p15" / "Old.mp4", mtime=100)
+    _write(media / "videos" / "demo" / "1080p60" / "New Scene.mp4", mtime=300)
+    _write(media / "images" / "demo" / "Still_ManimCE_v0.21.0.png", mtime=200)
+    _write(media / "videos" / "demo" / "480p15" / "partial_movie_files" / "Old" / "chunk.mp4", mtime=400)
+    _write(media / "videos" / "_temp_run_abcd1234" / "480p15" / "Tmp.mp4", mtime=500)
+
+    items = client.get("/api/files").json()["media"]
+    assert [item["name"] for item in items] == ["New Scene.mp4", "Still_ManimCE_v0.21.0.png", "Old.mp4"]
+
+    newest, image, oldest = items
+    assert newest["url"] == "/media/videos/demo/1080p60/New%20Scene.mp4"
+    assert newest["path"] == "videos/demo/1080p60/New Scene.mp4"
+    assert (newest["type"], newest["script"], newest["quality"], newest["scene"]) == ("video", "demo", "1080p60", "New Scene")
+    assert (image["type"], image["scene"], image["quality"]) == ("image", "Still", None)
+    assert oldest["modified"] == 100
+
+
+def test_delete_script(client, ws_dirs):
+    root, _, _ = ws_dirs
+    _write(root / "gone.py")
+    assert client.delete("/api/scripts", params={"filename": "gone.py"}).status_code == 200
+    assert not (root / "gone.py").exists()
+    assert client.delete("/api/scripts", params={"filename": "gone.py"}).status_code == 404
+    assert client.delete("/api/scripts", params={"filename": "../main.py"}).status_code == 400
+    assert client.delete("/api/scripts", params={"filename": "notes.txt"}).status_code == 400
+
+
+def test_delete_asset(client, ws_dirs):
+    _, _, assets = ws_dirs
+    _write(assets / "logo.svg")
+    assert client.delete("/api/assets", params={"filename": "logo.svg"}).status_code == 200
+    assert not (assets / "logo.svg").exists()
+    assert client.delete("/api/assets", params={"filename": "logo.svg"}).status_code == 404
+    assert client.delete("/api/assets", params={"filename": "../x.svg"}).status_code == 400
+
+
+def test_delete_media_removes_chunks_and_empty_folders(client, ws_dirs):
+    _, media, _ = ws_dirs
+    video = _write(media / "videos" / "demo" / "480p15" / "Intro.mp4")
+    _write(media / "videos" / "demo" / "480p15" / "partial_movie_files" / "Intro" / "a.mp4")
+    keep = _write(media / "videos" / "other" / "480p15" / "Keep.mp4")
+
+    res = client.delete("/api/media", params={"path": "media/videos/demo/480p15/Intro.mp4"})
+    assert res.status_code == 200
+    assert not video.exists()
+    assert not (media / "videos" / "demo").exists()
+    assert (media / "videos").is_dir() and keep.exists()
+
+    assert client.delete("/api/media", params={"path": "videos/demo/480p15/Intro.mp4"}).status_code == 404
+    for bad in ("../example.py", "videos/../../example.py", "Tex/abc.svg", "videos/demo/notes.txt"):
+        assert client.delete("/api/media", params={"path": bad}).status_code == 400, bad
+
+
+def test_sweep_temp_renders(ws_dirs):
+    root, media, _ = ws_dirs
+    scratch = _write(root / "_temp_run_deadbeef.py")
+    temp_video_dir = media / "videos" / "_temp_run_deadbeef"
+    _write(temp_video_dir / "480p15" / "S.mp4")
+    keep = _write(media / "videos" / "demo" / "480p15" / "S.mp4")
+    main._sweep_temp_renders()
+    assert not scratch.exists()
+    assert not temp_video_dir.exists()
+    assert keep.exists()
+
+
+def test_diagnostics_reports_fresh_dependencies_and_platform(client):
+    fresh = {**MOCK_BINARIES, "manim": "/fresh/manim"}
+    with patch.object(main, "get_binary_paths", return_value=fresh):
+        data = client.get("/api/diagnostics").json()
+    assert data["dependencies"]["manim"] == "/fresh/manim"
+    assert data["platform"]
+    assert data["python_version"]
+
+
+def test_manim_command_resolution():
+    assert main._manim_command({"manim_command": ["py", "-m", "manim"], "manim": "x"}) == ["py", "-m", "manim"]
+    assert main._manim_command({"manim": "/bin/manim"}) == ["/bin/manim"]
+    assert main._manim_command({"manim": "Not Found"}) is None
+
+
+# --------------------------------------------------------------------------- #
+# Render socket extras
+# --------------------------------------------------------------------------- #
+
+
+def _drain_until_result(ws, limit=20):
+    received = []
+    for _ in range(limit):
+        msg = ws.receive_json()
+        received.append(msg)
+        if msg.get("type") == "result":
+            return received
+    pytest.fail("no result message")
+
+
+def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
+    root, media, _ = ws_dirs
+
+    async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        stem = script_name[:-3]
+        assert stem.startswith(main.TEMP_PREFIX)
+        out = _write(media / "videos" / stem / "480p15" / f"{scene_name}.mp4", "frames")
+        await log_callback({"type": "log", "stream": "stdout", "message": f"File ready at '{out}' from {stem}.py"})
+        await log_callback({
+            "type": "file_ready",
+            "abs_path": str(out),
+            "rel_path": f"media/videos/{stem}/480p15/{scene_name}.mp4",
+            "filename": f"{scene_name}.mp4",
+        })
+        return {"success": True, "status": "success"}
+
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with _patch_conn_executor(mock_execute):
+            with client.websocket_connect("/api/render") as ws:
+                ws.send_json({"type": "start", "id": 7, "filename": "demo.py", "scene": "Intro", "quality": "l", "code": "x"})
+                received = _drain_until_result(ws)
+
+    assert all(m.get("render_id") == 7 for m in received)
+    log = next(m for m in received if m["type"] == "log")
+    assert main.TEMP_PREFIX not in log["message"] and "demo.py" in log["message"]
+    ready = [m for m in received if m["type"] == "file_ready"]
+    assert len(ready) == 1
+    assert ready[0]["url"] == "/media/videos/demo/480p15/Intro.mp4"
+    assert ready[0]["kind"] == "video"
+    assert "abs_path" not in ready[0]
+    assert (media / "videos" / "demo" / "480p15" / "Intro.mp4").read_text() == "frames"
+    assert [p.name for p in root.iterdir() if p.name.startswith(main.TEMP_PREFIX)] == []
+    assert not any(p.name.startswith(main.TEMP_PREFIX) for p in (media / "videos").iterdir())
+
+
+def _blocking_executor():
+    """Executor mock whose render only ends when cancel() is called, like the real one."""
+    import asyncio
+    stop = asyncio.Event()
+
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        await stop.wait()
+        return {"success": False, "status": "cancelled"}
+
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=execute)
+    instance.cancel = AsyncMock(side_effect=lambda: stop.set())
+    return instance
+
+
+def test_cancel_while_rendering_reports_cancelled(client, ws_dirs):
+    root, _, _ = ws_dirs
+    _write(root / "s.py")
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with patch.object(main, "ManimExecutor", return_value=_blocking_executor()):
+            with client.websocket_connect("/api/render") as ws:
+                ws.send_json({"type": "start", "id": "a", "filename": "s.py", "scene": "S"})
+                ws.send_json({"type": "cancel"})
+                received = _drain_until_result(ws)
+
+    result = received[-1]
+    assert result["render_id"] == "a"
+    assert result["status"] == "cancelled"
+
+
+def test_scratch_file_failure_still_sends_one_result(client, ws_dirs):
+    real_open = open
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        if main.TEMP_PREFIX in str(path) and "w" in mode:
+            raise OSError("disk full")
+        return real_open(path, mode, *args, **kwargs)
+
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with patch("builtins.open", side_effect=failing_open):
+            with client.websocket_connect("/api/render") as ws:
+                ws.send_json({"type": "start", "id": "f", "filename": "x.py", "scene": "S", "code": "pass"})
+                received = _drain_until_result(ws)
+
+    assert [m["type"] for m in received] == ["error", "result"]
+    assert "disk full" in received[0]["message"]
+    assert received[-1]["status"] == "error"
+
+
+def test_missing_script_for_download_only_is_rejected_once(client, ws_dirs):
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with client.websocket_connect("/api/render") as ws:
+            ws.send_json({"type": "start", "id": "m", "filename": "nope.py", "scene": "S", "download_only": True})
+            received = _drain_until_result(ws)
+    assert [m["type"] for m in received] == ["error", "result"]
+    assert received[-1]["status"] == "rejected"
+
+
+def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
+    """A cancel that arrives while the output is being moved/announced must not drop it."""
+    import time
+
+    root, media, _ = ws_dirs
+    _write(root / "s.py")
+    real_relocate = main._relocate_temp_output
+
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        out = _write(media / "videos" / script_name[:-3] / "480p15" / "S.mp4")
+        await log_callback({"type": "file_ready", "abs_path": str(out), "rel_path": "media/x", "filename": "S.mp4"})
+        return {"success": True, "status": "success"}
+
+    def slow_relocate(*args):
+        time.sleep(0.4)  # the test sends "cancel" meanwhile; it is read at the next await
+        return real_relocate(*args)
+
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=execute)
+    instance.cancel = AsyncMock()
+    instance.is_running = False  # Manim has exited by the time the output is moved
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES), patch.object(
+        main, "ManimExecutor", return_value=instance
+    ), patch.object(main, "_relocate_temp_output", side_effect=slow_relocate):
+        with client.websocket_connect("/api/render") as ws:
+            ws.send_json({"type": "start", "id": "z", "filename": "s.py", "scene": "S", "code": "x"})
+            time.sleep(0.1)
+            ws.send_json({"type": "cancel"})
+            received = _drain_until_result(ws)
+
+    assert received[-1]["status"] == "success", received
+    assert any(m["type"] == "file_ready" and m["url"] == "/media/videos/s/480p15/S.mp4" for m in received)
+
+
+def test_deeply_nested_code_parses_without_crashing(client):
+    res = client.post("/api/parse-code", json={"code": "1" + "+1" * 200000})
+    assert res.status_code == 200
+    assert res.json()["scenes"] == []
+
+
+def test_parse_cache_is_bounded():
+    import scene_parser
+
+    for index in range(scene_parser._CACHE_SIZE + 10):
+        get_scenes_from_code(f"class S{index}(Scene):\n    pass\n")
+    assert len(scene_parser._cache) == scene_parser._CACHE_SIZE
+    # Cached entries are keyed by digest, not by the (possibly huge) source.
+    assert all(len(key) == 40 for key in scene_parser._cache)
+
+
+def test_validation_errors_echo_render_id(client):
+    with client.websocket_connect("/api/render") as ws:
+        ws.send_json({"type": "start", "id": "bad", "filename": "x.py", "scene": "1nope"})
+        msg = ws.receive_json()
+        result = ws.receive_json()
+    assert msg == {"type": "error", "render_id": "bad", "message": "Scene name must be a valid Python identifier."}
+    assert result == {"type": "result", "render_id": "bad", "success": False, "status": "rejected"}
