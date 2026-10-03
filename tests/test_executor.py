@@ -1,6 +1,5 @@
 import asyncio
 import os
-import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -303,3 +302,139 @@ async def test_execute_times_out(tmp_path):
             assert res["success"] is False
             assert res["status"] == "timeout"
             mock_cancel.assert_called()
+
+
+async def _read(executor, data: bytes, stream_name="stderr", chunks=1):
+    events = []
+
+    async def log_cb(evt):
+        events.append(evt)
+
+    stream = asyncio.StreamReader()
+    size = max(1, len(data) // chunks)
+    for i in range(0, len(data), size):
+        stream.feed_data(data[i:i + size])
+    stream.feed_eof()
+    await executor._read_stream(stream, stream_name, log_cb)
+    return events
+
+
+@pytest.mark.asyncio
+async def test_tqdm_carriage_return_progress_streams_live():
+    executor = ManimExecutor("/workspace")
+    bar = (
+        "\rAnimation 0: Create(Circle()):   0%|          | 0/15 [00:00<?, ?it/s]"
+        "\rAnimation 0: Create(Circle()):  40%|####      | 6/15 [00:00<00:00]"
+        "\rAnimation 0: Create(Circle()):  40%|####      | 6/15 [00:00<00:00]"
+        "\rAnimation 1: Write(Text('Hi: there')): 100%|##########| 15/15"
+        "\r                                                  \r"
+    ).encode()
+    # Split across many chunks, including mid-character boundaries.
+    events = await _read(executor, bar, chunks=17)
+
+    assert [e["type"] for e in events] == ["progress", "progress", "progress"]
+    assert [(e["animation"], e["percent"]) for e in events] == [(0, 0), (0, 40), (1, 100)]
+    assert events[0]["label"] == "Create(Circle())"
+    assert events[2]["label"] == "Write(Text('Hi: there'))"
+
+
+@pytest.mark.asyncio
+async def test_utf8_split_across_chunks_and_ansi_is_stripped():
+    executor = ManimExecutor("/workspace")
+    data = "\x1b[32mINFO\x1b[0m  Rendered ✓ scène\n".encode("utf-8")
+    events = await _read(executor, data, stream_name="stdout", chunks=len(data))
+    assert events == [{"type": "log", "stream": "stdout", "message": "INFO  Rendered ✓ scène"}]
+
+
+@pytest.mark.asyncio
+async def test_unterminated_output_is_flushed_and_capped():
+    executor = ManimExecutor("/workspace")
+    huge = b"x" * (200 * 1024)
+    events = await _read(executor, huge, chunks=40)
+    assert sum(len(e["message"]) for e in events) == len(huge)
+    assert all(len(e["message"]) <= 64 * 1024 + 8192 for e in events)
+
+
+@pytest.mark.asyncio
+async def test_image_output_and_single_latex_hint(tmp_path):
+    executor = ManimExecutor(str(tmp_path))
+    data = (
+        b"File ready at '/w/media/images/demo/Still_ManimCE_v0.21.0.png'\n"
+        b"FileNotFoundError: No such file or directory: 'latex'\n"
+        b"LaTeX compilation error again\n"
+    )
+    events = await _read(executor, data, stream_name="stdout")
+    ready = [e for e in events if e["type"] == "file_ready"]
+    assert ready[0]["kind"] == "image"
+    assert ready[0]["rel_path"] == "media/images/demo/Still_ManimCE_v0.21.0.png"
+    assert len([e for e in events if e["type"] == "latex_error_warning"]) == 1
+
+
+def test_find_latest_render_falls_back_to_images(tmp_path):
+    images = tmp_path / "media" / "images" / "demo"
+    images.mkdir(parents=True)
+    png = images / "Still_ManimCE_v0.21.0.png"
+    png.write_text("png", encoding="utf-8")
+    (images / "StillLife_ManimCE_v0.21.0.png").write_text("other", encoding="utf-8")
+    executor = ManimExecutor(str(tmp_path))
+    assert executor._find_latest_render("demo.py", "Still") == str(png)
+
+
+def test_build_args_and_subprocess_env():
+    assert ManimExecutor.build_args("a.py", "S", "h", False) == ["a.py", "S", "-qh", "--progress_bar=display"]
+    assert ManimExecutor.build_args("a.py", "S", "zz", True) == [
+        "a.py", "S", "-qm", "--renderer=opengl", "--write_to_movie", "--progress_bar=display",
+    ]
+    env = ManimExecutor("/w")._subprocess_env()
+    assert env["COLUMNS"] == "400"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_execute_accepts_command_prefix(tmp_path):
+    executor = ManimExecutor(str(tmp_path))
+    proc = MagicMock()
+    proc.pid = 1
+    proc.returncode = None
+    proc.stdout = asyncio.StreamReader()
+    proc.stdout.feed_eof()
+    proc.stderr = asyncio.StreamReader()
+    proc.stderr.feed_eof()
+    proc.wait = AsyncMock(return_value=0)
+    log = AsyncMock()
+    with patch("asyncio.create_subprocess_exec", return_value=proc) as spawn:
+        await executor.execute(["py", "-m", "manim"], "a.py", "S", "l", False, log)
+    assert spawn.call_args[0][:5] == ("py", "-m", "manim", "a.py", "S")
+    assert log.call_args_list[0][0][0] == {"type": "info", "message": "$ manim a.py S -ql --progress_bar=display"}
+
+
+@pytest.mark.asyncio
+async def test_cancel_mid_render_reports_cancelled_not_error(tmp_path):
+    """cancel() drops the process handle; execute() must still finish cleanly."""
+    executor = ManimExecutor(str(tmp_path))
+    proc = MagicMock()
+    proc.pid = 4242
+    proc.returncode = None
+    proc.stdout = asyncio.StreamReader()
+    proc.stderr = asyncio.StreamReader()
+    proc.wait = AsyncMock(return_value=-15)
+    events = []
+
+    async def log_cb(evt):
+        events.append(evt)
+
+    with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("platform.system", return_value="Linux"):
+            with patch("os.killpg", create=True), patch("os.getpgid", return_value=4242, create=True):
+                task = asyncio.create_task(executor.execute("/bin/manim", "a.py", "S", "l", False, log_cb))
+                await asyncio.sleep(0.01)
+                assert executor.is_running
+                await executor.cancel()
+                assert executor.current_process is None
+                proc.stdout.feed_eof()
+                proc.stderr.feed_eof()
+                result = await task
+
+    assert result == {"success": False, "status": "cancelled"}
+    assert not any(e["type"] == "error" for e in events)
