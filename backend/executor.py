@@ -1,293 +1,364 @@
+"""Runs Manim as a subprocess and streams its output as structured events.
+
+Events passed to ``log_callback`` are plain dicts with a ``type`` key:
+
+* ``info`` / ``error`` / ``status`` — lifecycle messages
+* ``log`` — one line of Manim output (``stream`` is ``stdout`` or ``stderr``)
+* ``progress`` — per-animation progress parsed from Manim's tqdm bars
+* ``file_ready`` — the rendered video or image
+* ``latex_error_warning`` — a hint that LaTeX is missing or failed (once per render)
+"""
+
 import asyncio
+import codecs
 import os
+import platform
 import re
 import signal
 import subprocess
-import platform
 
-# Pre-compiled regular expressions for stream parsing
-PROGRESS_PATTERN = re.compile(r"\[\s*(\d+)%\]|(\d+)%\s*(?:\||\d+/\d+)")
-FILE_PATTERN = re.compile(
-    r"File ready at(?:\s+|:\s+)"
-    r"(?:\x1b\[[0-9;]*m)?"
-    r"['\"]?"
-    r"([^\x1b'\"\r\n\t]+)"
-    r"['\"]?"
-    r"(?:\x1b\[[0-9;]*m)?"
+VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
+IMAGE_EXTENSIONS = (".png", ".gif")
+OUTPUT_EXTENSIONS = VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
+
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+LINE_SPLIT_PATTERN = re.compile(r"\r\n|\r|\n")
+# tqdm bar, e.g. "Animation 3: Create(Circle):  45%|████▌     | 27/60 [00:00<00:00]"
+TQDM_PATTERN = re.compile(r"^(?:(?P<label>.*?):\s*)?(?P<percent>\d{1,3})%\|")
+ANIMATION_LABEL_PATTERN = re.compile(r"^Animation\s+(?P<index>\d+)\s*:\s*(?P<name>.*)$")
+# Older/bare progress format, e.g. "[ 50%] 30/60"
+BRACKET_PROGRESS_PATTERN = re.compile(r"\[\s*(\d{1,3})%\]")
+FILE_READY_PATTERN = re.compile(
+    r"File ready at:?\s+(?:'(?P<single>[^']+)'|\"(?P<double>[^\"]+)\"|(?P<bare>\S+))"
 )
-LATEX_PATTERN = re.compile(r"LaTeX|dvisvgm|svg|pdf", re.IGNORECASE)
+# Rich log rows end with a right-aligned "module.py:123" column; it is noise in the UI.
+RICH_SOURCE_COLUMN = re.compile(r"\s{2,}[\w.-]+\.py:\d+$")
+RICH_LEVEL_ONLY = re.compile(r"^(?:\[[^\]]*\]\s+)?(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+LATEX_PATTERN = re.compile(r"latex|dvisvgm", re.IGNORECASE)
+FAILURE_PATTERN = re.compile(r"error|fail|not found|no such file", re.IGNORECASE)
+
+LATEX_HINT = (
+    "LaTeX rendering failed. MathTex and Tex need a LaTeX distribution (MiKTeX or TeX Live) "
+    "with dvisvgm. Install one, or use Text(...) for plain labels."
+)
+
+# Rich wraps log lines to the terminal width (80 columns when piped), which splits
+# long output paths across lines. A wide virtual terminal keeps them intact.
+SUBPROCESS_COLUMNS = "400"
+MAX_PENDING_LINE_CHARS = 64 * 1024
+READ_CHUNK_BYTES = 8192
 
 # Default render wall-clock timeout (seconds). Override with MANIM_RENDER_TIMEOUT.
 DEFAULT_RENDER_TIMEOUT_SECONDS = float(os.environ.get("MANIM_RENDER_TIMEOUT", "600"))
+
+
+def media_rel_path(abs_path: str) -> str:
+    """Convert an absolute output path into a ``media/...`` path served by /media."""
+    normalized = abs_path.replace("\\", "/")
+    idx = normalized.rfind("/media/")
+    if idx >= 0:
+        return "media" + normalized[idx + len("/media"):]
+    if normalized.startswith("media/"):
+        return normalized
+    return os.path.basename(abs_path)
+
+
+def output_kind(path: str) -> str:
+    """Return ``"image"`` or ``"video"`` for a rendered output path."""
+    return "image" if path.lower().endswith(IMAGE_EXTENSIONS) else "video"
+
 
 class ManimExecutor:
     def __init__(self, workspace_dir: str, render_timeout=None):
         self.workspace_dir = workspace_dir
         self.current_process = None
-        self._cancelled = False
-        self._last_file_ready = None  # Track the most recent file_ready callback for fallback
         self.render_timeout = (
             DEFAULT_RENDER_TIMEOUT_SECONDS if render_timeout is None else float(render_timeout)
         )
+        self._cancelled = False
+        self._executing = False
+        self._cancel_pending = False
+        self._last_file_ready = None
+        self._latex_warned = False
+        self._last_progress = None
+
+    @property
+    def is_running(self) -> bool:
+        return self.current_process is not None and self.current_process.returncode is None
 
     def _find_latest_render(self, script_name: str, scene_name: str):
-        """
-        Fallback: locate the most recently modified .mp4 file in the media directory
-        for a given script/scene. Used when the rich-wrapped 'File ready at' line
-        cannot be parsed from stdout (e.g., when the path wraps across lines).
-        """
-        try:
-            script_stem = os.path.splitext(script_name)[0]
-            media_videos = os.path.join(self.workspace_dir, "media", "videos", script_stem)
-            if not os.path.isdir(media_videos):
-                return None
+        """Locate the newest output for *script_name*/*scene_name* on disk.
 
-            candidates = []
-            for root, _dirs, files in os.walk(media_videos):
-                if "partial_movie_files" in root.replace("\\", "/").split("/"):
-                    continue
-                for f in files:
-                    if not f.lower().endswith((".mp4", ".gif", ".webm", ".mov")):
-                        continue
-                    if scene_name and os.path.splitext(f)[0] != scene_name:
-                        continue
-                    full = os.path.join(root, f)
-                    try:
-                        mtime = os.path.getmtime(full)
-                    except OSError:
-                        continue
-                    candidates.append((mtime, full))
-
-            if not candidates:
-                return None
-            candidates.sort(key=lambda t: t[0], reverse=True)
-            return candidates[0][1]
-        except Exception:
-            return None
+        Used when the "File ready at" line could not be parsed from stdout.
+        Videos are preferred; static scenes (no animations) produce an image instead.
+        """
+        script_stem = os.path.splitext(script_name)[0]
+        media_dir = os.path.join(self.workspace_dir, "media")
+        for subdir, extensions in (("videos", VIDEO_EXTENSIONS), ("images", IMAGE_EXTENSIONS)):
+            root_dir = os.path.join(media_dir, subdir, script_stem)
+            latest = self._newest_matching_file(root_dir, scene_name, extensions)
+            if latest:
+                return latest
+        return None
 
     @staticmethod
-    def _to_media_rel_path(abs_path: str) -> str:
-        """Convert an absolute file path into a path that starts with 'media/...'
-        so it can be served by the FastAPI /media static mount."""
-        normalized = abs_path.replace("\\", "/")
-        idx = normalized.rfind("/media/")
-        if idx >= 0:
-            return "media" + normalized[idx + len("/media"):]
-        if normalized.startswith("media/"):
-            return normalized
-        return os.path.basename(abs_path)
+    def _newest_matching_file(root_dir: str, scene_name: str, extensions):
+        if not os.path.isdir(root_dir):
+            return None
+        candidates = []
+        try:
+            for root, _dirs, files in os.walk(root_dir):
+                if "partial_movie_files" in root.replace("\\", "/").split("/"):
+                    continue
+                for name in files:
+                    if not name.lower().endswith(extensions):
+                        continue
+                    stem = os.path.splitext(name)[0]
+                    # Images are saved as "<Scene>_ManimCE_v<version>.png".
+                    if scene_name and stem != scene_name and not stem.startswith(f"{scene_name}_ManimCE_"):
+                        continue
+                    full_path = os.path.join(root, name)
+                    try:
+                        candidates.append((os.path.getmtime(full_path), full_path))
+                    except OSError:
+                        continue
+        except OSError:
+            return None
+        if not candidates:
+            return None
+        return max(candidates)[1]
 
+    _to_media_rel_path = staticmethod(media_rel_path)
 
-    async def execute(self, manim_path: str, script_name: str, scene_name: str, quality: str, use_opengl: bool, log_callback):
+    @staticmethod
+    def build_args(script_name, scene_name, quality, use_opengl):
+        """Manim CLI arguments (everything after the executable)."""
+        args = [script_name, scene_name, f"-q{quality}" if quality in ("l", "m", "h", "k") else "-qm"]
+        if use_opengl:
+            # Write to a file instead of opening an interactive preview window.
+            args += ["--renderer=opengl", "--write_to_movie"]
+        args.append("--progress_bar=display")
+        return args
+
+    def _subprocess_env(self):
+        env = os.environ.copy()
+        env["COLUMNS"] = SUBPROCESS_COLUMNS
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"
+        # Manim imports the scene file; don't litter the workspace with __pycache__.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return env
+
+    async def _emit_file_ready(self, abs_path: str, log_callback):
+        rel_path = media_rel_path(abs_path)
+        filename = os.path.basename(abs_path)
+        self._last_file_ready = (rel_path, filename, abs_path)
+        await log_callback({
+            "type": "file_ready",
+            "abs_path": abs_path,
+            "rel_path": rel_path,
+            "filename": filename,
+            "kind": output_kind(abs_path),
+        })
+
+    async def execute(self, manim_path, script_name: str, scene_name: str, quality: str, use_opengl: bool, log_callback):
+        """Render *scene_name* from *script_name* and stream events to *log_callback*.
+
+        *manim_path* is the manim executable, or an argv prefix such as
+        ``[sys.executable, "-m", "manim"]``. Quality is one of l, m, h, k.
         """
-        Executes the manim command in a subprocess, parsing output and streaming logs/progress.
-        
-        quality options: 'l' (low), 'm' (medium), 'h' (high), 'k' (4k)
-        """
-        if self.current_process and self.current_process.returncode is None:
+        if self.is_running:
             await self.cancel()
 
         self._cancelled = False
-        self.current_process = None
+        self._executing = True
+        self._cancel_pending = False
         self._last_file_ready = None
+        self._latex_warned = False
+        self._last_progress = None
+        self.current_process = None
 
-        # Build command list
-        # Ensure we run using the absolute paths and right flags
-        cmd = [manim_path, script_name, scene_name]
-        
-        # Quality flags
-        if quality in ["l", "m", "h", "k"]:
-            cmd.append(f"-q{quality}")
+        prefix = list(manim_path) if isinstance(manim_path, (list, tuple)) else [manim_path]
+        args = self.build_args(script_name, scene_name, quality, use_opengl)
+        cmd = prefix + args
+        await log_callback({"type": "info", "message": f"$ manim {' '.join(args)}"})
+
+        popen_kwargs = {
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "cwd": self.workspace_dir,
+            "env": self._subprocess_env(),
+        }
+        if platform.system() == "Windows":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         else:
-            cmd.append("-qm") # default medium
+            # New session so cancel() can signal the whole process group (ffmpeg children).
+            popen_kwargs["start_new_session"] = True
 
-        # OpenGL renderer flag
-        if use_opengl:
-            cmd.append("--renderer=opengl")
-            # In OpenGL mode, prevent opening interactive window and force writing to file
-            cmd.append("--write_to_movie")
-        
-        # We always want it to output progress bar to stdout
-        cmd.append("--progress_bar=display")
-
-        await log_callback({"type": "info", "message": f"Starting command: {' '.join(cmd)}"})
-
+        process = None
         try:
-            # Run the command asynchronously
-            # We set stdout and stderr to PIPE so we can read them
-            popen_kwargs = {
-                "stdout": asyncio.subprocess.PIPE,
-                "stderr": asyncio.subprocess.PIPE,
-                "cwd": self.workspace_dir,
-            }
-            if platform.system() == "Windows":
-                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-            else:
-                # New session so cancel() can signal the whole process group (ffmpeg children).
-                popen_kwargs["start_new_session"] = True
+            process = await asyncio.create_subprocess_exec(*cmd, **popen_kwargs)
+            self.current_process = process
+            if self._cancel_pending:
+                # cancel() arrived while the process was being spawned.
+                await self.cancel()
 
-            self.current_process = await asyncio.create_subprocess_exec(
-                *cmd,
-                **popen_kwargs,
+            readers = asyncio.gather(
+                self._read_stream(process.stdout, "stdout", log_callback),
+                self._read_stream(process.stderr, "stderr", log_callback),
             )
-
-            # We create two tasks to read stdout and stderr concurrently
-            stdout_task = asyncio.create_task(self._read_stream(self.current_process.stdout, "stdout", log_callback))
-            stderr_task = asyncio.create_task(self._read_stream(self.current_process.stderr, "stderr", log_callback))
-
             try:
-                await asyncio.wait_for(
-                    asyncio.gather(stdout_task, stderr_task),
-                    timeout=self.render_timeout,
-                )
+                await asyncio.wait_for(readers, timeout=self.render_timeout)
             except asyncio.TimeoutError:
                 await log_callback({
                     "type": "error",
                     "message": f"Rendering timed out after {self.render_timeout:.0f}s.",
                 })
                 await self.cancel()
-                # Drain reader tasks so they do not linger after kill
-                for task in (stdout_task, stderr_task):
-                    if not task.done():
-                        task.cancel()
-                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-                if self.current_process is not None:
-                    try:
-                        await asyncio.wait_for(self.current_process.wait(), timeout=5)
-                    except Exception:
-                        pass
-                    self.current_process = None
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except Exception:
+                    pass
                 return {"success": False, "status": "timeout", "timeout": self.render_timeout}
 
-            # Wait for exit code
-            exit_code = await self.current_process.wait()
-            self.current_process = None
+            exit_code = await process.wait()
 
             if self._cancelled:
-                await log_callback({"type": "status", "status": "cancelled", "message": "Rendering was cancelled by user."})
+                await log_callback({"type": "status", "status": "cancelled", "message": "Rendering was cancelled."})
                 return {"success": False, "status": "cancelled"}
 
-            if exit_code == 0:
-                # If the rich-wrapped 'File ready at' line was never parsed (path wraps
-                # across multiple lines), fall back to scanning the media directory for
-                # the newest matching .mp4 file. Only emit a single file_ready event.
-                if not self._last_file_ready:
-                    latest = self._find_latest_render(script_name, scene_name)
-                    if latest:
-                        rel_path = self._to_media_rel_path(latest)
-                        filename = os.path.basename(latest)
-                        self._last_file_ready = (rel_path, filename, latest)
-                        await log_callback({
-                            "type": "file_ready",
-                            "abs_path": latest,
-                            "rel_path": rel_path,
-                            "filename": filename,
-                        })
-
-                await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
-                return {"success": True, "status": "success"}
-            else:
-                await log_callback({"type": "status", "status": "failed", "message": f"Rendering failed with exit code {exit_code}."})
+            if exit_code != 0:
+                await log_callback({
+                    "type": "status",
+                    "status": "failed",
+                    "message": f"Manim exited with code {exit_code}.",
+                })
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
-        except Exception as e:
-            if self.current_process and self.current_process.returncode is None:
+            if not self._last_file_ready:
+                latest = self._find_latest_render(script_name, scene_name)
+                if latest:
+                    await self._emit_file_ready(latest, log_callback)
+
+            await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
+            return {"success": True, "status": "success"}
+
+        except Exception as exc:
+            if process is not None and process.returncode is None:
                 await self.cancel()
-            await log_callback({"type": "error", "message": f"Executor error: {str(e)}"})
-            return {"success": False, "status": "error", "error": str(e)}
+            await log_callback({"type": "error", "message": f"Executor error: {exc}"})
+            return {"success": False, "status": "error", "error": str(exc)}
+        finally:
+            self._executing = False
+            self._cancel_pending = False
+            if self.current_process is process:
+                self.current_process = None
 
     async def cancel(self):
-        """Cancels the active rendering process, killing it and all child processes recursively."""
-        if self.current_process and self.current_process.returncode is None:
-            self._cancelled = True
-            pid = self.current_process.pid
-            try:
-                if platform.system() == "Windows":
-                    # On Windows, kill the process tree (/T) forcefully (/F) with CREATE_NO_WINDOW
-                    kwargs = {}
-                    if hasattr(subprocess, "CREATE_NO_WINDOW"):
-                        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                    subprocess.run(
-                        ["taskkill", "/F", "/T", "/PID", str(pid)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        **kwargs,
-                    )
-                else:
+        """Stop the active render, including ffmpeg and other child processes."""
+        process = self.current_process
+        if process is None or process.returncode is not None:
+            if self._executing:
+                self._cancel_pending = True
+            return
+        self._cancelled = True
+        pid = process.pid
+        try:
+            if platform.system() == "Windows":
+                kwargs = {}
+                if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    **kwargs,
+                )
+            else:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except (ProcessLookupError, OSError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=2)
+                except (asyncio.TimeoutError, ProcessLookupError, OSError):
                     try:
-                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
                     except (ProcessLookupError, OSError):
-                        self.current_process.terminate()
-                    try:
-                        await asyncio.wait_for(self.current_process.wait(), timeout=2)
-                    except (asyncio.TimeoutError, ProcessLookupError, OSError):
-                        try:
-                            os.killpg(os.getpgid(pid), signal.SIGKILL)
-                        except (ProcessLookupError, OSError):
-                            self.current_process.kill()
-            except Exception:
-                pass
-            finally:
-                # Drop the handle once we have signalled the process so a new
-                # execute() cannot race on a half-dead Process object.
+                        process.kill()
+        except Exception:
+            pass
+        finally:
+            # Drop the handle so a new execute() cannot race on a half-dead process.
+            if self.current_process is process:
                 self.current_process = None
 
     async def _read_stream(self, stream, stream_name, log_callback):
-        """Asynchronously reads a stream line-by-line and extracts progress/errors."""
+        """Read *stream* in chunks, splitting on both ``\\n`` and ``\\r``.
+
+        tqdm redraws its progress bar with carriage returns and no newline, so a
+        line-based reader would only see progress once an animation finished (and
+        could hit StreamReader's 64 KiB line limit on long renders).
+        """
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        pending = ""
         while True:
-            line_bytes = await stream.readline()
-            if not line_bytes:
+            chunk = await stream.read(READ_CHUNK_BYTES)
+            if not chunk:
                 break
+            pending += decoder.decode(chunk)
+            *lines, pending = LINE_SPLIT_PATTERN.split(pending)
+            for line in lines:
+                await self._handle_line(line, stream_name, log_callback)
+            if len(pending) > MAX_PENDING_LINE_CHARS:
+                await self._handle_line(pending, stream_name, log_callback)
+                pending = ""
+        pending += decoder.decode(b"", final=True)
+        if pending:
+            await self._handle_line(pending, stream_name, log_callback)
 
-            # Decode line with fallback
-            try:
-                line = line_bytes.decode("utf-8")
-            except UnicodeDecodeError:
-                line = line_bytes.decode("latin-1", errors="replace")
+    async def _handle_line(self, raw_line: str, stream_name: str, log_callback):
+        line = ANSI_PATTERN.sub("", raw_line).rstrip()
+        if not line.strip():
+            return
 
-            clean_line = line.rstrip()
-            if not clean_line:
-                continue
+        bar = TQDM_PATTERN.search(line.strip())
+        if bar:
+            await self._emit_progress(int(bar.group("percent")), bar.group("label"), log_callback)
+            return
 
-            # Stream raw line to console log
-            await log_callback({"type": "log", "stream": stream_name, "message": clean_line})
+        line = RICH_SOURCE_COLUMN.sub("", line)
+        if RICH_LEVEL_ONLY.match(line.strip()):
+            # The first row of a multi-line message; the text follows on the next rows.
+            return
 
-            # Check for progress
-            progress_matches = PROGRESS_PATTERN.findall(clean_line)
-            if progress_matches:
-                # Group matches from regex alternation: find the first non-empty group
-                last_match = progress_matches[-1]
-                val_str = last_match[0] or last_match[1] if isinstance(last_match, tuple) else last_match
-                if val_str and val_str.isdigit():
-                    percent = int(val_str)
-                    await log_callback({"type": "progress", "percent": percent, "line": clean_line})
+        await log_callback({"type": "log", "stream": stream_name, "message": line})
 
-            # Check for file path (output video)
-            file_match = FILE_PATTERN.search(clean_line)
-            if file_match:
-                video_path = file_match.group(1)
-                if video_path:
-                    # Strip leftover quote/whitespace before checking the extension
-                    video_path = video_path.strip().strip("'\"")
-                    if video_path.lower().endswith((".mp4", ".gif", ".webm", ".mov")):
-                        abs_video_path = os.path.abspath(
-                            os.path.join(self.workspace_dir, video_path)
-                        )
-                        filename = os.path.basename(abs_video_path)
-                        media_rel_path = self._to_media_rel_path(abs_video_path)
+        bracket = BRACKET_PROGRESS_PATTERN.search(line)
+        if bracket:
+            await self._emit_progress(int(bracket.group(1)), None, log_callback)
 
-                        await log_callback({
-                            "type": "file_ready",
-                            "abs_path": abs_video_path,
-                            "rel_path": media_rel_path,
-                            "filename": filename,
-                        })
-                        self._last_file_ready = (media_rel_path, filename, abs_video_path)
+        file_match = FILE_READY_PATTERN.search(line)
+        if file_match:
+            video_path = (file_match.group("single") or file_match.group("double") or file_match.group("bare") or "").strip()
+            if video_path.lower().endswith(OUTPUT_EXTENSIONS):
+                abs_path = os.path.abspath(os.path.join(self.workspace_dir, video_path))
+                await self._emit_file_ready(abs_path, log_callback)
 
-            # Check for LaTeX specific errors to give user helpful hints
-            if LATEX_PATTERN.search(clean_line) and ("error" in clean_line.lower() or "fail" in clean_line.lower() or "not found" in clean_line.lower()):
-                await log_callback({
-                    "type": "latex_error_warning",
-                    "message": "It looks like LaTeX rendering failed. If LaTeX is not installed or dvisvgm is missing, please replace MathTex elements with standard Text, or download MiKTeX/TeX Live."
-                })
+        if not self._latex_warned and LATEX_PATTERN.search(line) and FAILURE_PATTERN.search(line):
+            self._latex_warned = True
+            await log_callback({"type": "latex_error_warning", "message": LATEX_HINT})
 
+    async def _emit_progress(self, percent: int, label, log_callback):
+        percent = max(0, min(100, percent))
+        event = {"type": "progress", "percent": percent}
+        animation = ANIMATION_LABEL_PATTERN.match(label.strip()) if label else None
+        if animation:
+            event["animation"] = int(animation.group("index"))
+            event["label"] = animation.group("name").strip()
+        key = (event.get("animation"), percent)
+        if key == self._last_progress:
+            return
+        self._last_progress = key
+        await log_callback(event)

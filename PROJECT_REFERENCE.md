@@ -1,142 +1,149 @@
-# Technical Project Reference
+# Technical reference
 
-This document provides a detailed technical reference for the Manim Composer system. It explains the system architecture, API endpoints, backend modules, and frontend state management.
+How Manim Composer is put together: the backend modules, the REST API, the render WebSocket protocol, and the
+frontend architecture.
 
----
-
-## 1. System Architecture
-
-The application is structured as a decoupled full-stack project running locally:
+## Architecture
 
 ```mermaid
-graph TD
-    Client[React Frontend / Browser] -->|REST Calls / Save / Rename| API[FastAPI Server]
-    Client -->|WebSocket Connection| WS[WebSocket Render Endpoint]
-    WS -->|Spawns Subprocess| Sub[Manim CE Process]
-    Sub -->|Regex Stdout Stream| WS
-    WS -->|Real-Time Logs & Progress| Client
-    API -->|Inspects Hardware| Diag[Diagnostics Utility]
+graph LR
+    UI[React app] -- REST: files, save, parse, diagnostics --> API[FastAPI]
+    UI -- WebSocket /api/render --> WS[Render session]
+    WS -- spawns --> M[manim subprocess]
+    M -- stdout / stderr --> EX[ManimExecutor]
+    EX -- log, progress, file_ready events --> WS
+    API -- serves --> Media[workspace/media]
 ```
 
-- **Frontend**: A React 19 SPA bundled with Vite, styled with Tailwind CSS v4, utilizing Monaco Editor for script management and KaTeX for real-time mathematical equation visualization.
-- **Backend**: A FastAPI server running on Uvicorn that acts as a process supervisor, file coordinator, and system hardware profiling engine.
+One process serves everything: the built frontend (`frontend/dist`), the API under `/api`, rendered output under
+`/media`, and uploads under `/assets`. In development, the Vite dev server proxies those paths to the backend.
 
----
+## Backend (`backend/`)
 
-## 2. Backend Modules & Reference
+| Module               | Responsibility |
+| -------------------- | -------------- |
+| `main.py`            | Routes, the render WebSocket, temp-render bookkeeping, startup (directory creation, stale temp cleanup, `manim.cfg`). |
+| `executor.py`        | `ManimExecutor` runs one Manim process, reads stdout/stderr in chunks (splitting on `\n` and `\r` so tqdm progress streams live), and turns lines into events. Cancels the whole process tree (`killpg` / `taskkill /T`). |
+| `scene_parser.py`    | AST analysis: module-level `Scene` subclasses (including subclasses of scenes in the same file) and each scene's `self.play()` / `self.wait()` calls. Results are cached. |
+| `origins.py`         | Origin and Host policy for HTTP and WebSocket requests (see [Security](#security)). |
+| `diagnostics.py`     | CPU/RAM/GPU detection (cached for 5 minutes), dependency lookup (never cached), render profile, and `workspace/manim.cfg`. |
+| `workspace_paths.py` | `safe_basename` / `safe_join`: reject traversal, absolute paths, and Windows device names. |
 
-### A. Core Application Server (`backend/main.py`)
-Responsible for routing, mounting static directories (`/media` and `/assets`), managing process lifecycles, and checking AST representations of scripts.
-- **AST Parsing**: The backend utilizes the native Python `ast` module to read script code and return all scenes defined in the file (scanning for inherits/names) so they can be selected in the sidebar drop-down.
+Manim runs with `COLUMNS=400` (so Rich doesn't wrap output paths), `PYTHONIOENCODING=utf-8`, `PYTHONUNBUFFERED=1`, and
+`PYTHONDONTWRITEBYTECODE=1`. If `manim` isn't on `PATH` but the package is importable, the server runs
+`python -m manim` instead.
 
-### B. Hardware & Environment Profiler (`backend/diagnostics.py`)
-Inspects host hardware configurations to select rendering presets:
-- **CPU**: Detects core and logical thread counts.
-- **RAM**: Queries virtual memory totals.
-- **GPU**: Uses `nvidia-smi` and PowerShell controllers to locate graphics models and VRAM limits.
-- **Dependencies**: Locates local path executables (`manim`, `ffmpeg`, `latex`, `dvisvgm`).
-- **Profiles**:
-  - `eco`: Low quality (480p 15fps), aggressive caching, recommended threads count = 1.
-  - `balanced`: Medium quality (720p 30fps), standard settings.
-  - `workstation`: High quality (1080p 60fps), multithreaded FFMPEG encoding defaults.
-- **Dynamic Config**: Automatically generates a custom `manim.cfg` file inside the workspace folder on backend startup to optimize output directories and thread limits.
+### Render profiles
 
-### C. Subprocess Supervisor (`backend/executor.py`)
-Executes the Manim command array:
-```bash
-manim <script_name> <scene_name> -q<quality> --progress_bar=display
-```
-- **Real-Time Stream Parsing**: Spawns an asynchronous process using `asyncio.create_subprocess_exec`. Concurrently reads stdout/stderr streams line-by-line, parsing progress percentages `[\s*(\d+)%]` and file output markers `File ready at\s+'([^']+)'`.
-- **Process Trees Control**: On cancellation requests, it executes system-level process group terminations (`taskkill /F /T /PID` on Windows) to terminate the python compiler and its child renderers forcefully.
+| Profile       | Chosen when                         | Default quality |
+| ------------- | ----------------------------------- | --------------- |
+| `eco`         | < 4 threads, < 6 GB RAM, or a container | 480p15 |
+| `balanced`    | ≤ 8 threads and ≤ 16 GB RAM          | 720p30 |
+| `workstation` | anything bigger                      | 1080p60 |
 
----
+The profile only sets the default quality in the UI; renders always pass an explicit `-q` flag.
 
-## 3. REST API Endpoint Reference
+## REST API
 
-### `GET /api/diagnostics`
-Returns system profiling settings and dependency statuses.
-- **Response Format**:
-  ```json
-  {
-    "profile": "workstation",
-    "description": "High performance workstation...",
-    "preview_quality": "1080p60",
-    "default_fps": 60,
-    "default_resolution": "1920x1080",
-    "recommended_threads": 15,
-    "opengl_supported": true,
-    "hardware": { ... },
-    "dependencies": {
-      "manim": "C:\\tools\\Manim\\Scripts\\manim.EXE",
-      "ffmpeg": "C:\\...",
-      "latex": "Not Found",
-      "dvisvgm": "Not Found",
-      "latex_available": false
-    }
-  }
-  ```
+All endpoints return JSON. Errors use FastAPI's `{"detail": "..."}` shape.
 
-### `GET /api/files`
-Scans and lists active workspace assets: scripts (`*.py`), asset imports (`*.svg`, `*.mp3`, etc.), and rendered video outputs (`*.mp4`, `*.webm`).
+| Method & path | Body / query | Returns |
+| ------------- | ------------ | ------- |
+| `GET /api/health` (`/api/status`) | — | `{status, service, version}` |
+| `GET /api/diagnostics` | — | Profile, hardware, `platform`, `python_version`, and `dependencies` (`manim`, `ffmpeg`, `latex`, `dvisvgm` paths or `"Not Found"`, plus `latex_available`). |
+| `GET /api/files` | — | `{scripts, assets, media}`. Seeds `example.py` if the workspace has no scripts. Media items: `name, size, type ("video"\|"image"), url, path, script, scene, quality, modified`, newest first. |
+| `GET /api/file-content` | `?filename=` | `{filename, code, scenes, animations}` |
+| `POST /api/parse-code` | `{code}` | `{scenes, animations}` without touching disk |
+| `POST /api/save` | `{filename, code}` | `{filename, scenes, animations}` (adds `.py` if missing) |
+| `POST /api/rename` | `{old_name, new_name}` | `{old_name, new_name}`; handles case-only renames |
+| `DELETE /api/scripts` | `?filename=` | Deletes a script |
+| `POST /api/upload-asset` | multipart `file` | `{filename, url}`; images, SVG, audio, and fonts up to 50 MB |
+| `DELETE /api/assets` | `?filename=` | Deletes an upload |
+| `DELETE /api/media` | `?path=` (relative to `workspace/media`) | Deletes a render and its cached chunks |
+| `GET /api/download-temp` | `?path=` | Serves a download-only render once, then deletes it |
+| `POST /api/install-manim` \| `-latex` \| `-ffmpeg` | — | Starts `pip install manim` or a `winget` install in the background. Refused (403) in containers or with `MANIM_ALLOW_INSTALLS=0`. |
 
-### `GET /api/file-content?filename=<name>`
-Reads file code and returns parsed AST Scene classes.
+`animations` maps scene names to steps: `{type: "play" | "wait", label, line, duration?}`. `duration` is a number of
+seconds when it is a literal, otherwise the expression's source text.
 
-### `POST /api/save`
-Saves user edits from Monaco editor.
-- **Request Body**: `{ "filename": "example.py", "code": "..." }`
+## Render WebSocket: `/api/render`
 
-### `POST /api/rename`
-Renames an existing python script.
-- **Request Body**: `{ "old_name": "example.py", "new_name": "new_name.py" }`
+Each connection has its own executor, so tabs never interfere. All frames are JSON.
 
-### `POST /api/upload-asset`
-Accepts `multipart/form-data` uploads and writes assets to `workspace/assets/`.
+### Client → server
 
-### `POST /api/install-latex`
-Spawns background subprocess `winget install --id MikTeX.MiKTeX --silent --accept-source-agreements --accept-package-agreements` to set up LaTeX tools on Windows.
-
----
-
-## 4. WebSocket Rendering Protocol
-
-Clients connect to `ws://localhost:8000/api/render`. Communication utilizes JSON frames:
-
-### Client to Server Messages
-
-#### Start Render
 ```json
-{
-  "type": "start",
-  "filename": "example.py",
-  "scene": "SquareToCircle",
-  "quality": "m",
-  "use_opengl": false
-}
+{ "type": "start", "id": "c0ffee", "filename": "example.py", "scene": "Intro",
+  "quality": "m", "use_opengl": false, "download_only": false, "code": "..." }
 ```
 
-#### Cancel Render
+- `quality` is one of `l`, `m`, `h`, `k`.
+- `code` is optional. When present (unsaved buffer or browser storage) the server renders a scratch copy named
+  `_temp_run_<hex>.py`, rewrites that name to `filename` in logs and tracebacks, and moves the output into the
+  script's own media folder afterwards.
+- `download_only` renders to a scratch folder and returns a one-time `/api/download-temp` URL.
+- A new `start` while a render is running cancels the old one.
+
 ```json
-{
-  "type": "cancel"
-}
+{ "type": "cancel" }
 ```
 
-### Server to Client Messages
+### Server → client
 
-- **`log`**: Raw terminal lines. `{ "type": "log", "stream": "stdout/stderr", "message": "..." }`
-- **`progress`**: Render percentage. `{ "type": "progress", "percent": 45 }`
-- **`file_ready`**: Video compiled successfully. `{ "type": "file_ready", "filename": "SquareToCircle.mp4", "rel_path": "media/videos/..." }`
-- **`result`**: End of rendering state. `{ "type": "result", "success": true, "status": "success" }`
+Every event produced for a render carries `render_id` (the `id` from `start`). Clients should ignore events whose
+`render_id` doesn't match the render they're waiting for.
 
----
+| `type` | Fields | Meaning |
+| ------ | ------ | ------- |
+| `info` | `message` | Lifecycle notes. The first is the command line, prefixed with `$ `. |
+| `log` | `stream` (`stdout`/`stderr`), `message` | One line of Manim output, with Rich's source-location column removed. |
+| `progress` | `percent`, `animation?`, `label?` | Progress of the current animation (`animation` is the zero-based play/wait index). |
+| `file_ready` | `url`, `rel_path`, `filename`, `kind` (`video`/`image`), `is_temp_download?` | The output file. |
+| `latex_error_warning` | `message` | LaTeX seems missing or broken (sent at most once per render). |
+| `status` | `status`, `message` | `success`, `failed`, or `cancelled`. |
+| `error` | `message` | A problem. If it carries a `render_id`, a `result` follows. |
+| `result` | `success`, `status`, `details` | Always the last event of a render. `status` is `success`, `failed`, `cancelled`, `timeout`, `error`, or `rejected` (invalid request). |
 
-## 5. Frontend Architecture & State
+Every `start` receives exactly one `result`.
 
-### State Management
-All layout, active connections, files, and previews are driven by React hooks in `frontend/src/App.tsx`:
-- **`autoRender`**: Flag to enable auto-render.
-- **`autoRenderTimeoutRef`**: Tracks the debounced timer. Resets on Monaco editor typing. Spawns rendering processes after 2000ms from the last keystroke.
-- **`startRenderRef`**: Synchronized callback reference to prevent stale closure loops inside debounced timeouts.
-- **`renamingFile` / `renameValue`**: Manages inline double-click text field toggles inside the script file browser tab.
-- **`savedPath`**: Displays the active workspace file directory under the Live Video Preview block.
+## Security
+
+The server executes arbitrary Python, so it has to make sure only the user's own pages can drive it:
+
+- **Origin:** HTTP requests and WebSocket handshakes that carry an `Origin` header are accepted only from loopback
+  origins (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`, any port), the server's own origin when it is addressed
+  by IP (LAN use), or origins in `MANIM_ALLOWED_ORIGINS`. Requests without an `Origin` (curl, scripts) pass this check.
+  CORS headers are granted by the same policy.
+- **Host:** the `Host` header must be a loopback name, an IP address, or the host of an allowed origin. This blocks
+  DNS rebinding, where a hostile domain resolves to `127.0.0.1` and then makes same-origin requests without `Origin`.
+- File names go through `safe_basename` / `safe_join`; media deletion is limited to `videos/` and `images/`.
+- Rendered output never includes host absolute paths (`abs_path` is stripped before events are sent).
+
+## Frontend (`frontend/src/`)
+
+| Path | Contents |
+| ---- | -------- |
+| `App.tsx` | Composes the layout and wires hooks to components; owns render orchestration (save → parse → start), auto-render, shortcuts, and dialogs. |
+| `hooks/useWorkspace.ts` | Files, the editor buffer, per-file unsaved drafts, debounced scene parsing, and file operations for both storage modes. |
+| `hooks/useRenderSession.ts` | The render WebSocket: reconnect with backoff, queued start while connecting (8 s timeout), `render_id` filtering. |
+| `hooks/useDiagnostics.ts` | Server reachability, the hardware profile, and installer polling. |
+| `hooks/useLogs.ts` | Console buffer that commits once per animation frame (Manim can print hundreds of lines a second). |
+| `components/` | `layout/` (top bar, activity bar, status bar), `editor/`, `preview/`, `console/`, `sidebar/` panels, `dialogs/`, and `ui/` primitives built on Radix. |
+| `lib/` | API client, types, templates, shape-builder code generator, formatting, log line references, localStorage helpers, and the trimmed Monaco build (`monacoCore.ts`). |
+| `index.css` | Design tokens (`@theme`): surfaces, text, Manim BLUE accent, and Manim GREEN/GOLD/RED for status. |
+
+Monaco and the LaTeX panel (KaTeX) are lazy-loaded, so the initial bundle stays around 170 KB gzipped.
+
+### Preferences (localStorage)
+
+Keys are prefixed `mc.`: storage mode, quality, save-before-render, download-only, OpenGL, auto-render, loop preview,
+editor font size, the open sidebar view, the last open file per storage mode, the selected scene per file, and
+browser-stored scripts. Pane sizes are remembered by `react-resizable-panels`. Keys from earlier versions are migrated
+on first read.
+
+## Tests
+
+- `tests/` — pytest suite for the API, executor, parser, origin policy, paths, and diagnostics.
+  `test_e2e_real_render.py` drives real renders through the WebSocket and is skipped when Manim isn't installed.
+- `frontend/src/**/*.test.ts(x)` — Vitest + Testing Library. `src/test/` provides a fake backend (`fakeServer.ts`), a
+  scriptable WebSocket (`fakeSocket.ts`), and a textarea stand-in for Monaco (`fakeEditor.tsx`).

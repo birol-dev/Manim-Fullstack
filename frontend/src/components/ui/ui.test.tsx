@@ -2,7 +2,13 @@ import "@testing-library/jest-dom/vitest";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
+
 import { Button } from "./button";
+import { Field, Input, Textarea } from "./input";
+import { Callout, EmptyState, Kbd, Section } from "./panel";
+import { Segmented } from "./segmented";
+import { Switch } from "./switch";
 import { Progress } from "./progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "./tabs";
 import {
@@ -41,31 +47,27 @@ describe("UI Components", () => {
 
     it("renders all variants and sizes correctly", () => {
       const { rerender } = render(
-        <Button variant="destructive" size="sm">
-          Destructive Small
-        </Button>
+        <Button variant="danger" size="xs">
+          Danger
+        </Button>,
       );
-      expect(screen.getByRole("button")).toHaveClass("bg-destructive");
+      expect(screen.getByRole("button")).toHaveClass("bg-danger", "h-6");
+      expect(screen.getByRole("button")).toHaveAttribute("type", "button");
 
-      rerender(
-        <Button variant="outline" size="lg">
-          Outline Large
-        </Button>
-      );
-      expect(screen.getByRole("button")).toHaveClass("border");
+      rerender(<Button variant="primary" size="md">Primary</Button>);
+      expect(screen.getByRole("button")).toHaveClass("bg-accent", "h-8");
 
-      rerender(
-        <Button variant="secondary" size="icon">
-          Icon Secondary
-        </Button>
-      );
-      expect(screen.getByRole("button")).toHaveClass("bg-secondary");
+      rerender(<Button variant="ghost" size="icon">Icon</Button>);
+      expect(screen.getByRole("button")).toHaveClass("size-8");
 
-      rerender(<Button variant="ghost">Ghost</Button>);
-      expect(screen.getByRole("button")).toHaveClass("hover:bg-accent");
+      rerender(<Button variant="danger-ghost" size="icon-xs">x</Button>);
+      expect(screen.getByRole("button")).toHaveClass("hover:text-danger", "size-6");
 
-      rerender(<Button variant="link">Link</Button>);
-      expect(screen.getByRole("button")).toHaveClass("underline-offset-4");
+      rerender(<Button>Default</Button>);
+      expect(screen.getByRole("button")).toHaveClass("bg-raised", "h-7");
+
+      rerender(<Button type="submit">Submit</Button>);
+      expect(screen.getByRole("button")).toHaveAttribute("type", "submit");
     });
 
     it("supports asChild rendering", () => {
@@ -101,6 +103,12 @@ describe("UI Components", () => {
       expect(progressRoot).toHaveClass("custom-progress");
       const indicator = progressRoot.querySelector("div");
       expect(indicator).toHaveStyle({ transform: "translateX(-55%)" });
+      expect(indicator).not.toHaveClass("progress-stripes");
+    });
+
+    it("can show animated stripes", () => {
+      const { container } = render(<Progress value={10} striped />);
+      expect((container.firstChild as HTMLElement).querySelector("div")).toHaveClass("progress-stripes");
     });
 
     it("handles null/undefined value gracefully", () => {
@@ -152,7 +160,7 @@ describe("UI Components", () => {
             <div>Body Content</div>
             <DialogFooter>
               <DialogClose asChild>
-                <Button variant="outline">Cancel</Button>
+                <Button variant="ghost">Cancel</Button>
               </DialogClose>
             </DialogFooter>
           </DialogContent>
@@ -205,6 +213,90 @@ describe("UI Components", () => {
 
       await user.click(screen.getByRole("option", { name: "Banana" }));
       expect(trigger).toHaveTextContent("Banana");
+    });
+  });
+
+  describe("Switch", () => {
+    it("toggles and reflects aria-checked", async () => {
+      const user = userEvent.setup();
+      function Harness() {
+        const [on, setOn] = useState(false);
+        return <Switch checked={on} onCheckedChange={setOn} aria-label="Loop" />;
+      }
+      render(<Harness />);
+      const toggle = screen.getByRole("switch", { name: "Loop" });
+      expect(toggle).toHaveAttribute("aria-checked", "false");
+      await user.click(toggle);
+      expect(toggle).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("does nothing when disabled", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(<Switch checked={false} onCheckedChange={onChange} disabled aria-label="Off" />);
+      await user.click(screen.getByRole("switch"));
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Segmented", () => {
+    it("selects options as radios", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <Segmented
+          aria-label="Storage"
+          value="a"
+          onChange={onChange}
+          options={[
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ]}
+        />,
+      );
+      expect(screen.getByRole("radiogroup", { name: "Storage" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Alpha" })).toHaveAttribute("aria-checked", "true");
+      await user.click(screen.getByRole("radio", { name: "Beta" }));
+      expect(onChange).toHaveBeenCalledWith("b");
+    });
+  });
+
+  describe("Field, Input, Textarea", () => {
+    it("labels controls and shows hints or errors", () => {
+      const { rerender } = render(
+        <Field label="Name" htmlFor="name" hint="Lowercase works best">
+          <Input id="name" />
+        </Field>,
+      );
+      expect(screen.getByLabelText("Name")).toBeInTheDocument();
+      expect(screen.getByText("Lowercase works best")).toBeInTheDocument();
+
+      rerender(
+        <Field label="Notes" htmlFor="notes" hint="ignored" error="Too long">
+          <Textarea id="notes" />
+        </Field>,
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent("Too long");
+      expect(screen.queryByText("ignored")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Panel helpers", () => {
+    it("renders sections, empty states, callouts, and keys", () => {
+      render(
+        <>
+          <Section title="Scripts" actions={<button>Add</button>}>
+            <p>content</p>
+          </Section>
+          <EmptyState title="Nothing here" description="Add something" action={<button>Go</button>} />
+          <Callout tone="danger">Broken</Callout>
+          <Kbd>Ctrl</Kbd>
+        </>,
+      );
+      expect(screen.getByRole("heading", { name: "Scripts" })).toBeInTheDocument();
+      expect(screen.getByText("Nothing here")).toBeInTheDocument();
+      expect(screen.getByText("Broken").parentElement).toHaveClass("bg-danger-soft");
+      expect(screen.getByText("Ctrl").tagName).toBe("KBD");
     });
   });
 });
