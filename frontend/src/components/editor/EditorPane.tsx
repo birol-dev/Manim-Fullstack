@@ -1,0 +1,175 @@
+import { forwardRef, lazy, Suspense } from "react";
+import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/panel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip } from "@/components/ui/tooltip";
+import type { ActiveRender } from "@/hooks/useRenderSession";
+import { MOD_KEY, QUALITY_OPTIONS } from "@/lib/constants";
+import type { Quality } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import type { CodeEditorHandle } from "./types";
+
+const CodeEditor = lazy(() => import("./CodeEditor"));
+
+// Mobjects that are typeset with LaTeX under the hood.
+const USES_LATEX =
+  /\b(MathTex|Tex|SingleStringMathTex|BulletedList|Title|DecimalNumber|Integer|Variable|Matrix|MathTable)\s*\(|\badd_coordinates\s*\(|\binclude_numbers\s*=\s*True/;
+
+interface EditorPaneProps {
+  storageKey: string;
+  activeFile: string | null;
+  code: string;
+  isDirty: boolean;
+  scenes: string[];
+  selectedScene: string;
+  quality: Quality;
+  autoRender: boolean;
+  active: ActiveRender | null;
+  latexAvailable: boolean;
+  canRender: boolean;
+  fontSize: number;
+  onCodeChange: (code: string) => void;
+  onCursorChange: (position: { line: number; column: number }) => void;
+  onSceneChange: (scene: string) => void;
+  onQualityChange: (quality: Quality) => void;
+  onAutoRenderChange: (enabled: boolean) => void;
+  onSave: () => void;
+  onRender: () => void;
+  onCancel: () => void;
+  onNewFile: () => void;
+  onOpenSetup: () => void;
+}
+
+export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function EditorPane(props, ref) {
+  const { activeFile, code, isDirty, scenes, selectedScene, quality, active } = props;
+  const rendering = active !== null;
+  const qualityOption = QUALITY_OPTIONS.find((option) => option.value === quality);
+  const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
+
+  return (
+    <section aria-label="Editor" className="flex h-full min-h-0 flex-col bg-surface">
+      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line pl-1 pr-2">
+        <div className="flex h-full min-w-0 items-center">
+          {activeFile && (
+            <div className="relative flex h-full min-w-0 items-center gap-2 px-2.5 text-xs text-fg after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-surface">
+              <FileCode2 className="size-3.5 shrink-0 text-accent" />
+              <span className="truncate font-medium">{activeFile}</span>
+              {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
+            </div>
+          )}
+          <Tooltip content="Save" shortcut={`${MOD_KEY}+S`}>
+            <Button variant="ghost" size="icon-sm" aria-label="Save" disabled={!activeFile || !isDirty} onClick={props.onSave}>
+              <Save />
+            </Button>
+          </Tooltip>
+        </div>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <Tooltip content={props.autoRender ? "Auto-render on (renders when you pause typing)" : "Auto-render when you pause typing"}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Auto-render"
+              aria-pressed={props.autoRender}
+              onClick={() => props.onAutoRenderChange(!props.autoRender)}
+              className={cn(props.autoRender && "bg-accent-soft text-accent hover:bg-accent-soft hover:text-accent")}
+            >
+              <Zap />
+            </Button>
+          </Tooltip>
+
+          <Select value={selectedScene} onValueChange={props.onSceneChange} disabled={scenes.length === 0}>
+            <SelectTrigger aria-label="Scene" className="w-40">
+              <SelectValue placeholder={activeFile ? "No scenes found" : "Scene"} />
+            </SelectTrigger>
+            <SelectContent>
+              {scenes.map((scene) => (
+                <SelectItem key={scene} value={scene}>
+                  {scene}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
+            <SelectTrigger aria-label="Quality" className="w-[88px]">
+              <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent align="end">
+              {QUALITY_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  <span className="flex w-36 items-center justify-between gap-3">
+                    {option.label}
+                    <span className="text-2xs text-fg-subtle">{option.detail}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {rendering ? (
+            <Button variant="secondary" size="sm" onClick={props.onCancel} className="w-[92px]">
+              <Square className="fill-current" />
+              Cancel
+            </Button>
+          ) : (
+            <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`}>
+              <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender} className="w-[92px]">
+                <Play className="fill-current" />
+                Render
+              </Button>
+            </Tooltip>
+          )}
+        </div>
+      </div>
+
+      {needsLatexWarning && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-warning/20 bg-warning-soft px-3 py-1.5 text-xs text-fg-muted">
+          <AlertTriangle className="size-3.5 shrink-0 text-warning" />
+          <span className="min-w-0 flex-1">This scene uses LaTeX (MathTex, Tex, numbers on axes…), which isn't installed.</span>
+          <Button variant="ghost" size="xs" onClick={props.onOpenSetup} className="text-fg">
+            Set up LaTeX
+          </Button>
+        </div>
+      )}
+
+      <div className="relative min-h-0 flex-1">
+        {activeFile ? (
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center gap-2 text-xs text-fg-subtle">
+                <Loader2 className="size-4 animate-spin" /> Loading editor…
+              </div>
+            }
+          >
+            <CodeEditor
+              ref={ref}
+              path={`${props.storageKey}/${activeFile}`}
+              value={code}
+              fontSize={props.fontSize}
+              onChange={props.onCodeChange}
+              onCursorChange={props.onCursorChange}
+              onSave={props.onSave}
+              onRender={props.onRender}
+            />
+          </Suspense>
+        ) : (
+          <EmptyState
+            className="h-full"
+            icon={<FileCode2 />}
+            title="No script open"
+            description="Pick a script from the Files panel or start a new one."
+            action={
+              <Button size="sm" onClick={props.onNewFile}>
+                <FilePlus2 />
+                New script
+              </Button>
+            }
+          />
+        )}
+      </div>
+    </section>
+  );
+});
