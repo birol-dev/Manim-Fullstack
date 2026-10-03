@@ -820,8 +820,10 @@ async def websocket_render(websocket: WebSocket):
             outbound = dict(event)
             abs_path = outbound.pop("abs_path", None)  # never leak host paths to the client
             if temp_stem and isinstance(outbound.get("message"), str):
-                # Show the user's filename instead of the scratch copy in logs and tracebacks.
-                outbound["message"] = outbound["message"].replace(temp_stem, target_stem)
+                # Show the user's filename instead of the scratch copy in tracebacks. Media
+                # folder names are rewritten too when the output is moved there afterwards.
+                message = outbound["message"].replace(script_name, filename)
+                outbound["message"] = message.replace(temp_stem, target_stem) if relocate else message
 
             if outbound.get("type") == "file_ready" and abs_path:
                 if relocate:
