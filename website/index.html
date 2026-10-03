@@ -113,7 +113,7 @@
             "name": "How do I install Manim Composer?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Clone the Manim-Fullstack repository on GitHub, install Python backend dependencies with pip install -r backend/requirements.txt, start python backend/main.py, then in the frontend folder run npm install and npm run dev. You also need Manim CE, FFmpeg, and LaTeX for full equation rendering."
+              "text": "Clone the Manim-Fullstack repository on GitHub, install the Python dependencies (including Manim CE) with pip install -r backend/requirements.txt, then run python run.py. It builds the frontend on first launch and opens the app in your browser. LaTeX is optional and only needed for MathTex."
             }
           },
           {
@@ -129,7 +129,7 @@
             "name": "What dependencies do I need?",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Python, Node.js, Manim CE, FFmpeg, and LaTeX for full equation rendering. Diagnostics make missing pieces visible, and Windows users can trigger a MiKTeX install flow."
+              "text": "Python 3.9+, Node.js 18+, and Manim CE 0.19+. LaTeX is optional (for MathTex and numbered axes) and FFmpeg is only needed for scenes with sound. The setup dialog shows what is missing with install commands for your OS, and can install Manim, MiKTeX, and FFmpeg for you on Windows."
             }
           },
           {
@@ -223,7 +223,7 @@
           </div>
           <dl class="hero-metrics" aria-label="Product metrics">
             <div>
-              <dt>2 sec</dt>
+              <dt>1.5 sec</dt>
               <dd>Auto-render debounce after typing stops</dd>
             </div>
             <div>
@@ -368,7 +368,7 @@
           <article>
             <span>Input</span>
             <h3>Scene Code</h3>
-            <p>Monaco editor, snippets, inline save, scene class discovery.</p>
+            <p>Monaco editor, ready-to-render templates, unsaved drafts, live scene discovery.</p>
           </article>
           <article>
             <span>Math</span>
@@ -403,7 +403,7 @@
         <article class="feature-row">
           <div class="feature-kicker">02 / Diagnostics</div>
           <h3>Render presets based on the machine in front of you.</h3>
-          <p>CPU cores, RAM, GPU availability, FFmpeg, Manim, LaTeX, and dvisvgm checks feed practical profiles for eco previews, balanced drafts, or workstation output.</p>
+          <p>CPU cores, RAM, GPU availability, and Manim, LaTeX, dvisvgm, and FFmpeg checks feed practical profiles for eco previews, balanced drafts, or workstation output.</p>
         </article>
         <article class="feature-row">
           <div class="feature-kicker">03 / LaTeX relief</div>
@@ -474,7 +474,7 @@
         <article>
           <span>01</span>
           <h3>Sketch The Motion</h3>
-          <p>Start from a script or snippet, name the scene, and keep the first version intentionally small.</p>
+          <p>Start from a script or template, name the scene, and keep the first version intentionally small.</p>
         </article>
         <article>
           <span>02</span>
@@ -580,7 +580,7 @@
             </button>
           </h3>
           <div class="faq-panel">
-            <p>Clone the <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Manim-Fullstack</a> repository, run <code>pip install -r backend/requirements.txt</code>, start the backend with <code>python backend/main.py</code>, then in <code>frontend/</code> run <code>npm install</code> and <code>npm run dev</code>. You will also need Manim CE, FFmpeg, and LaTeX installed locally.</p>
+            <p>Clone the <a href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noopener noreferrer">Manim-Fullstack</a> repository, run <code>pip install -r backend/requirements.txt</code> (this installs Manim CE too), then start everything with <code>python run.py</code>. The first launch builds the frontend and opens the app in your browser.</p>
           </div>
         </article>
         <article class="faq-item">
@@ -602,7 +602,7 @@
             </button>
           </h3>
           <div class="faq-panel">
-            <p>Python, Node.js, Manim CE, FFmpeg, and LaTeX for full equation rendering. Diagnostics make missing pieces visible, and Windows users can trigger a MiKTeX install flow.</p>
+            <p>Python 3.9+, Node.js 18+, and Manim CE 0.19+. LaTeX is optional (for <span translate="no">MathTex</span> and numbered axes) and FFmpeg is only needed for scenes with sound. The setup dialog shows what is missing with install commands for your OS, and can install Manim, MiKTeX, and FFmpeg for you on Windows.</p>
           </div>
         </article>
         <article class="faq-item">
