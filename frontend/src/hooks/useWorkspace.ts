@@ -225,26 +225,38 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   const save = useCallback(async (): Promise<ParseResult> => {
     const name = activeFileRef.current;
     if (!name) throw new Error("No file is open.");
+    const mode = modeRef.current;
     const content = codeRef.current;
+    // The user may open another file while the request is in flight.
+    const stillOpen = () => modeRef.current === mode && activeFileRef.current === name;
 
-    if (modeRef.current === "browser") {
+    const markSaved = () => {
+      if (stillOpen()) {
+        savedCodeRef.current = content;
+        setSavedCode(content);
+        return;
+      }
+      // Switching away stashed the buffer as a draft; drop it if that's exactly what was saved.
+      const key = fileKey(mode, name);
+      if (draftsRef.current[key] === content) updateDrafts((all) => withoutKey(all, key));
+    };
+
+    if (mode === "browser") {
       const all = loadBrowserFiles();
       all[name] = content;
       if (!saveBrowserFiles(all)) throw new Error("Browser storage is full. Delete some scripts and try again.");
-      savedCodeRef.current = content;
-      setSavedCode(content);
+      markSaved();
       setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
       return (await parseNow()) ?? parsedRef.current;
     }
 
     const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content });
-    savedCodeRef.current = content;
-    setSavedCode(content);
+    markSaved();
     const result = { scenes: data.scenes, animations: data.animations };
-    applyParse(result, name, content);
+    if (stillOpen()) applyParse(result, name, content);
     void refreshFiles();
     return result;
-  }, [applyParse, parseNow, refreshFiles]);
+  }, [applyParse, parseNow, refreshFiles, updateDrafts]);
 
   const createFile = useCallback(
     async (name: string, content: string) => {

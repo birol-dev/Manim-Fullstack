@@ -75,6 +75,8 @@ export interface FakeServer {
   offline: boolean;
   /** Paths to fail with a 500 and this detail message. */
   failures: Record<string, string>;
+  /** Paths whose responses wait until the promise resolves (to test in-flight races). */
+  gates: Partial<Record<string, Promise<void>>>;
   calls: Array<{ method: string; path: string; body: unknown }>;
   fetch: ReturnType<typeof vi.fn>;
 }
@@ -113,6 +115,7 @@ export function installFakeServer(overrides: Partial<Pick<FakeServer, "scripts" 
     diagnostics: overrides.diagnostics ?? structuredClone(DIAGNOSTICS),
     offline: false,
     failures: {},
+    gates: {},
     calls: [],
     fetch: vi.fn(),
   };
@@ -125,6 +128,7 @@ export function installFakeServer(overrides: Partial<Pick<FakeServer, "scripts" 
     else if (init?.body instanceof FormData) body = init.body;
     server.calls.push({ method, path: url.pathname, body });
 
+    await server.gates[url.pathname];
     if (server.offline) throw new TypeError("Failed to fetch");
     if (server.failures[url.pathname]) return response(500, { detail: server.failures[url.pathname] });
 

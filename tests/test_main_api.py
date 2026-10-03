@@ -817,23 +817,26 @@ def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
     assert not any(p.name.startswith(main.TEMP_PREFIX) for p in (media / "videos").iterdir())
 
 
-def test_cancel_before_process_starts_still_reports_result(client, ws_dirs):
+def _blocking_executor():
+    """Executor mock whose render only ends when cancel() is called, like the real one."""
+    import asyncio
+    stop = asyncio.Event()
+
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        await stop.wait()
+        return {"success": False, "status": "cancelled"}
+
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=execute)
+    instance.cancel = AsyncMock(side_effect=lambda: stop.set())
+    return instance
+
+
+def test_cancel_while_rendering_reports_cancelled(client, ws_dirs):
     root, _, _ = ws_dirs
     _write(root / "s.py")
-    started = []
-
-    async def never_finishes(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
-        started.append(True)
-        import asyncio
-        await asyncio.sleep(30)
-        return {"success": True, "status": "success"}
-
     with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
-        instance = MagicMock()
-        instance.execute = AsyncMock(side_effect=never_finishes)
-        instance.cancel = AsyncMock()
-        instance.is_running = False
-        with patch.object(main, "ManimExecutor", return_value=instance):
+        with patch.object(main, "ManimExecutor", return_value=_blocking_executor()):
             with client.websocket_connect("/api/render") as ws:
                 ws.send_json({"type": "start", "id": "a", "filename": "s.py", "scene": "S"})
                 ws.send_json({"type": "cancel"})
@@ -842,6 +845,84 @@ def test_cancel_before_process_starts_still_reports_result(client, ws_dirs):
     result = received[-1]
     assert result["render_id"] == "a"
     assert result["status"] == "cancelled"
+
+
+def test_scratch_file_failure_still_sends_one_result(client, ws_dirs):
+    real_open = open
+
+    def failing_open(path, mode="r", *args, **kwargs):
+        if main.TEMP_PREFIX in str(path) and "w" in mode:
+            raise OSError("disk full")
+        return real_open(path, mode, *args, **kwargs)
+
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with patch("builtins.open", side_effect=failing_open):
+            with client.websocket_connect("/api/render") as ws:
+                ws.send_json({"type": "start", "id": "f", "filename": "x.py", "scene": "S", "code": "pass"})
+                received = _drain_until_result(ws)
+
+    assert [m["type"] for m in received] == ["error", "result"]
+    assert "disk full" in received[0]["message"]
+    assert received[-1]["status"] == "error"
+
+
+def test_missing_script_for_download_only_is_rejected_once(client, ws_dirs):
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
+        with client.websocket_connect("/api/render") as ws:
+            ws.send_json({"type": "start", "id": "m", "filename": "nope.py", "scene": "S", "download_only": True})
+            received = _drain_until_result(ws)
+    assert [m["type"] for m in received] == ["error", "result"]
+    assert received[-1]["status"] == "rejected"
+
+
+def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
+    """A cancel that arrives while the output is being moved/announced must not drop it."""
+    import time
+
+    root, media, _ = ws_dirs
+    _write(root / "s.py")
+    real_relocate = main._relocate_temp_output
+
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        out = _write(media / "videos" / script_name[:-3] / "480p15" / "S.mp4")
+        await log_callback({"type": "file_ready", "abs_path": str(out), "rel_path": "media/x", "filename": "S.mp4"})
+        return {"success": True, "status": "success"}
+
+    def slow_relocate(*args):
+        time.sleep(0.4)  # the test sends "cancel" meanwhile; it is read at the next await
+        return real_relocate(*args)
+
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=execute)
+    instance.cancel = AsyncMock()
+    instance.is_running = False  # Manim has exited by the time the output is moved
+    with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES), patch.object(
+        main, "ManimExecutor", return_value=instance
+    ), patch.object(main, "_relocate_temp_output", side_effect=slow_relocate):
+        with client.websocket_connect("/api/render") as ws:
+            ws.send_json({"type": "start", "id": "z", "filename": "s.py", "scene": "S", "code": "x"})
+            time.sleep(0.1)
+            ws.send_json({"type": "cancel"})
+            received = _drain_until_result(ws)
+
+    assert received[-1]["status"] == "success", received
+    assert any(m["type"] == "file_ready" and m["url"] == "/media/videos/s/480p15/S.mp4" for m in received)
+
+
+def test_deeply_nested_code_parses_without_crashing(client):
+    res = client.post("/api/parse-code", json={"code": "1" + "+1" * 200000})
+    assert res.status_code == 200
+    assert res.json()["scenes"] == []
+
+
+def test_parse_cache_is_bounded():
+    import scene_parser
+
+    for index in range(scene_parser._CACHE_SIZE + 10):
+        get_scenes_from_code(f"class S{index}(Scene):\n    pass\n")
+    assert len(scene_parser._cache) == scene_parser._CACHE_SIZE
+    # Cached entries are keyed by digest, not by the (possibly huge) source.
+    assert all(len(key) == 40 for key in scene_parser._cache)
 
 
 def test_validation_errors_echo_render_id(client):

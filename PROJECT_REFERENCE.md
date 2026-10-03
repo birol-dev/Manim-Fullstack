@@ -25,7 +25,7 @@ One process serves everything: the built frontend (`frontend/dist`), the API und
 | `main.py`            | Routes, the render WebSocket, temp-render bookkeeping, startup (directory creation, stale temp cleanup, `manim.cfg`). |
 | `executor.py`        | `ManimExecutor` runs one Manim process, reads stdout/stderr in chunks (splitting on `\n` and `\r` so tqdm progress streams live), and turns lines into events. Cancels the whole process tree (`killpg` / `taskkill /T`). |
 | `scene_parser.py`    | AST analysis: module-level `Scene` subclasses (including subclasses of scenes in the same file) and each scene's `self.play()` / `self.wait()` calls. Results are cached. |
-| `origins.py`         | Origin policy for HTTP and WebSocket requests (see [Security](#security)). |
+| `origins.py`         | Origin and Host policy for HTTP and WebSocket requests (see [Security](#security)). |
 | `diagnostics.py`     | CPU/RAM/GPU detection (cached for 5 minutes), dependency lookup (never cached), render profile, and `workspace/manim.cfg`. |
 | `workspace_paths.py` | `safe_basename` / `safe_join`: reject traversal, absolute paths, and Windows device names. |
 
@@ -110,10 +110,12 @@ Every `start` receives exactly one `result`.
 
 The server executes arbitrary Python, so it has to make sure only the user's own pages can drive it:
 
-- HTTP requests and WebSocket handshakes with an `Origin` header are accepted only from loopback origins
-  (`localhost`, `127.0.0.1`, `[::1]`, any port), same-origin requests addressed by IP address (LAN use), or origins in
-  `MANIM_ALLOWED_ORIGINS`. Same-origin requests by *hostname* are refused unless listed, which blocks DNS rebinding.
-- Requests without an `Origin` header (curl, scripts) are allowed; they can't come from another website.
+- **Origin:** HTTP requests and WebSocket handshakes that carry an `Origin` header are accepted only from loopback
+  origins (`localhost`, `*.localhost`, `127.0.0.1`, `[::1]`, any port), the server's own origin when it is addressed
+  by IP (LAN use), or origins in `MANIM_ALLOWED_ORIGINS`. Requests without an `Origin` (curl, scripts) pass this check.
+  CORS headers are granted by the same policy.
+- **Host:** the `Host` header must be a loopback name, an IP address, or the host of an allowed origin. This blocks
+  DNS rebinding, where a hostile domain resolves to `127.0.0.1` and then makes same-origin requests without `Origin`.
 - File names go through `safe_basename` / `safe_join`; media deletion is limited to `videos/` and `images/`.
 - Rendered output never includes host absolute paths (`abs_path` is stripped before events are sent).
 

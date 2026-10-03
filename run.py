@@ -1,6 +1,7 @@
 """One-command launcher: builds the frontend if needed, then serves app + API on one port."""
 
 import argparse
+import importlib.util
 import os
 import shutil
 import socket
@@ -28,8 +29,11 @@ def _newest_mtime(path: str) -> float:
     if os.path.isfile(path):
         return os.path.getmtime(path)
     newest = 0.0
-    for root, _dirs, files in os.walk(path):
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d != "test"]  # test helpers don't affect the bundle
         for name in files:
+            if ".test." in name:
+                continue
             try:
                 newest = max(newest, os.path.getmtime(os.path.join(root, name)))
             except OSError:
@@ -82,11 +86,9 @@ def main() -> None:
     parser.add_argument("--build", action="store_true", help="Force a fresh frontend build")
     args = parser.parse_args()
 
-    try:
-        import uvicorn  # noqa: F401
-        import fastapi  # noqa: F401
-    except ImportError as exc:
-        print(f"\n[error] Missing Python dependency: {exc.name}", file=sys.stderr)
+    missing = [name for name in ("fastapi", "uvicorn") if importlib.util.find_spec(name) is None]
+    if missing:
+        print(f"\n[error] Missing Python dependency: {', '.join(missing)}", file=sys.stderr)
         print("Install the backend requirements first:\n    pip install -r backend/requirements.txt\n", file=sys.stderr)
         sys.exit(1)
 

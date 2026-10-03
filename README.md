@@ -86,7 +86,7 @@ Containers use the low-resource *eco* profile and disable the installer endpoint
 
 | Variable                | Default                 | Purpose                                                              |
 | ----------------------- | ----------------------- | -------------------------------------------------------------------- |
-| `MANIM_ALLOWED_ORIGINS` | —                       | Extra browser origins allowed to use the API (comma separated, `*` for any). Needed when you serve the app under a domain name. |
+| `MANIM_ALLOWED_ORIGINS` | —                       | Extra browser origins allowed to use the API, e.g. `https://manim.example.com` (comma separated, `*` for any). Needed when you open the app through a domain name rather than `localhost` or an IP address. |
 | `MANIM_RENDER_TIMEOUT`  | `600`                   | Seconds before a render is stopped                                   |
 | `MANIM_MAX_CODE_BYTES`  | `2097152`               | Largest script the API accepts                                       |
 | `MANIM_ALLOW_INSTALLS`  | enabled                 | Set to `0` to disable the installer endpoints                        |
@@ -95,9 +95,10 @@ Containers use the low-resource *eco* profile and disable the installer endpoint
 
 ## Security
 
-The server executes the Python you send it, so treat it like a terminal. It listens on `127.0.0.1` by default and
-refuses requests and WebSocket connections from other websites' origins, which stops a malicious page from running
-code through your browser. Don't expose it on an untrusted network.
+The server executes the Python you send it, so treat it like a terminal. It listens on `127.0.0.1` by default,
+refuses requests and WebSocket connections from other websites' origins, and only answers to `localhost`, IP
+addresses, and hosts you allow (which defeats DNS rebinding). That stops a malicious page from running code through
+your browser. Don't expose it on an untrusted network.
 
 ## Project layout
 

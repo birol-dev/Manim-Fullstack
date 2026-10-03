@@ -1,9 +1,10 @@
 import pytest
+from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from unittest.mock import patch
 
 import main
-from origins import is_origin_allowed
+from origins import is_host_allowed, is_origin_allowed
 
 
 @pytest.mark.parametrize(
@@ -79,3 +80,56 @@ def test_websocket_from_foreign_origin_is_refused(client, monkeypatch):
     with client.websocket_connect("/api/render", headers={"Origin": "http://localhost:8000"}) as ws:
         ws.send_text("not json")
         assert ws.receive_json()["type"] == "error"
+
+
+@pytest.mark.parametrize(
+    "host,allowed",
+    [
+        (None, True),
+        ("localhost:8000", True),
+        ("127.0.0.1", True),
+        ("[::1]:8000", True),
+        ("192.168.1.5:8000", True),
+        ("studio.localhost:5173", True),
+        ("rebind.example:8000", False),
+        ("evil.example", False),
+    ],
+)
+def test_host_policy(host, allowed, monkeypatch):
+    monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
+    assert is_host_allowed(host) is allowed
+
+
+def test_configured_origins_allow_their_hosts(monkeypatch):
+    monkeypatch.setenv("MANIM_ALLOWED_ORIGINS", "https://studio.example.com")
+    assert is_host_allowed("studio.example.com") is True
+    assert is_host_allowed("other.example.com") is False
+    monkeypatch.setenv("MANIM_ALLOWED_ORIGINS", "*")
+    assert is_host_allowed("anything.example") is True
+
+
+def test_dns_rebinding_requests_are_refused(monkeypatch):
+    """A hostile domain resolving to 127.0.0.1 sends same-origin requests without an Origin header."""
+    monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
+    rebound = TestClient(main.app, base_url="http://rebind.example:8000")
+    assert rebound.get("/api/files").status_code == 403
+    with pytest.raises(WebSocketDisconnect):
+        with rebound.websocket_connect("ws://rebind.example:8000/api/render") as ws:
+            ws.receive_json()
+
+
+def test_cors_headers_follow_the_policy(client, monkeypatch):
+    monkeypatch.setenv("MANIM_ALLOWED_ORIGINS", "*")
+    res = client.get("/api/health", headers={"Origin": "https://studio.example.com"})
+    assert res.status_code == 200
+    assert res.headers["access-control-allow-origin"] == "https://studio.example.com"
+
+    monkeypatch.delenv("MANIM_ALLOWED_ORIGINS")
+    res = client.get("/api/health", headers={"Origin": "http://app.localhost:5173"})
+    assert res.headers["access-control-allow-origin"] == "http://app.localhost:5173"
+
+    preflight = client.options(
+        "/api/save",
+        headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
+    )
+    assert "access-control-allow-origin" not in preflight.headers

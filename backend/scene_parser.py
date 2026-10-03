@@ -1,8 +1,16 @@
 """Static analysis of Manim scripts: scene classes and their play/wait timeline."""
 
 import ast
-from functools import lru_cache
+import hashlib
+import threading
+from collections import OrderedDict
 from typing import List, Optional
+
+# Results keyed by a digest of the source, so the cache never holds the code itself
+# (the editor re-parses a slightly different copy of a file after every pause).
+_CACHE_SIZE = 64
+_cache: "OrderedDict[str, tuple]" = OrderedDict()
+_cache_lock = threading.Lock()
 
 
 def _identifier_looks_like_scene(name: str) -> bool:
@@ -79,12 +87,27 @@ def _animation_step(call: ast.Call) -> Optional[dict]:
     return None
 
 
-@lru_cache(maxsize=128)
 def _parse_code_ast(code_content: str) -> tuple:
     """Find scene classes and their play/wait timeline in one AST pass (cached)."""
+    key = hashlib.sha1(code_content.encode("utf-8", "surrogatepass")).hexdigest()
+    with _cache_lock:
+        cached = _cache.get(key)
+        if cached is not None:
+            _cache.move_to_end(key)
+            return cached
+    result = _analyze(code_content)
+    with _cache_lock:
+        _cache[key] = result
+        while len(_cache) > _CACHE_SIZE:
+            _cache.popitem(last=False)
+    return result
+
+
+def _analyze(code_content: str) -> tuple:
     try:
         tree = ast.parse(code_content)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # RecursionError/MemoryError: pathologically nested code.
         return ((), ())
 
     # Manim only renders module-level classes.
