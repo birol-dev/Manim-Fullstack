@@ -1,101 +1,122 @@
-# Manim Composer & Editor
+# Manim Composer
 
-An interactive, web-based IDE and live renderer for **Manim Community Edition** (Python animation engine). Designed for education, technical presentations, and mathematical animations, it combines code editing, live video previewing, and a browser-side LaTeX sandbox into a single monochromatic user interface.
+A local, browser-based IDE for [Manim Community Edition](https://www.manim.community/). Write a scene, press
+<kbd>Ctrl</kbd>+<kbd>Enter</kbd>, and watch it render: live progress, errors that link back to the line that caused
+them, and the result playing next to your code.
 
-## Core Features
+![Manim Composer: code editor, render preview, and console](docs/screenshot.png)
 
-- **Monochromatic B&W Interface**: Flat, high-contrast, minimalist design utilizing slate/zinc tones with zero gradients or colored indicators.
-- **Auto-Config Diagnostics**: Automatically checks host system specifications (CPU cores, RAM capacity, GPU models) and builds optimization configurations to accelerate rendering.
-- **Live Typing Auto-Render**: Debounced auto-render option that automatically compiles your active python scene 2 seconds after you stop typing.
-- **Interactive File Management**: Double-click inline file renaming in the sidebar browser, uploads folder for asset libraries (SVGs, PNGs, MP3s), and creation of custom Python scripts.
-- **LaTeX Math Sandbox**: Browser-side KaTeX sandbox containing common equation templates (Euler's identity, matrices, quadratic equations) to preview formulas instantly and insert them directly into Monaco as `MathTex(r"...")` blocks.
-- **One-Click LaTeX Installer**: Detects missing local LaTeX dependencies and allows Windows users to silently install MiKTeX via `winget` directly from the web interface.
-- **WebSocket Logs Streaming**: Captures rendering logs and outputs real-time compiler stdout/stderr streams and progress telemetry.
+## Features
 
----
+- **Editor** — Monaco with Python highlighting, live scene detection, unsaved drafts kept per file,
+  <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> to save and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> to render.
+- **Live rendering** — Manim's output streams into the console with per-animation progress
+  ("Animation 2 of 4 · Create(Square)"). Cancel at any time. Optional auto-render when you stop typing.
+- **Errors that point at code** — traceback lines become links, the failing line gets an editor marker, and a toast
+  shows the exception.
+- **Preview and compare** — videos and still images (scenes without animations) open in the preview; play any two
+  renders side by side in lockstep.
+- **Timeline** — every `self.play()` and `self.wait()` in the scene, sized by duration, highlighted while it renders.
+- **Helpers** — ready-to-render templates, a shape builder that writes the code for you, a KaTeX-powered LaTeX
+  sandbox, and an asset library (images, SVG, audio, fonts) that inserts the code to load each file.
+- **Setup guide** — detects Manim, LaTeX, and FFmpeg, shows install commands for your OS, and can run the installers
+  for you on Windows.
+- **Works offline** — the editor, fonts, and math rendering are bundled; nothing loads from a CDN.
 
-## Getting Started
+## Quick start
 
-### Prerequisites
-
-1. **Python 3.9+**
-2. **Node.js 18+** (including npm)
-3. **Manim CE** (Python package `pip install manim`)
-4. **FFmpeg** (installed and added to System PATH)
-5. **LaTeX (Recommended)** (MiKTeX or TeX Live for compiling math equations)
-
----
-
-## Installation & Running
-
-### Option A: Local Run
-
-#### 1. Launch FastAPI Backend
-The backend manages file access, hardware diagnostics, and subprocess execution.
+You need **Python 3.9+** and **Node.js 18+**. On Linux, Manim also needs the Cairo and Pango headers
+(`sudo apt install build-essential pkg-config libcairo2-dev libpango1.0-dev`); on macOS, `brew install cairo pkg-config`.
 
 ```bash
-# Install backend requirements
-pip install -r backend/requirements.txt
-
-# Start backend server
-python backend/main.py
+git clone https://github.com/birol-dev/Manim-Fullstack.git
+cd Manim-Fullstack
+pip install -r backend/requirements.txt   # includes Manim CE
+python run.py
 ```
-*Backend runs locally on: [http://localhost:8000](http://localhost:8000)*
 
-#### 2. Launch Vite Frontend
-The frontend provides the Monaco editor, live viewer, and LaTeX sandbox.
+`run.py` builds the frontend the first time (and again whenever its sources change), starts the server on
+<http://localhost:8000>, and opens your browser. On Windows you can double-click `start.bat` instead.
+
+| Option         | Effect                                   |
+| -------------- | ---------------------------------------- |
+| `--port 9000`  | Use another port                         |
+| `--host`       | Interface to bind (default `127.0.0.1`)  |
+| `--no-browser` | Don't open a browser window              |
+| `--build`      | Force a fresh frontend build             |
+
+**Optional extras:** a LaTeX distribution (MiKTeX or TeX Live) for `MathTex`, `Tex`, and numbered axes; FFmpeg only for
+scenes that use `add_sound`. Manim 0.19+ encodes video on its own.
+
+Scripts live in `workspace/`, uploads in `workspace/assets/`, and renders in `workspace/media/`. If you prefer, switch
+**Settings → Scripts** to *Browser* to keep scripts in the browser's local storage instead.
+
+## Development
+
+Run the API with auto-reload and the Vite dev server side by side:
 
 ```bash
-# Navigate to the frontend directory
-cd frontend
-
-# Install Node dependencies
-npm install
-
-# Start local development server
-npm run dev
+uvicorn backend.main:app --reload --port 8000     # terminal 1
+cd frontend && npm install && npm run dev          # terminal 2 → http://localhost:5173
 ```
-*Frontend runs locally on: [http://localhost:5173](http://localhost:5173)*
 
-### Option B: Running Backend with Docker
-
-You can build and run the backend container, which bundles Cairo, Pango, and FFmpeg for rendering.
+The dev server proxies `/api`, `/media`, and `/assets` to the backend (override with `MANIM_BACKEND_URL`), so the
+app always talks to its own origin.
 
 ```bash
-# Build the Docker image (run from the repository root)
-docker build -t manim-composer-backend -f backend/Dockerfile .
-
-# Run the container mapping port 8000
-docker run -p 8000:8000 manim-composer-backend
+npm test              # backend (pytest) + frontend (Vitest) with coverage
+npm run check         # frontend lint + typecheck + build, backend import check
 ```
 
----
+See [PROJECT_REFERENCE.md](PROJECT_REFERENCE.md) for the architecture, REST API, and render protocol, and
+[CONTRIBUTING.md](CONTRIBUTING.md) for conventions.
 
-## Directory Architecture
+## Docker
+
+The image bundles the backend, Manim, and the built frontend (LaTeX is left out to keep it small):
+
+```bash
+docker build -t manim-composer -f backend/Dockerfile .
+docker run -p 8000:8000 manim-composer
+```
+
+Containers use the low-resource *eco* profile and disable the installer endpoints.
+
+## Configuration
+
+| Variable                | Default                 | Purpose                                                              |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------- |
+| `MANIM_ALLOWED_ORIGINS` | —                       | Extra browser origins allowed to use the API (comma separated, `*` for any). Needed when you serve the app under a domain name. |
+| `MANIM_RENDER_TIMEOUT`  | `600`                   | Seconds before a render is stopped                                   |
+| `MANIM_MAX_CODE_BYTES`  | `2097152`               | Largest script the API accepts                                       |
+| `MANIM_ALLOW_INSTALLS`  | enabled                 | Set to `0` to disable the installer endpoints                        |
+| `MANIM_BACKEND_URL`     | `http://127.0.0.1:8000` | Backend the Vite dev server proxies to                               |
+| `VITE_BACKEND_URL`      | same origin             | Build-time: point a separately hosted frontend at a backend          |
+
+## Security
+
+The server executes the Python you send it, so treat it like a terminal. It listens on `127.0.0.1` by default and
+refuses requests and WebSocket connections from other websites' origins, which stops a malicious page from running
+code through your browser. Don't expose it on an untrusted network.
+
+## Project layout
 
 ```text
-├── backend/
-│   ├── main.py          # FastAPI application server & REST/WebSocket routes
-│   ├── diagnostics.py   # System hardware & software environment checker
-│   ├── executor.py      # Subprocess execution and stream regex parser
-│   └── Dockerfile       # Container setup for backend running on port 8000
-├── frontend/
-│   ├── src/
-│   │   ├── App.tsx      # Main React dashboard component
-│   │   ├── components/  # Radix UI and custom styled widgets
-│   │   └── index.css    # Monochromatic theme overrides
-│   ├── index.html       # KaTeX CDN links & application mount
-│   ├── package.json     # Node scripts and react dependencies
-│   └── tsconfig.json    # TypeScript compiler options
-├── workspace/           # The active file system loaded in the editor
-│   ├── media/           # Output directory for rendered videos (ignored)
-│   ├── assets/          # Uploaded media assets (ignored)
-│   └── example.py       # Default starter script
-└── .gitignore           # Ignores system caches, node_modules, and media outputs
+backend/         FastAPI server: file API, diagnostics, render WebSocket
+  main.py          routes and render orchestration
+  executor.py      runs Manim, parses its output into events
+  scene_parser.py  finds Scene classes and their play()/wait() timeline
+  origins.py       which browser origins may talk to the server
+frontend/        React + TypeScript app (Vite, Tailwind CSS v4, Radix UI, Monaco)
+  src/hooks/       workspace, render session, diagnostics, logs
+  src/components/  layout, editor, preview, console, sidebar panels, dialogs
+  src/lib/         API client, templates, code generators, formatting
+tests/           backend tests (pytest), including real renders when Manim is installed
+website/         project landing page (static)
+workspace/       your scripts, assets, and renders
+run.py           one-command launcher
 ```
-
----
 
 ## License
 
-This project is open-source and available under the [MIT License](LICENSE).
+[MIT](LICENSE)
