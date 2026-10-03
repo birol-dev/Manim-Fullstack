@@ -202,6 +202,12 @@ export default function App() {
   );
 
   const session = useRenderSession({ log, onOutput: handleOutput, onFinished: handleFinished });
+
+  // The socket is the first to notice a server going away or coming back.
+  const { refresh: refreshDiagnostics } = diagnostics;
+  useEffect(() => {
+    if (session.connection !== "connecting") void refreshDiagnostics();
+  }, [session.connection, refreshDiagnostics]);
   const sessionActiveRef = useRef(session.active);
   const lastRenderedCode = useRef<string | null>(null);
 
