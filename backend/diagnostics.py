@@ -335,6 +335,10 @@ log_dir = ./logs
 frame_rate = {fps}
 pixel_width = {pixel_width}
 pixel_height = {pixel_height}
+
+[logger]
+# The app shows its own timing; timestamps only add width to each log line.
+log_timestamps = False
 """
     try:
         with open(cfg_path, "w", encoding="utf-8") as f:

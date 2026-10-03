@@ -526,32 +526,31 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
 
 
 def test_websocket_render_validation_errors(client):
+    def rejected(ws):
+        error, result = ws.receive_json(), ws.receive_json()
+        assert error["type"] == "error"
+        assert result == {"type": "result", "render_id": None, "success": False, "status": "rejected"}
+        return error
+
     with patch.object(main, "get_binary_paths", return_value={"manim": "Not Found"}):
         with client.websocket_connect("/api/render") as ws:
             ws.send_text("not json")
-            msg = ws.receive_json()
-            assert msg["type"] == "error"
+            assert ws.receive_json()["type"] == "error"
 
             ws.send_text("12345")
-            msg2 = ws.receive_json()
-            assert msg2["type"] == "error"
+            assert ws.receive_json()["type"] == "error"
 
             ws.send_json({"type": "start", "filename": "test.py"})
-            msg3 = ws.receive_json()
-            assert msg3["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "test.py", "scene": "123_invalid_id"})
-            msg4 = ws.receive_json()
-            assert msg4["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "../secret.py", "scene": "Scene"})
-            msg5 = ws.receive_json()
-            assert msg5["type"] == "error"
+            rejected(ws)
 
             ws.send_json({"type": "start", "filename": "test.py", "scene": "Scene"})
-            msg6 = ws.receive_json()
-            assert msg6["type"] == "error"
-            assert "Manim executable not found" in msg6["message"]
+            assert "Manim executable not found" in rejected(ws)["message"]
 
 
 def test_websocket_render_cancellation(client, tmp_path):
@@ -842,4 +841,6 @@ def test_validation_errors_echo_render_id(client):
     with client.websocket_connect("/api/render") as ws:
         ws.send_json({"type": "start", "id": "bad", "filename": "x.py", "scene": "1nope"})
         msg = ws.receive_json()
+        result = ws.receive_json()
     assert msg == {"type": "error", "render_id": "bad", "message": "Scene name must be a valid Python identifier."}
+    assert result == {"type": "result", "render_id": "bad", "success": False, "status": "rejected"}

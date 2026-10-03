@@ -802,6 +802,7 @@ async def websocket_render(websocket: WebSocket):
                 src_path = os.path.join(WORKSPACE_DIR, filename)
                 if not os.path.isfile(src_path):
                     await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
+                    await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
                     return
                 with open(src_path, "r", encoding="utf-8", errors="replace") as f:
                     code_content = f.read()
@@ -897,19 +898,15 @@ async def websocket_render(websocket: WebSocket):
                     await stop_current_render()
                 try:
                     request = _validate_start_message(message)
+                    manim_command = _manim_command(get_binary_paths())
+                    if not manim_command:
+                        raise _RenderRequestError(
+                            "Manim executable not found. Install Manim CE (pip install manim) and restart."
+                        )
                 except _RenderRequestError as exc:
+                    # Every start gets exactly one result, even when it is rejected.
                     await send({"type": "error", "render_id": render_id, "message": str(exc)})
-                    continue
-
-                manim_command = _manim_command(get_binary_paths())
-                if not manim_command:
-                    await send(
-                        {
-                            "type": "error",
-                            "render_id": render_id,
-                            "message": "Manim executable not found. Install Manim CE (pip install manim) and restart.",
-                        }
-                    )
+                    await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
                     continue
 
                 current_render_task = asyncio.create_task(run_render(request, render_id, manim_command))

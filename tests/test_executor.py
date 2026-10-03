@@ -438,3 +438,22 @@ async def test_cancel_mid_render_reports_cancelled_not_error(tmp_path):
 
     assert result == {"success": False, "status": "cancelled"}
     assert not any(e["type"] == "error" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_rich_source_column_is_stripped():
+    executor = ManimExecutor("/workspace")
+    data = (
+        "INFO     Combining to Movie file.                                   scene_file_writer.py:952\n"
+        "INFO                                                               scene_file_writer.py:1103\n"
+        "         File ready at '/w/media/videos/demo/480p15/Intro.mp4'\n"
+        "NameError: name 'x' is not defined\n"
+    ).encode()
+    events = await _read(executor, data, stream_name="stdout")
+    messages = [e["message"] for e in events if e["type"] == "log"]
+    assert messages == [
+        "INFO     Combining to Movie file.",
+        "         File ready at '/w/media/videos/demo/480p15/Intro.mp4'",
+        "NameError: name 'x' is not defined",
+    ]
+    assert any(e["type"] == "file_ready" for e in events)
