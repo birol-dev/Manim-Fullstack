@@ -49,6 +49,7 @@ describe("App", () => {
     const { editor } = await renderApp({ media: [media("Intro")] });
 
     expect(editor.value).toBe(EXAMPLE_CODE);
+    expect(document.title).toBe("example.py — Manim Composer");
     expect(screen.getByRole("combobox", { name: "Scene" })).toHaveTextContent("Intro");
     expect(screen.getByRole("button", { name: "notes.py" })).toBeInTheDocument();
     expect(screen.getByText("Renders · 1")).toBeInTheDocument();
@@ -65,6 +66,7 @@ describe("App", () => {
 
     act(() => socket.emit({ type: "progress", render_id: id, percent: 50, animation: 0, label: "Create(Circle())" }));
     expect(await screen.findByText("Animation 1 of 2 · Create(Circle())")).toBeInTheDocument();
+    expect(document.title).toBe("25% · example.py — Manim Composer");
     expect(within(screen.getByRole("status")).getByText("25%")).toBeInTheDocument();
 
     act(() => {
@@ -266,6 +268,7 @@ describe("App", () => {
   it("saves with Ctrl+S", async () => {
     const { server, editor } = await renderApp();
     fireEvent.change(editor, { target: { value: "# saved by shortcut" } });
+    expect(document.title).toBe("● example.py — Manim Composer");
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     await waitFor(() => expect(server.scripts["example.py"]).toBe("# saved by shortcut"));
   });
