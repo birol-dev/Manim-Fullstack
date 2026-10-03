@@ -54,6 +54,7 @@ export default defineConfig({
         // Monaco needs a real browser; tests swap in src/test/fakeEditor.tsx.
         'src/lib/monaco.ts',
         'src/lib/monacoCore.ts',
+        'src/lib/monaco.worker.ts',
         'src/components/editor/CodeEditor.tsx',
       ],
       thresholds: {

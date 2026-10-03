@@ -26,7 +26,7 @@ import { usePersistentState } from "@/hooks/usePersistentState";
 import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOutput } from "@/hooks/useRenderSession";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
-import { QUALITY_FOR_PROFILE } from "@/lib/constants";
+import { MOD_KEY, QUALITY_FOR_PROFILE } from "@/lib/constants";
 import { classNameFromFile } from "@/lib/format";
 import { findErrorLocation } from "@/lib/logs";
 import { overallPercent } from "@/lib/progress";
@@ -399,7 +399,7 @@ export default function App() {
   const requestReplaceWithTemplate = (template: SceneTemplate) =>
     setConfirm({
       title: "Replace the editor contents?",
-      description: `${workspace.activeFile} will show the “${template.title}” template. Undo with Ctrl+Z, or don't save to keep the file as it is.`,
+      description: `${workspace.activeFile} will show the “${template.title}” template. Undo with ${MOD_KEY}+Z, or don't save to keep the file as it is.`,
       confirmLabel: "Replace",
       onConfirm: () => workspace.setCode(template.code),
     });
@@ -416,6 +416,15 @@ export default function App() {
       ? (session.active.progress?.animation ?? null)
       : null;
   const canRender = online && Boolean(workspace.activeFile) && !session.active;
+
+  // The tab title shows unsaved changes and render progress, even in a background tab.
+  const activeFileName = workspace.activeFile;
+  const isDirty = workspace.isDirty;
+  useEffect(() => {
+    const file = activeFileName ? `${isDirty ? "● " : ""}${activeFileName} — ` : "";
+    const progress = renderPercent !== null ? `${renderPercent}% · ` : "";
+    document.title = `${progress}${file}Manim Composer`;
+  }, [activeFileName, isDirty, renderPercent]);
   const linkFiles = useMemo(
     () => [lastOutcome?.request.filename, session.active?.request.filename, workspace.activeFile].filter((name): name is string => Boolean(name)),
     [lastOutcome, session.active, workspace.activeFile],
