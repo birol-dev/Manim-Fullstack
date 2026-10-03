@@ -1,16 +1,18 @@
+"""Host hardware and dependency detection used to pick render defaults."""
+
+import importlib.util
 import os
-import shutil
 import platform
+import shutil
 import subprocess
 import sys
 import time
+
 import psutil
 
 # Cached hardware / binary detection
 _PROFILE_CACHE = None
 _PROFILE_CACHE_TIME = 0.0
-_BINARY_PATHS_CACHE = None
-_BINARY_PATHS_CACHE_TIME = 0.0
 _CACHE_TTL_SECONDS = 300.0  # 5 minutes cache for system hardware profile
 
 def _get_cpu_from_registry():
@@ -77,7 +79,7 @@ def get_cpu_info():
                                 break
             except Exception:
                 cpu_model = platform.processor() or "Linux Processor"
-        elif platform.system() != "Windows":
+        else:
             cpu_model = platform.processor() or "Unknown CPU"
     except Exception:
         cpu_model = platform.processor() or "Unknown CPU"
@@ -158,9 +160,8 @@ def get_gpu_info():
         "has_cuda": has_cuda
     }
 
-def get_binary_paths(force_refresh: bool = False):
-    """Locates manim, ffmpeg, latex, and dvisvgm paths."""
-    global _BINARY_PATHS_CACHE, _BINARY_PATHS_CACHE_TIME
+def get_binary_paths():
+    """Locate manim, ffmpeg, latex, and dvisvgm (cheap: PATH lookups and file checks)."""
     manim_path = shutil.which("manim")
     ffmpeg_path = shutil.which("ffmpeg")
     latex_path = shutil.which("latex")
@@ -174,7 +175,6 @@ def get_binary_paths(force_refresh: bool = False):
             os.path.join(py_dir, "manim.exe"),
             os.path.join(py_dir, "Scripts", "manim"),
             os.path.join(py_dir, "manim"),
-            r"C:\tools\Manim\Scripts\manim.exe",
         ]
         if not manim_path:
             for cand in candidates_manim:
@@ -215,24 +215,29 @@ def get_binary_paths(force_refresh: bool = False):
                     if os.path.exists(cand_dvisvgm):
                         dvisvgm_path = cand_dvisvgm
 
+    manim_command = [manim_path] if manim_path else None
+    if not manim_path and sys.executable and _manim_module_available():
+        # e.g. `pip install --user manim` put the script in a folder that is not on PATH.
+        manim_command = [sys.executable, "-m", "manim"]
+        manim_path = f"{sys.executable} -m manim"
+
     result = {
         "manim": manim_path or "Not Found",
+        "manim_command": manim_command,
         "ffmpeg": ffmpeg_path or "Not Found",
         "latex": latex_path or "Not Found",
         "dvisvgm": dvisvgm_path or "Not Found",
         "latex_available": latex_path is not None and dvisvgm_path is not None
     }
-    _BINARY_PATHS_CACHE = result
-    _BINARY_PATHS_CACHE_TIME = time.time()
     return result
 
-def get_cached_binary_paths(force_refresh: bool = False) -> dict:
-    """Returns cached binary paths when valid, otherwise refreshes."""
-    global _BINARY_PATHS_CACHE, _BINARY_PATHS_CACHE_TIME
-    now = time.time()
-    if not force_refresh and _BINARY_PATHS_CACHE is not None and (now - _BINARY_PATHS_CACHE_TIME < _CACHE_TTL_SECONDS):
-        return dict(_BINARY_PATHS_CACHE)
-    return get_binary_paths(force_refresh=True)
+def _manim_module_available() -> bool:
+    importlib.invalidate_caches()
+    try:
+        return importlib.util.find_spec("manim") is not None
+    except (ImportError, ValueError):
+        return False
+
 
 def generate_profile():
     """Generates a hardware-specific configuration profile for Manim rendering."""
@@ -280,6 +285,8 @@ def generate_profile():
     opengl_capable = len(gpu["devices"]) > 0 and gpu["devices"][0]["type"] != "Software" and not is_cloud
 
     config = {
+        "platform": platform.system(),
+        "python_version": platform.python_version(),
         "profile": profile_name,
         "description": description,
         "preview_quality": preview_quality,
@@ -308,41 +315,26 @@ def get_cached_profile(force_refresh: bool = False) -> dict:
     return dict(config)
 
 def write_manim_config_file(workspace_path: str, profile_config: dict):
-    """Generates a customized manim.cfg file inside the user's workspace to apply default speedups."""
+    """Write workspace/manim.cfg with output folders and hardware-based frame defaults.
+
+    Renders always pass an explicit -q flag, which overrides the frame settings;
+    they only apply when Manim is run from this folder without one.
+    """
     cfg_path = os.path.join(workspace_path, "manim.cfg")
-    
-    quality_profile = profile_config.get("profile", "balanced")
-    cpu_model = profile_config.get("hardware", {}).get("cpu", {}).get("model", "Default CPU")
+
+    profile_name = profile_config.get("profile", "balanced")
     fps = profile_config.get("default_fps", 30)
     res_parts = str(profile_config.get("default_resolution", "1280x720")).split("x")
     pixel_width = res_parts[0] if len(res_parts) == 2 else "1280"
     pixel_height = res_parts[1] if len(res_parts) == 2 else "720"
-    
-    cfg_content = f"""[CLI]
-# Custom generated config optimized for your PC config: {cpu_model}
-# Profile: {quality_profile}
 
-# Logging configuration
-write_to_movie = True
+    cfg_content = f"""# Generated by Manim Composer on startup ({profile_name} profile). Edits are overwritten.
+[CLI]
 media_dir = ./media
 log_dir = ./logs
-
-# Frame parameters for defaults
 frame_rate = {fps}
 pixel_width = {pixel_width}
 pixel_height = {pixel_height}
-
-# Optimization settings
-# Use temporary file caching
-use_projection_with_camera_boundary = True
-
-# Disable sound feedback during rendering to save processing
-sound = False
-
-# Auto-config for LaTeX
-# If LaTeX is missing, this config will be overridden in command line, 
-# but we disable LaTeX if not available.
-text_to_speech = False
 """
     try:
         with open(cfg_path, "w", encoding="utf-8") as f:
@@ -350,6 +342,7 @@ text_to_speech = False
         return True
     except Exception:
         return False
+
 
 if __name__ == "__main__":
     # Test output when run directly

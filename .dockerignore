@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/__pycache__
+frontend/dist
+frontend/coverage
+workspace/media
+workspace/logs
+workspace/manim.cfg
+website
+tests
+*.md
+!README.md
