@@ -12,10 +12,23 @@ import main
 from executor import ManimExecutor
 
 
+class LocalClient(TestClient):
+    """Talks to the app as http(s)/ws://localhost, like a browser on the same machine.
+
+    The server refuses unknown Host headers (DNS-rebinding guard), and Starlette's
+    websocket_connect otherwise always uses the host "testserver".
+    """
+
+    def websocket_connect(self, url, *args, **kwargs):
+        if url.startswith("/"):
+            url = f"ws://localhost{url}"
+        return super().websocket_connect(url, *args, **kwargs)
+
+
 @pytest.fixture
 def client():
     """Reusable FastAPI TestClient fixture."""
-    return TestClient(main.app)
+    return LocalClient(main.app, base_url="http://localhost")
 
 
 @pytest.fixture

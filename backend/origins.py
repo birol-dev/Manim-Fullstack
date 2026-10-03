@@ -1,11 +1,15 @@
 """Origin policy for HTTP requests and the render WebSocket.
 
 The render socket runs arbitrary Python, so a web page on another origin must
-not be able to drive this server from the user's browser. Allowed: requests
-without an Origin header (curl, scripts), loopback origins (localhost dev
-servers), same-origin requests addressed by IP (LAN use; immune to DNS
-rebinding), and anything listed in MANIM_ALLOWED_ORIGINS (comma separated,
-"*" allows all).
+not be able to drive this server from the user's browser.
+
+* Origin: requests without one (curl, scripts) are fine; otherwise it must be a
+  loopback origin (localhost dev servers), the server's own origin when it is
+  addressed by IP (LAN use), or listed in MANIM_ALLOWED_ORIGINS (comma
+  separated, "*" allows all).
+* Host: must be a loopback name, an IP address, or the host of an allowed
+  origin. This stops DNS rebinding, where a hostile domain resolves to
+  127.0.0.1 and then makes "same-origin" requests that carry no Origin header.
 """
 
 import ipaddress
@@ -53,3 +57,23 @@ def is_origin_allowed(origin: Optional[str], host_header: Optional[str] = None) 
     if host_header and parsed.netloc == host_header.strip().lower():
         return _is_ip_literal(parsed.hostname)
     return False
+
+
+def _hostname(host_header: str) -> str:
+    """Hostname from a Host header value ("[::1]:8000" -> "::1", "a.b:80" -> "a.b")."""
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host[1 : host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def is_host_allowed(host_header: Optional[str]) -> bool:
+    if not host_header:
+        return True
+    hostname = _hostname(host_header)
+    if _is_loopback_host(hostname) or _is_ip_literal(hostname):
+        return True
+    configured = configured_origins()
+    if "*" in configured:
+        return True
+    return any(urlparse(origin).hostname == hostname for origin in configured)
