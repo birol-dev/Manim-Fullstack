@@ -31,6 +31,9 @@ BRACKET_PROGRESS_PATTERN = re.compile(r"\[\s*(\d{1,3})%\]")
 FILE_READY_PATTERN = re.compile(
     r"File ready at:?\s+(?:'(?P<single>[^']+)'|\"(?P<double>[^\"]+)\"|(?P<bare>\S+))"
 )
+# Rich log rows end with a right-aligned "module.py:123" column; it is noise in the UI.
+RICH_SOURCE_COLUMN = re.compile(r"\s{2,}[\w.-]+\.py:\d+$")
+RICH_LEVEL_ONLY = re.compile(r"^(?:\[[^\]]*\]\s+)?(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 LATEX_PATTERN = re.compile(r"latex|dvisvgm", re.IGNORECASE)
 FAILURE_PATTERN = re.compile(r"error|fail|not found|no such file", re.IGNORECASE)
 
@@ -310,6 +313,11 @@ class ManimExecutor:
         bar = TQDM_PATTERN.search(line.strip())
         if bar:
             await self._emit_progress(int(bar.group("percent")), bar.group("label"), log_callback)
+            return
+
+        line = RICH_SOURCE_COLUMN.sub("", line)
+        if RICH_LEVEL_ONLY.match(line.strip()):
+            # The first row of a multi-line message; the text follows on the next rows.
             return
 
         await log_callback({"type": "log", "stream": stream_name, "message": line})
