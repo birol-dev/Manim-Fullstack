@@ -75,3 +75,11 @@ desktop.ini
 *.njsproj
 *.sln
 *.sw?
+BUGFIX_LOG.md
+
+# --- auto-added by cleanup (missing patterns) ---
+.next/
+.open-next/
+.turbo/
+.vercel/
+.opencode/
