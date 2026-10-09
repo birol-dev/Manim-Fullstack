@@ -8,8 +8,9 @@ not be able to drive this server from the user's browser.
   allows all), or when it is loopback on the same port as the Host header or
   on a dev port (MANIM_DEV_ORIGIN_PORTS, default ``5173,8000`` — Vite and the
   app). Other localhost ports are not trusted.
-* Host: must be a loopback name, or the host of an allowed origin. IP-address
-  hosts are accepted only when MANIM_ALLOW_LAN=1. This stops DNS rebinding,
+* Host: must be a well-formed ``host[:port]`` (port 1-65535) naming a loopback
+  host or the host of an allowed origin. IP-address hosts are accepted only when
+  MANIM_ALLOW_LAN=1. A malformed or empty Host is refused. This stops DNS rebinding,
   where a hostile domain resolves to 127.0.0.1 and then makes "same-origin"
   requests that carry no Origin header.
 * Peer: the TCP client must be loopback unless MANIM_ALLOW_LAN=1. Docker is
@@ -19,7 +20,8 @@ not be able to drive this server from the user's browser.
 
 import ipaddress
 import os
-from typing import Optional
+import re
+from typing import Optional, Tuple
 from urllib.parse import urlparse
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -75,20 +77,56 @@ def _origin_port(parsed) -> Optional[int]:
     return None
 
 
-def _header_port(host_header: str) -> Optional[int]:
-    """Explicit port from a Host header, or None when the header omits it."""
+_DNS_LABEL = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
+_PORT = re.compile(r"^[0-9]{1,5}$")
+
+
+def parse_host_header(host_header: Optional[str]) -> Tuple[str, Optional[int]]:
+    """Split a Host header into (hostname, port or None); ValueError when malformed.
+
+    Accepted: ``name``, ``name:port``, ``a.b.c.d[:port]``, ``[ipv6][:port]``, where
+    a name is DNS labels (letters, digits, ``-``, ``_``; an optional trailing dot)
+    and a port is 1-65535. Refused: an empty value, whitespace or controls inside,
+    an empty port (``127.0.0.1:``), a non-numeric or out-of-range port, junk after
+    the port (``127.0.0.1:8100.evil.com``), bare IPv6 without brackets, and
+    userinfo or path characters.
+    """
+    if host_header is None:
+        raise ValueError("no Host header")
     host = host_header.strip().lower()
+    if not host or any(ord(ch) <= 0x20 or ord(ch) >= 0x7F for ch in host):
+        raise ValueError("empty or non-printable Host")
     if host.startswith("["):
         end = host.find("]")
-        rest = host[end + 1 :] if end != -1 else ""
-        if rest.startswith(":") and rest[1:].isdigit():
-            return int(rest[1:])
+        if end == -1:
+            raise ValueError("unclosed IPv6 literal")
+        hostname = host[1:end]
+        ipaddress.IPv6Address(hostname)  # ValueError for junk (and zone ids)
+        rest = host[end + 1 :]
+    else:
+        if host.count(":") > 1:
+            raise ValueError("IPv6 hosts need brackets")
+        hostname, sep, port_text = host.partition(":")
+        rest = sep + port_text
+        name = hostname[:-1] if hostname.endswith(".") else hostname
+        if not name or len(name) > 253 or not all(_DNS_LABEL.match(label) for label in name.split(".")):
+            raise ValueError("invalid host name")
+    if not rest:
+        return hostname, None
+    if not rest.startswith(":") or not _PORT.match(rest[1:]):
+        raise ValueError("invalid port")
+    port = int(rest[1:])
+    if not 1 <= port <= 65535:
+        raise ValueError("port out of range")
+    return hostname, port
+
+
+def _header_port(host_header: str) -> Optional[int]:
+    """Explicit port from a Host header, or None when it omits one or is malformed."""
+    try:
+        return parse_host_header(host_header)[1]
+    except ValueError:
         return None
-    if host.count(":") == 1:
-        _, _, port = host.partition(":")
-        if port.isdigit():
-            return int(port)
-    return None
 
 
 def _loopback_origin_allowed(parsed, host_header: Optional[str]) -> bool:
@@ -130,17 +168,23 @@ def _origin_allowed(origin: Optional[str], host_header: Optional[str]) -> bool:
 
 
 def _hostname(host_header: str) -> str:
-    """Hostname from a Host header value ("[::1]:8000" -> "::1", "a.b:80" -> "a.b")."""
-    host = host_header.strip().lower()
-    if host.startswith("["):
-        return host[1 : host.find("]")] if "]" in host else host
-    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    """Hostname from a Host header value ("[::1]:8000" -> "::1", "a.b:80" -> "a.b");
+    ValueError when the header is malformed."""
+    return parse_host_header(host_header)[0]
 
 
 def is_host_allowed(host_header: Optional[str]) -> bool:
-    if not host_header:
+    """True when a request with this Host header may be served.
+
+    No header at all (HTTP/1.0 clients, in-process test clients) passes; an empty
+    or malformed one is refused.
+    """
+    if host_header is None:
         return True
-    hostname = _hostname(host_header)
+    try:
+        hostname = _hostname(host_header)
+    except ValueError:
+        return False
     if _is_loopback_host(hostname):
         return True
     if _is_ip_literal(hostname):
