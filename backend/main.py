@@ -151,6 +151,8 @@ RUN_STARTUP_MAINTENANCE = True
 # Parallel renders share Manim's text cache and the same output path.
 MAX_CONCURRENT_RENDERS = max(1, int(os.environ.get("MANIM_MAX_CONCURRENT_RENDERS", "1")))
 _render_slots: Optional[asyncio.Semaphore] = None
+# How long a cancelled render may take to wind down before its task is cancelled outright.
+STOP_GRACE_SECONDS = 30.0
 
 
 def _render_semaphore() -> asyncio.Semaphore:
@@ -172,10 +174,14 @@ app = FastAPI(title="Manim Composer API", version=APP_VERSION, lifespan=_lifespa
 
 
 def _request_allowed(headers, peer: Optional[str] = None) -> bool:
-    if not is_peer_allowed(peer):
+    try:
+        if not is_peer_allowed(peer):
+            return False
+        host = headers.get("host")
+        return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
+    except (ValueError, TypeError):
+        # A header the policy cannot parse is refused (403), never a 500.
         return False
-    host = headers.get("host")
-    return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
 
 
 def _peer_host(client) -> Optional[str]:
@@ -228,8 +234,9 @@ class LimitCodeBodyMiddleware:
         while True:
             message = await receive()
             if message["type"] != "http.request":
-                chunks.append(message)
-                continue
+                # http.disconnect: the client went away mid-body. Nothing can be
+                # answered, and receive() would keep returning the same message.
+                return
             total += len(message.get("body", b""))
             if total > limit:
                 response = JSONResponse(
@@ -250,7 +257,8 @@ class LimitCodeBodyMiddleware:
                 item = chunks[index]
                 index += 1
                 return item
-            return {"type": "http.disconnect"}
+            # The body has been replayed; later reads wait for the real disconnect.
+            return await receive()
 
         await self.app(scope, replay, send)
 
@@ -1044,10 +1052,60 @@ def _validate_start_message(message: dict) -> dict:
         "filename": filename,
         "scene": scene_name,
         "quality": quality,
-        "use_opengl": bool(message.get("use_opengl", False)),
-        "download_only": bool(message.get("download_only", False)),
+        "use_opengl": _coerce_flag(message.get("use_opengl"), "use_opengl"),
+        "download_only": _coerce_flag(message.get("download_only"), "download_only"),
         "code": code_content,
     }
+
+
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off", ""})
+
+
+def _coerce_flag(value, field: str) -> bool:
+    """Read a boolean flag from JSON. ``"false"`` and ``"0"`` are False; junk is rejected."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_STRINGS:
+            return True
+        if lowered in _FALSE_STRINGS:
+            return False
+    raise _RenderRequestError(f"{field} must be true or false.")
+
+
+class _RenderState:
+    """One accepted ``start`` on a render socket, from validation to its ``result``."""
+
+    __slots__ = ("render_id", "task", "phase", "result_sent")
+
+    def __init__(self, render_id):
+        self.render_id = render_id
+        self.task: Optional[asyncio.Task] = None
+        # "pending" (task not started yet), "preparing" (scratch copy, pre-checks),
+        # "queued" (waiting for a render slot), "rendering" (Manim running), or
+        # "finishing" (Manim exited; output, cleanup, and the result being sent).
+        # Only the first three are cancelled outright; a finishing render is
+        # never interrupted, so its result cannot be lost mid-send.
+        self.phase = "pending"
+        self.result_sent = False
+
+
+# Renders waiting for a slot, oldest first, across all sockets. Used for the
+# queue position reported in "queued" events.
+_render_waiters: List[_RenderState] = []
+
+
+def _queue_position(state: _RenderState) -> int:
+    try:
+        return _render_waiters.index(state) + 1
+    except ValueError:
+        return 0
 
 
 @app.websocket("/api/render")
@@ -1055,9 +1113,16 @@ async def websocket_render(websocket: WebSocket):
     """Run renders over a WebSocket and stream logs, progress, and results.
 
     Client messages: ``{"type": "start", "id", "filename", "scene", "quality",
-    "use_opengl", "download_only", "code"?}`` and ``{"type": "cancel"}``.
+    "use_opengl", "download_only", "code"?}`` and ``{"type": "cancel", "id"?}``.
     Every event produced by a render carries the ``render_id`` echoed from
     ``id`` so clients can ignore events from a render they already abandoned.
+    Every accepted or rejected ``start`` gets exactly one ``result``, including
+    a start that is cancelled or replaced before it begins.
+
+    While a render waits for a free slot the server sends
+    ``{"type": "queued", "render_id", "position", "message"}`` (position 1 is
+    next), followed by the legacy ``info`` line for older clients, and
+    ``{"type": "started", "render_id", "waited"}`` once it leaves the queue.
     Each connection gets its own executor so clients never interfere.
     """
     if not _request_allowed(websocket.headers, _peer_host(websocket.client)):
@@ -1065,7 +1130,7 @@ async def websocket_render(websocket: WebSocket):
         return
 
     await websocket.accept()
-    current_render_task: Optional[asyncio.Task] = None
+    current: Optional[_RenderState] = None
     conn_executor = ManimExecutor(WORKSPACE_DIR)
 
     async def send(payload: dict) -> bool:
@@ -1075,22 +1140,53 @@ async def websocket_render(websocket: WebSocket):
         except (WebSocketDisconnect, RuntimeError):
             return False
 
-    async def stop_current_render():
-        nonlocal current_render_task
-        await conn_executor.cancel()
-        if current_render_task and not current_render_task.done():
-            current_render_task.cancel()
+    async def send_result(state: _RenderState, result: dict) -> None:
+        if state.result_sent:
+            return
+        state.result_sent = True
+        await send(
+            {
+                "type": "result",
+                "render_id": state.render_id,
+                "success": bool(result.get("success")),
+                "status": result.get("status", "unknown"),
+                "details": result,
+            }
+        )
+
+    async def settle(state: _RenderState, reason: str) -> None:
+        """Wait for a stopped render's task, and report it if it never could."""
+        if state.task is not None:
             try:
-                await current_render_task
+                await state.task
             except (asyncio.CancelledError, Exception):
                 pass
-        current_render_task = None
+        # A task cancelled before its first step never runs its own finally block.
+        await send_result(state, {"success": False, "status": "cancelled", "reason": reason})
 
-    # What the current render is doing: "preparing" (writing the scratch copy),
-    # "rendering" (Manim running), or "finishing" (moving/announcing the output).
-    phase: dict = {"value": None}
+    async def stop_render(state: _RenderState, reason: str) -> None:
+        task = state.task
+        if task is not None and not task.done():
+            if state.phase == "rendering":
+                # Stops Manim, or stops it as soon as it has been spawned. The task
+                # then finishes on its own and reports "cancelled".
+                await conn_executor.cancel()
+                _done, pending = await asyncio.wait({task}, timeout=STOP_GRACE_SECONDS)
+                if pending:
+                    task.cancel()
+            elif state.phase in ("pending", "preparing", "queued"):
+                # Not started, preparing, or waiting for a slot: nothing to kill yet.
+                task.cancel()
+        await settle(state, reason)
 
-    async def run_render(request: dict, render_id, manim_command: List[str]):
+    async def stop_current_render(reason: str = "cancelled") -> None:
+        nonlocal current
+        state, current = current, None
+        if state is not None:
+            await stop_render(state, reason)
+
+    async def run_render(state: _RenderState, request: dict, manim_command: List[str]):
+        render_id = state.render_id
         filename = request["filename"]
         download_only = request["download_only"]
         target_stem = os.path.splitext(filename)[0]
@@ -1127,7 +1223,7 @@ async def websocket_render(websocket: WebSocket):
             if not await send(outbound):
                 await conn_executor.cancel()
 
-        phase["value"] = "preparing"
+        state.phase = "preparing"
         try:
             # Unsaved code and download-only renders run from a scratch copy so that
             # their output lands under media/*/_temp_run_*.
@@ -1167,16 +1263,25 @@ async def websocket_render(websocket: WebSocket):
             if warning:
                 await send({"type": "info", "render_id": render_id, "message": warning})
 
-            phase["value"] = "rendering"
+            state.phase = "queued"
             slots = _render_semaphore()
-            if slots.locked():
-                await send({
-                    "type": "info",
-                    "render_id": render_id,
-                    "message": "Waiting for another render to finish…",
-                })
-            await slots.acquire()
+            waited = slots.locked()
+            if waited:
+                _render_waiters.append(state)
+                try:
+                    position = _queue_position(state)
+                    message = f"Waiting for another render to finish… (position {position} in queue)"
+                    await send({"type": "queued", "render_id": render_id, "position": position, "message": message})
+                    await send({"type": "info", "render_id": render_id, "message": message})
+                    await slots.acquire()
+                finally:
+                    _render_waiters.remove(state)
+            else:
+                await slots.acquire()
             try:
+                if waited:
+                    await send({"type": "started", "render_id": render_id, "waited": True})
+                state.phase = "rendering"
                 result = await conn_executor.execute(
                     manim_path=manim_command,
                     script_name=script_name,
@@ -1187,20 +1292,21 @@ async def websocket_render(websocket: WebSocket):
                 )
             finally:
                 slots.release()
-            phase["value"] = "finishing"
+            state.phase = "finishing"
             if relocate and held_output and result.get("success"):
                 moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_stem)
                 final_path = moved or held_output[-1]
                 await send({**_file_ready_event(final_path, media_rel_path(final_path)), "render_id": render_id})
         except asyncio.CancelledError:
-            await conn_executor.cancel()
+            if state.phase == "rendering":
+                await conn_executor.cancel()
             result = {"success": False, "status": "cancelled"}
             raise
         except Exception as e:
             result = {"success": False, "status": "error", "error": str(e)}
             await send({"type": "error", "render_id": render_id, "message": f"Render execution error: {e}"})
         finally:
-            phase["value"] = None
+            state.phase = "finishing"
             # Clean up before the last await, so a cancellation during the send can't skip it.
             if temp_filepath:
                 try:
@@ -1210,28 +1316,33 @@ async def websocket_render(websocket: WebSocket):
             if relocate and temp_stem:
                 _remove_temp_media(temp_stem)
             _active_temp_stems.discard(temp_stem)
-            await send(
-                {
-                    "type": "result",
-                    "render_id": render_id,
-                    "success": bool(result.get("success")),
-                    "status": result.get("status", "unknown"),
-                    "details": result,
-                }
-            )
+            await send_result(state, result)
+
+    async def reject_oversized(data: str) -> None:
+        render_id, is_start = None, False
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, dict):
+                render_id, is_start = parsed.get("id"), parsed.get("type") == "start"
+        except (ValueError, RecursionError):
+            pass
+        await send({
+            "type": "error",
+            "render_id": render_id,
+            "message": _body_too_large(),
+        })
+        if is_start:
+            await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
 
     try:
         while True:
             data = await websocket.receive_text()
             if len(data.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
-                await send({
-                    "type": "error",
-                    "message": _body_too_large(),
-                })
+                await reject_oversized(data)
                 continue
             try:
                 message = json.loads(data)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 await send({"type": "error", "message": "Invalid JSON message."})
                 continue
             if not isinstance(message, dict):
@@ -1241,8 +1352,8 @@ async def websocket_render(websocket: WebSocket):
             msg_type = message.get("type")
             if msg_type == "start":
                 render_id = message.get("id")
-                if current_render_task and not current_render_task.done():
-                    await stop_current_render()
+                # The previous render (if any) gets its own "cancelled" result first.
+                await stop_current_render("superseded")
                 try:
                     request = _validate_start_message(message)
                     # PATH lookups can be slow (network drives); keep them off the event loop.
@@ -1257,25 +1368,33 @@ async def websocket_render(websocket: WebSocket):
                     await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
                     continue
 
-                current_render_task = asyncio.create_task(run_render(request, render_id, manim_command))
+                state = _RenderState(render_id)
+                state.task = asyncio.create_task(run_render(state, request, manim_command))
+                current = state
 
             elif msg_type == "cancel":
-                if current_render_task and not current_render_task.done():
-                    if phase["value"] == "preparing":
-                        current_render_task.cancel()
-                    elif phase["value"] == "rendering":
-                        # Stops Manim (or stops it as soon as it has been spawned); the
-                        # render task then reports the "cancelled" result.
-                        await conn_executor.cancel()
-                    else:
-                        # Manim already finished; let the output and result through.
-                        continue
-                    await send({"type": "info", "message": "Stopping render..."})
+                state = current
+                if state is None or state.task is None or state.task.done():
+                    continue
+                if "id" in message and message.get("id") != state.render_id:
+                    # A cancel for a render that is no longer current must not stop this one.
+                    await send({
+                        "type": "info",
+                        "render_id": message.get("id"),
+                        "message": "That render is not running.",
+                    })
+                    continue
+                if state.phase == "finishing":
+                    # Manim already finished; let the output and result through.
+                    continue
+                await send({"type": "info", "render_id": state.render_id, "message": "Stopping render..."})
+                current = None
+                await stop_render(state, "cancelled")
 
     except WebSocketDisconnect:
-        await stop_current_render()
+        await stop_current_render("disconnected")
     except Exception as e:
-        await stop_current_render()
+        await stop_current_render("error")
         await send({"type": "error", "message": f"Server WebSocket error: {e}"})
 
 
