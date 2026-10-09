@@ -170,3 +170,12 @@ describe("groupConsoleRows", () => {
     expect(rows).toHaveLength(rich.length);
   });
 });
+
+describe("fileNameSegments", () => {
+  it("wraps after _ - . and camelCase steps, never mid-word", async () => {
+    const { fileNameSegments } = await import("./timeline");
+    expect(fileNameSegments("qa_asset-final.png")).toEqual(["qa_", "asset-", "final.", "png"]);
+    expect(fileNameSegments("myLogoDark.svg")).toEqual(["my", "Logo", "Dark.", "svg"]);
+    expect(fileNameSegments("a").join("")).toBe("a");
+  });
+});
