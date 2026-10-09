@@ -83,3 +83,4 @@ BUGFIX_LOG.md
 .turbo/
 .vercel/
 .opencode/
+workspace/.composer-initialized

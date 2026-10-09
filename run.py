@@ -60,16 +60,16 @@ def build_frontend(force: bool = False) -> None:
     npm = shutil.which("npm")
     if npm is None:
         if os.path.exists(DIST_INDEX):
-            print("[warn] npm not found; serving the existing (possibly outdated) frontend build.")
+            print("[warn] npm not found; serving the existing (possibly outdated) frontend build.", flush=True)
             return
         raise FileNotFoundError("npm")
 
-    print("Building the frontend (first run or sources changed)...")
+    print("Building the frontend (first run or sources changed)...", flush=True)
     if not os.path.isdir(os.path.join(FRONTEND_DIR, "node_modules")):
-        print("Installing frontend dependencies (npm install)... this can take a minute.")
+        print("Installing frontend dependencies (npm install)... this can take a minute.", flush=True)
         subprocess.run([npm, "install", "--no-fund", "--no-audit"], cwd=FRONTEND_DIR, check=True)
     subprocess.run([npm, "run", "build"], cwd=FRONTEND_DIR, check=True)
-    print("Frontend built.")
+    print("Frontend built.", flush=True)
 
 
 def open_browser(url: str) -> None:
@@ -127,12 +127,12 @@ def main() -> None:
 
     import uvicorn
 
-    print(f"Manim Composer is running at {url}  (Ctrl+C to stop)")
+    print(f"Manim Composer is running at {url}  (Ctrl+C to stop)", flush=True)
     try:
         uvicorn.run("backend.main:app", host=args.host, port=args.port, reload=False, log_level="warning")
     except KeyboardInterrupt:
         pass
-    print("\nManim Composer stopped.")
+    print("\nManim Composer stopped.", flush=True)
 
 
 if __name__ == "__main__":
