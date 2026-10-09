@@ -65,8 +65,9 @@ def _is_ip_literal(hostname: str) -> bool:
 
 
 def _origin_port(parsed) -> Optional[int]:
-    if parsed.port:
-        return parsed.port
+    port = parsed.port  # ValueError for a non-numeric or out-of-range port
+    if port:
+        return port
     if parsed.scheme == "https":
         return 443
     if parsed.scheme == "http":
@@ -103,6 +104,15 @@ def _loopback_origin_allowed(parsed, host_header: Optional[str]) -> bool:
 
 
 def is_origin_allowed(origin: Optional[str], host_header: Optional[str] = None) -> bool:
+    """True when a request carrying *origin* may be served. Malformed origins are refused."""
+    try:
+        return _origin_allowed(origin, host_header)
+    except ValueError:
+        # urlparse rejects e.g. "http://[::1" and ports like ":99999" or ":abc".
+        return False
+
+
+def _origin_allowed(origin: Optional[str], host_header: Optional[str]) -> bool:
     if not origin:
         return True
     normalized = origin.strip().rstrip("/").lower()
@@ -138,7 +148,14 @@ def is_host_allowed(host_header: Optional[str]) -> bool:
     configured = configured_origins()
     if "*" in configured:
         return True
-    return any(urlparse(origin).hostname == hostname for origin in configured)
+    return any(_configured_hostname(origin) == hostname for origin in configured)
+
+
+def _configured_hostname(origin: str) -> Optional[str]:
+    try:
+        return urlparse(origin).hostname
+    except ValueError:
+        return None
 
 
 def is_peer_allowed(peer: Optional[str]) -> bool:
