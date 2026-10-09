@@ -87,7 +87,8 @@ describe("App", () => {
       return element!;
     });
     expect(video.getAttribute("src")).toMatch(/^\/media\/videos\/example\/720p30\/Intro\.mp4\?v=\d+$/);
-    expect(screen.getByText("workspace/media/videos/example/720p30/Intro.mp4")).toBeInTheDocument();
+    // The footer splits folder and file name (the folder truncates first); the full path is the title.
+    expect(screen.getByTitle("workspace/media/videos/example/720p30/Intro.mp4")).toHaveTextContent("workspace/media/videos/example/720p30/Intro.mp4");
     expect(await screen.findByText(/Rendered Intro in/)).toBeInTheDocument();
   });
 

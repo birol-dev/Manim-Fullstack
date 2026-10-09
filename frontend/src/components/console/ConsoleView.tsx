@@ -3,7 +3,7 @@ import { ChevronRight, CornerDownRight, Terminal } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/panel";
 import type { LogEntry, LogLevel } from "@/hooks/useLogs";
-import { findLineReferenceMatch, type LineReference } from "@/lib/logs";
+import { findLineReferenceMatch, withQueuePosition, type LineReference } from "@/lib/logs";
 import { createConsoleGrouper, parseRichCodeRow, stripBoxDrawing } from "@/lib/traceback";
 import { cn } from "@/lib/utils";
 
@@ -24,6 +24,8 @@ interface ConsoleViewProps {
   /** Files whose line references become clickable. */
   linkFiles: string[];
   onJumpToLine: (line: number) => void;
+  /** The queued notice to show with a live position (BottomPanel keeps it across tab switches). */
+  liveQueueLine?: { id: number; position: number } | null;
 }
 
 /** True while the user has text selected inside *element* (they're copying, not navigating). */
@@ -124,7 +126,7 @@ function LogLine({
   );
 }
 
-export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps) {
+export function ConsoleView({ logs, linkFiles, onJumpToLine, liveQueueLine = null }: ConsoleViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   // Which "N library frames hidden" groups are open, by the id of their first entry.
@@ -141,6 +143,8 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
   // Regroups only what changed since the last render (new lines, a traceback still streaming in).
   const [grouper] = useState(() => createConsoleGrouper<LogEntry>());
   const rows = useMemo(() => grouper.group(logs, linkFiles), [grouper, logs, linkFiles]);
+  const shownEntry = (entry: LogEntry): LogEntry =>
+    liveQueueLine && entry.id === liveQueueLine.id ? { ...entry, text: withQueuePosition(entry.text, liveQueueLine.position) } : entry;
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -188,7 +192,7 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
           return (
             <LogLine
               key={row.entry.id}
-              entry={row.entry}
+              entry={shownEntry(row.entry)}
               line={row.line}
               linkFiles={linkFiles}
               userFrame={row.userFrame}

@@ -85,15 +85,22 @@ export function LatexPanel({ latexAvailable, canInsert, onInsert, onOpenSetup }:
                 <span dangerouslySetInnerHTML={{ __html: preview.html }} />
               )}
             </div>
-            <Button
-              variant="primary"
-              size="md"
-              disabled={!canInsert || !latex.trim()}
-              onClick={() => onInsert(mathTexSnippet(latex))}
+            {/* wrap: a disabled button gets no hover, so the span carries the hint saying why. */}
+            <Tooltip
+              content={!canInsert ? "Open a script to insert this formula" : !latex.trim() ? "Type a formula to insert" : "Insert MathTex into the open script"}
+              wrap
+              wrapClassName="flex w-full [&>button]:w-full"
             >
-              <CornerDownLeft />
-              Insert MathTex
-            </Button>
+              <Button
+                variant="primary"
+                size="md"
+                disabled={!canInsert || !latex.trim()}
+                onClick={() => onInsert(mathTexSnippet(latex))}
+              >
+                <CornerDownLeft />
+                Insert MathTex
+              </Button>
+            </Tooltip>
           </div>
         </Section>
 

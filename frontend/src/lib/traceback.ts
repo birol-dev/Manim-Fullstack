@@ -194,34 +194,78 @@ const BOX_EDGE = /[│┃║]/;
 const BOX_RULE_LINE = /^\s*[╭╰┏┗╔╚┌└]?[─━═\s]*(.*?)[─━═\s]*[╮╯┓┛╗╝┐┘]?\s*$/;
 const BOX_CHARS = /[\u2500-\u257F]/g;
 
+/** A rule row: a corner (╭ ╰ ┏ …) and rule characters, maybe with a title in it. */
+const BOX_CORNER_RULE = /^\s*[╭╰┏┗╔╚┌└][─━═]/;
+/** Rule characters at either end of a row ("── Locals ──", "─────"). */
+const RULE_RUN_START = /^\s*[─━═]+\s*/;
+const RULE_RUN_END = /\s*[─━═]+\s*$/;
+/**
+ * A Rich code row after its outer border: the ❱ marker or a space (the marker column, which a wrapped
+ * frame-header tail like "2 in render" lacks), the right-aligned
+ * line number, then the " │ " gutter or (unindented code) a single space.
+ */
+const CODE_GUTTER = /^(?:❱|\s)\s*\d+(?: │|(?= ))/;
+
+interface CopyRow {
+  text: string;
+  /** Code from a traceback frame: *text* has the gutter (❱, line number, separator) cut off. */
+  code: boolean;
+  /** The row with its gutter, for a mixed selection. */
+  full?: string;
+}
+
 /**
  * Plain text for a copied console selection: Rich's traceback box (│ ╭ ╮ ╰ ╯ ─
  * and friends) is removed, so pasting a traceback into an issue or a chat gives
  * readable lines. Top/bottom rules keep their title ("Traceback (most recent
- * call last)"); code rows keep their indentation and the ❱ marker.
+ * call last)"). Lines that merely start with rule characters (─, ━, ═) are kept;
+ * only the rule runs are removed.
+ *
+ * When the selection is only code rows (copying a line or a few lines of the
+ * failing frame), the ❱ marker, line numbers, gutter and padding go too, so just
+ * the code is copied, with the rows' relative indentation. A selection with any
+ * other row keeps the markers, so a copied traceback still says which line failed.
  */
 export function stripBoxDrawing(text: string): string {
   if (!/[\u2500-\u257F]/.test(text)) return text;
-  const out: string[] = [];
+  const rows: CopyRow[] = [];
   for (const raw of text.split(/\r?\n/)) {
-    const isRule = /^\s*[╭╰┏┗╔╚┌└─━═]/.test(raw) && !/^\s*[│┃║]/.test(raw);
-    if (isRule) {
+    if (BOX_CORNER_RULE.test(raw)) {
       const title = (BOX_RULE_LINE.exec(raw)?.[1] ?? "").replace(BOX_CHARS, "").trim();
-      if (title) out.push(title);
+      if (title) rows.push({ text: title, code: false });
       continue;
     }
     let line = raw;
     // Outer border: "│ " at the start and " │" at the end of a boxed row.
+    const boxed = new RegExp(`^\\s*${BOX_EDGE.source}`).test(line);
     line = line.replace(new RegExp(`^(\\s*)${BOX_EDGE.source} ?`), "$1");
     line = line.replace(new RegExp(` ?${BOX_EDGE.source}\\s*$`), "");
+    const gutter = boxed || /^\s*❱/.test(line) ? CODE_GUTTER.exec(line) : null;
+    if (gutter) {
+      // Indent guides become spaces, so the code's indentation survives.
+      rows.push({
+        text: line.slice(gutter[0].length).replace(BOX_CHARS, " ").replace(/\s+$/, ""),
+        code: true,
+        full: line.replace(BOX_CHARS, " ").replace(/\s+$/, ""),
+      });
+      continue;
+    }
+    // A row that starts (or ends) with a rule run: drop the run, keep the words.
+    line = line.replace(RULE_RUN_START, "").replace(RULE_RUN_END, "");
     // Inner separators and indent guides become spaces, so indentation survives.
     line = line.replace(BOX_CHARS, " ").replace(/\s+$/, "");
-    out.push(line);
+    rows.push({ text: line, code: false });
   }
   // Rows that were only border (e.g. "│      │") are empty now; drop runs of them at the ends.
-  while (out.length && !out[0].trim()) out.shift();
-  while (out.length && !out[out.length - 1].trim()) out.pop();
-  return out.join("\n");
+  while (rows.length && !rows[0].text.trim()) rows.shift();
+  while (rows.length && !rows[rows.length - 1].text.trim()) rows.pop();
+  if (rows.length && rows.every((row) => row.code || !row.text.trim())) {
+    const indents = rows.filter((row) => row.text.trim()).map((row) => row.text.length - row.text.trimStart().length);
+    const common = Math.min(...indents);
+    return rows.map((row) => row.text.slice(Math.min(common, row.text.length - row.text.trimStart().length))).join("\n");
+  }
+  // Mixed selection: code rows keep their marker and line number.
+  return rows.map((row) => (row.code ? row.full : row.text)).join("\n");
 }
 
 interface CachedSegment<T extends ConsoleLine> {
