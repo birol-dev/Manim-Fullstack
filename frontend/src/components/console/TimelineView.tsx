@@ -72,9 +72,16 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
       <p
         className="shrink-0 text-2xs text-fg-subtle"
         title={
-          total.estimated
-            ? "Estimated from Manim's default run times (Write scales with text length). Explicit run_time= values are exact."
-            : undefined
+          [
+            total.estimated
+              ? "Estimated from Manim's default run times (Write scales with text length). Explicit run_time= values are exact."
+              : "",
+            total.unknownLoops
+              ? "A loop's count is only known at runtime: the total counts one pass of it (known inner loops included), so the real length is open-ended (+)."
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined
         }
       >
         <span className="font-medium text-fg-muted">{scene}</span> · {steps.length} {steps.length === 1 ? "step" : "steps"}
@@ -82,7 +89,7 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
           <>
             {" "}
             ({looped} in {looped === 1 ? "a loop" : "loops"}
-            {total.runs !== steps.length ? `, ${total.runs}${total.unknownLoops ? "+" : ""} plays` : ""})
+            {total.runs !== steps.length || total.unknownLoops ? `, ${total.runs}${total.unknownLoops ? "+" : ""} plays` : ""})
           </>
         )}{" "}
         · {total.estimated ? "≈ " : ""}

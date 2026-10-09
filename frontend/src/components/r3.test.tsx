@@ -213,3 +213,20 @@ describe("Tooltip and Select (item 6)", () => {
     expect(trigger.parentElement?.tagName).toBe("SPAN");
   });
 });
+
+describe("TimelineView header with an unknown outer loop", () => {
+  it("shows the per-pass total with a '+'", () => {
+    render(
+      <TimelineView
+        scene="Nested"
+        activeIndex={null}
+        onJumpToLine={() => {}}
+        steps={[
+          { type: "play", label: "Create(Circle())", line: 6, duration: 1, estimated: true, repeat: null, loop_line: 4, loops: [[4, 8, null], [5, 12, 3]] },
+          { type: "wait", label: "Wait 1s", line: 7, duration: 1, repeat: null, loop_line: 4, loops: [[4, 8, null]] },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/2 steps/).textContent).toMatch(/2 steps \(2 in loops, 4\+ plays\) · ≈ 4s\+/);
+  });
+});

@@ -9,8 +9,9 @@ const RESERVED_CHARS = '<>:"|?*';
 export const MAX_FILENAME_BYTES = 255;
 export const MAX_FILENAME_STEM_CHARS = 100;
 export const TEMP_SCRIPT_PREFIX = "_temp_run_";
+/** Start of the server's message for an existing file whose name is no longer allowed. */
+export const RENAME_REQUIRED_PREFIX = "Rename this file to save or render it";
 
-/** "My Scene" -> "My Scene.py"; leaves an existing .py suffix alone. */
 /**
  * Collapse a doubled extension ("intro.py.py" -> "intro.py"). The name inputs
  * select only the stem on focus, so pasting "intro.py" over it keeps the old ".py".
@@ -19,35 +20,65 @@ export function dedupeExtension(input: string): string {
   return input.replace(/(\.py)(?:\.py)+(\s*)$/i, "$1$2");
 }
 
-/** The file name for *input*: trimmed, with exactly one ".py". Idempotent. */
+/**
+ * The file name for *input*: trimmed, NFC, with exactly one lowercase ".py"
+ * ("Foo.PY" -> "Foo.py", "intro" -> "intro.py"). A name ending with a dot is left
+ * alone so validateScriptName refuses it. Idempotent. Same rule as
+ * to_script_name() in backend/workspace_paths.py, which does not trim; see
+ * FILENAME-RULE.md and tests/fixtures/filename_rules.json.
+ */
 export function toScriptName(input: string): string {
-  const name = dedupeExtension(input.trim());
-  return name.toLowerCase().endsWith(".py") ? name : `${name}.py`;
+  const name = dedupeExtension(input.trim()).normalize("NFC");
+  if (name.endsWith(".") || name.endsWith(" ")) return name;
+  return name.toLowerCase().endsWith(".py") ? `${name.slice(0, -3)}.py` : `${name}.py`;
 }
 
-/** Returns an error message, or null when *name* is a usable name for a new script. */
+/** Key for "same name" checks: NFC, then lower case (fold_filename() on the server). */
+export function foldFilename(name: string): string {
+  return name.normalize("NFC").toLowerCase();
+}
+
+function isReservedDeviceName(name: string, nfkc = false): boolean {
+  // With nfkc, COM¹, ＣＯＭ１ and COM١ count as COM1 (Windows reserves them too).
+  const base = (nfkc ? name.normalize("NFKC") : name).split(".")[0].trimEnd().toUpperCase();
+  return RESERVED_NAMES.has(base) || /^(?:COM|LPT)\p{Nd}$/u.test(base);
+}
+
+/**
+ * Returns an error message, or null when *name* is a usable name for a new script.
+ * The checks and messages match safe_basename + validate_new_filename on the server,
+ * in the same order.
+ */
 export function validateScriptName(name: string, existing: readonly string[] = []): string | null {
-  const stem = name.replace(/\.py$/i, "");
-  if (!stem.trim()) return "Enter a file name.";
-  if (name !== name.trim()) return "Filename cannot start or end with a dot or space.";
-  if (/[/\\]/.test(name)) return "Filename cannot contain folders or path separators.";
+  if (!name.trim() || !name.replace(/\.py$/, "").trim()) return "Enter a file name.";
+  if (name.endsWith(".") || name.endsWith(" ") || name.startsWith(" ")) {
+    return "Filename cannot start or end with a dot or space.";
+  }
+  const raw = name.replace(/\\/g, "/");
+  if (raw.startsWith("/") || (raw.length >= 2 && raw[1] === ":")) return "Absolute paths are not allowed.";
+  if (raw.includes("/")) return "Filename cannot contain folders or path separators.";
   if (/[\p{Cc}\p{Cf}]/u.test(name)) return "Filename cannot contain control or invisible characters.";
   const bad = [...new Set([...name].filter((char) => RESERVED_CHARS.includes(char)))].sort();
   if (bad.length) return `Filename cannot contain ${bad.join(" ")}.`;
   if (new TextEncoder().encode(name).length > MAX_FILENAME_BYTES) return `Filename is too long (max ${MAX_FILENAME_BYTES} bytes).`;
+  const stem = name.endsWith(".py") ? name.slice(0, -3) : name.replace(/\.[^.]*$/, "");
   if ([...stem].length > MAX_FILENAME_STEM_CHARS) {
     return `Filename is too long (max ${MAX_FILENAME_STEM_CHARS} characters before the extension).`;
   }
-  if (!stem.replace(/^\.+|\.+$/g, "")) return "Filename needs a name before the extension.";
-  if (RESERVED_NAMES.has(name.split(".")[0].trimEnd().toUpperCase())) return `Filename '${name}' is a reserved device name.`;
+  if (!stem.replace(/\./g, "")) return "Filename needs a name before the extension.";
+  if (isReservedDeviceName(name)) return `Filename '${name}' is a reserved device name.`;
+  if (!name.endsWith(".py")) return "File must end with .py.";
+  if (name !== name.normalize("NFC")) return "Filename must use the standard Unicode form (NFC).";
+  if (isReservedDeviceName(name, true)) return `Filename '${name}' is a reserved device name.`;
+  if (stem !== stem.replace(/[. ]+$/, "")) return "Filename cannot end with a dot or space before the extension.";
   if (name.startsWith("-")) return "Filename cannot start with a dash.";
   if (name.startsWith(".")) return "Filename cannot start with a dot.";
   if (name.toLowerCase().startsWith(TEMP_SCRIPT_PREFIX)) {
     return `Filenames starting with '${TEMP_SCRIPT_PREFIX}' are reserved for scratch renders.`;
   }
   if (existing.includes(name)) return `${name} already exists.`;
-  const folded = name.toLowerCase();
-  const clash = existing.find((other) => other.toLowerCase() === folded);
+  const folded = foldFilename(name);
+  const clash = existing.find((other) => foldFilename(other) === folded);
   if (clash) return `'${clash}' already exists. File names that differ only by case are not allowed.`;
   return null;
 }

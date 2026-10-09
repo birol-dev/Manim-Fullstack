@@ -344,6 +344,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
 
   const createFile = useCallback(
     async (name: string, content: string) => {
+      let created = name;
       if (modeRef.current === "browser") {
         const all = loadBrowserFiles();
         if (name in all) throw new Error(`${name} already exists.`);
@@ -352,9 +353,11 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       } else {
         const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, create_only: true });
         if (data.version) versionsRef.current[fileKey("disk", data.filename)] = data.version;
+        // The server stores the normalized name (NFC, lowercase .py); open that one.
+        if (data.filename) created = data.filename;
       }
       await refreshFiles();
-      await openFile(name);
+      await openFile(created);
     },
     [openFile, refreshFiles],
   );

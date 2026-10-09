@@ -198,13 +198,13 @@ def _animation_step(call: ast.Call, texts: Optional[dict] = None) -> Optional[di
 
 _EMPTY_NAMES = (("has_class", False), ("names", frozenset()), ("open_namespace", False))
 
-_COMPOUND_BLOCKS = (ast.If, ast.Try, ast.With, ast.For, ast.While, ast.AsyncWith, ast.AsyncFor)
+_COMPOUND_BLOCKS = (ast.If, ast.Try, ast.With, ast.For, ast.While, ast.AsyncWith, ast.AsyncFor, ast.Match)
 if hasattr(ast, "TryStar"):
     _COMPOUND_BLOCKS += (ast.TryStar,)
 
 
 def _module_level_nodes(body):
-    """Statements that run at module level: the body plus nested if/try/with/loop blocks."""
+    """Statements that run at module level: the body plus nested if/try/with/loop/match blocks."""
     for node in body:
         yield node
         if isinstance(node, _COMPOUND_BLOCKS):
@@ -212,6 +212,8 @@ def _module_level_nodes(body):
                 yield from _module_level_nodes(getattr(node, field, []) or [])
             for handler in getattr(node, "handlers", []) or []:
                 yield from _module_level_nodes(handler.body)
+            for case in getattr(node, "cases", []) or []:  # match / case
+                yield from _module_level_nodes(case.body)
 
 
 def _scene_aliases(nodes) -> set:
@@ -263,11 +265,8 @@ def _has_foreign_star_import(nodes) -> bool:
     return False
 
 
-def _loop_count(node: ast.AST) -> Optional[int]:
-    """Iterations of ``for _ in range(3)`` or ``for x in [a, b]``; None when unknown."""
-    if not isinstance(node, (ast.For, ast.AsyncFor)):
-        return None  # while loops: unknown
-    iterable = node.iter
+def _iteration_count(iterable: ast.AST) -> Optional[int]:
+    """Items in ``range(3)``, ``[a, b]`` or ``"abc"``; None when unknown."""
     if isinstance(iterable, (ast.List, ast.Tuple, ast.Set)) and not any(isinstance(e, ast.Starred) for e in iterable.elts):
         return len(iterable.elts)
     if isinstance(iterable, ast.Constant) and isinstance(iterable.value, str):
@@ -288,48 +287,90 @@ def _loop_count(node: ast.AST) -> Optional[int]:
     return None
 
 
+def _loop_count(node: ast.AST) -> Optional[int]:
+    """Iterations of ``for _ in range(3)`` or ``for x in [a, b]``; None when unknown."""
+    if not isinstance(node, (ast.For, ast.AsyncFor)):
+        return None  # while loops: unknown
+    return _iteration_count(node.iter)
+
+
+def _generator_count(generator: ast.comprehension) -> Optional[int]:
+    """Iterations of one ``for ... in ...`` clause of a comprehension (unknown with ``if``)."""
+    if generator.ifs:
+        return None
+    return _iteration_count(generator.iter)
+
+
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+
+
+def _repeat_of(loops: tuple) -> Optional[int]:
+    """Total runs of a call nested in *loops*: the product of the counts, None if any is unknown."""
+    total = 1
+    for _, _, count in loops:
+        if count is None:
+            return None
+        total *= count
+    return total
+
+
 def _collect_steps(construct: ast.AST) -> List[dict]:
-    """play/wait calls in source order, tagged with the loop that repeats them.
+    """play/wait calls in source order, tagged with the loops that repeat them.
+
+    Each looped step gets ``repeat`` (total runs: the product of the enclosing loop
+    counts, so ``range(0)`` anywhere gives 0), ``loop_line`` (the outermost loop) and
+    ``loops``: ``[[line, column, count], ...]`` from the outermost loop inward, so the
+    UI can replay a loop body in execution order (a, b, a, b, ...).
 
     Limits: only literal ``range(...)`` and list/tuple/string literals give an iteration
-    count. ``while`` loops, loops over variables and comprehensions are marked as
-    repeating an unknown number of times (``repeat: None``).
+    count. ``while`` loops, loops over variables and comprehension clauses with ``if``
+    are marked as repeating an unknown number of times (``repeat: None``).
+    Comprehensions (``[self.play(x) for x in (a, b)]``) count as loops.
     """
     texts = _collect_texts(construct)
     steps: List[dict] = []
 
-    def visit(node: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
+    def visit(node: ast.AST, loops: tuple) -> None:
         for child in ast.iter_child_nodes(node):
-            child_repeat, child_line = repeat, loop_line
             if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
                 # The loop header (iterable / condition) runs once; only the body repeats.
                 header = child.iter if isinstance(child, (ast.For, ast.AsyncFor)) else child.test
-                visit_expr(header, repeat, loop_line)
-                count = _loop_count(child)
-                body_repeat = None if (count is None or (loop_line is not None and repeat is None)) else count * (repeat or 1)
-                body_line = child.lineno if loop_line is None else loop_line
+                visit_expr(header, loops)
+                inner = loops + ((child.lineno, child.col_offset, _loop_count(child)),)
                 for stmt in child.body:
-                    visit_stmt(stmt, body_repeat, body_line)
+                    visit_stmt(stmt, inner)
                 for stmt in child.orelse:
-                    visit_stmt(stmt, repeat, loop_line)
+                    visit_stmt(stmt, loops)
+                continue
+            if isinstance(child, _COMPREHENSIONS):
+                inner = loops
+                for index, generator in enumerate(child.generators):
+                    # The first iterable is evaluated once, outside the comprehension.
+                    visit_expr(generator.iter, loops if index == 0 else inner)
+                    inner = inner + ((child.lineno, child.col_offset + index, _generator_count(generator)),)
+                    for condition in generator.ifs:
+                        visit_expr(condition, inner)
+                for part in ("key", "value") if isinstance(child, ast.DictComp) else ("elt",):
+                    visit_expr(getattr(child, part), inner)
                 continue
             if isinstance(child, ast.Call):
                 step = _animation_step(child, texts)
                 if step is not None:
-                    if loop_line is not None:
-                        step["repeat"] = repeat
-                        step["loop_line"] = loop_line
+                    if loops:
+                        step["repeat"] = _repeat_of(loops)
+                        step["loop_line"] = loops[0][0]
+                        step["loops"] = tuple((line, col, count) for line, col, count in loops)
                     steps.append(step)
-            visit(child, child_repeat, child_line)
+            visit(child, loops)
 
-    def visit_stmt(stmt: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
+    def visit_stmt(stmt: ast.AST, loops: tuple) -> None:
         wrapper = ast.Module(body=[stmt], type_ignores=[])
-        visit(wrapper, repeat, loop_line)
+        visit(wrapper, loops)
 
-    def visit_expr(expr: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
-        visit(ast.Expr(value=expr), repeat, loop_line)
+    def visit_expr(expr: ast.AST, loops: tuple) -> None:
+        visit(ast.Expr(value=expr), loops)
 
-    visit(construct, None, None)
+    visit(construct, ())
     steps.sort(key=lambda step: step["line"])
     return steps
 
@@ -424,7 +465,15 @@ def get_scenes_from_code(code_content: str) -> List[str]:
 def get_scene_animations(code_content: str) -> dict:
     """Return ``{scene: [step, ...]}`` for the play/wait calls in each construct()."""
     _, anims, _, _ = _parse_code_ast(code_content)
-    return {scene: [dict(items) for items in steps] for scene, steps in anims}
+    return {scene: [_step_dict(items) for items in steps] for scene, steps in anims}
+
+
+def _step_dict(items) -> dict:
+    """A cached (hashable) step as a plain dict; ``loops`` becomes a list of lists."""
+    step = dict(items)
+    if "loops" in step:
+        step["loops"] = [list(loop) for loop in step["loops"]]
+    return step
 
 
 def get_syntax_error(code_content: str) -> Optional[dict]:
