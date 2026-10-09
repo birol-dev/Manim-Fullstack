@@ -20,7 +20,13 @@ from diagnostics import get_binary_paths, get_cached_profile, write_manim_config
 from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 from scene_parser import get_scene_animations, get_scenes_from_code, get_syntax_error
-from workspace_paths import UnsafePathError, safe_basename, safe_join
+from workspace_paths import (
+    UnsafePathError,
+    find_case_insensitive_match,
+    safe_basename,
+    safe_join,
+    validate_new_filename,
+)
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -458,12 +464,32 @@ def get_files():
     return {"scripts": scripts, "assets": _list_assets(), "media": _list_media()}
 
 
-def _script_path(filename: str) -> tuple:
+def _script_path(filename: str, *, new: bool = False) -> tuple:
+    """Validate a script name. ``new=True`` applies the rules for names being created."""
     try:
-        name = safe_basename(filename, required_suffix=".py")
+        if new:
+            name = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+        else:
+            name = safe_basename(filename, required_suffix=".py")
         return name, safe_join(WORKSPACE_DIR, name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid script filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid script filename: {exc}")
+
+
+def _reject_case_collision(directory: str, name: str) -> None:
+    """409 when another file differs from *name* only by letter case."""
+    clash = find_case_insensitive_match(directory, name)
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{clash}' already exists. File names that differ only by case are not allowed.",
+        )
+
+
+def _os_error_detail(exc: OSError, action: str) -> str:
+    """A 500 message without the host path that ``str(OSError)`` would include."""
+    reason = exc.strerror or exc.__class__.__name__
+    return f"Could not {action}: {reason}."
 
 
 @app.get("/api/file-content")
@@ -475,8 +501,8 @@ def get_file_content(filename: str):
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
     return {"filename": filename, "code": content, **_parsed(content)}
 
 
@@ -501,12 +527,13 @@ def save_file(req: SaveRequest):
     """Write a script and return its parsed scenes."""
     _ensure_code_within_limit(req.code)
     filename = req.filename if req.filename.endswith(".py") else f"{req.filename}.py"
-    filename, filepath = _script_path(filename)
+    filename, filepath = _script_path(filename, new=True)
+    _reject_case_collision(WORKSPACE_DIR, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(req.code)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "save the script"))
     return {"success": True, "filename": filename, "message": "File saved.", **_parsed(req.code)}
 
 
@@ -518,13 +545,8 @@ class RenameRequest(BaseModel):
 @app.post("/api/rename")
 def rename_file(req: RenameRequest):
     """Rename a workspace script."""
-    try:
-        old_name = safe_basename(req.old_name, required_suffix=".py")
-        new_name = safe_basename(req.new_name, required_suffix=".py")
-        old_path = safe_join(WORKSPACE_DIR, old_name)
-        new_path = safe_join(WORKSPACE_DIR, new_name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Only python (.py) scripts in the workspace can be renamed.")
+    old_name, old_path = _script_path(req.old_name)
+    new_name, new_path = _script_path(req.new_name, new=True)
 
     if not os.path.exists(old_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
@@ -532,6 +554,9 @@ def rename_file(req: RenameRequest):
     is_case_only = os.path.normcase(old_path) == os.path.normcase(new_path)
     if os.path.exists(new_path) and not is_case_only:
         raise HTTPException(status_code=400, detail="A file with the target name already exists.")
+    clash = find_case_insensitive_match(WORKSPACE_DIR, new_name)
+    if clash and clash != old_name:
+        _reject_case_collision(WORKSPACE_DIR, new_name)
 
     try:
         if is_case_only and old_name != new_name:
@@ -541,8 +566,8 @@ def rename_file(req: RenameRequest):
             os.rename(temp_path, new_path)
         else:
             os.rename(old_path, new_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "rename the script"))
 
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
@@ -556,7 +581,7 @@ def delete_script(filename: str):
     try:
         os.remove(filepath)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the script"))
     return {"success": True, "filename": filename}
 
 
@@ -569,10 +594,10 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
     so a rejected upload cannot delete the file it was replacing.
     """
     try:
-        filename = safe_basename(file.filename)
+        filename = validate_new_filename(file.filename)
         dest_path = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Uploaded file must include a valid filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
 
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_ASSET_EXTENSIONS:
@@ -581,10 +606,15 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
             detail=f"Unsupported asset type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_ASSET_EXTENSIONS))}",
         )
 
-    if os.path.exists(dest_path) and not overwrite:
+    _reject_case_collision(ASSETS_DIR, filename)
+    existed = os.path.exists(dest_path)
+    if existed and not overwrite:
         raise HTTPException(
             status_code=409,
-            detail=f"An asset named '{filename}' already exists. Upload again to replace it.",
+            detail=(
+                f"An asset named '{filename}' already exists. "
+                "Confirm to replace it (send the upload again with overwrite=true)."
+            ),
         )
 
     partial_path = f"{dest_path}.uploading-{uuid.uuid4().hex}"
@@ -610,11 +640,14 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
         os.replace(partial_path, dest_path)
     except HTTPException:
         raise
-    except Exception as e:
+    except OSError as e:
         discard_partial()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "store the upload"))
+    except Exception:
+        discard_partial()
+        raise HTTPException(status_code=500, detail="Could not store the upload.")
 
-    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": overwrite}
+    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": existed}
 
 
 @app.delete("/api/assets")
@@ -623,14 +656,14 @@ def delete_asset(filename: str):
     try:
         filename = safe_basename(filename)
         filepath = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid asset filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Asset not found.")
     try:
         os.remove(filepath)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the asset"))
     return {"success": True, "filename": filename}
 
 
@@ -695,6 +728,9 @@ def delete_media(path: str):
     """Delete a rendered video or image (path relative to workspace/media)."""
     rel_path = _media_request_path(path)
     top = rel_path.split("/", 1)[0]
+    if ".." in rel_path.split("/"):
+        # Check the folder after resolving, not before: videos/../texts/x.png must not pass.
+        raise HTTPException(status_code=400, detail="Invalid media path.")
     if top not in MEDIA_SUBDIRS or not rel_path.lower().endswith(OUTPUT_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only rendered videos and images can be deleted.")
     try:
@@ -707,7 +743,7 @@ def delete_media(path: str):
     try:
         os.remove(abs_path)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the render"))
 
     parent = os.path.dirname(abs_path)
     if top == "videos":
@@ -910,9 +946,9 @@ def _validate_start_message(message: dict) -> dict:
     if not isinstance(quality, str) or quality not in ALLOWED_QUALITIES:
         raise _RenderRequestError("Quality must be one of: l, m, h, k.")
     try:
-        filename = safe_basename(filename, required_suffix=".py")
-    except UnsafePathError:
-        raise _RenderRequestError("Invalid script filename.")
+        filename = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+    except UnsafePathError as exc:
+        raise _RenderRequestError(f"Invalid script filename: {exc}")
     if code_content is not None:
         if not isinstance(code_content, str):
             raise _RenderRequestError("Code payload must be a string.")
