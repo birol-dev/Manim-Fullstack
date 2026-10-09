@@ -179,3 +179,32 @@ describe("fileNameSegments", () => {
     expect(fileNameSegments("a").join("")).toBe("a");
   });
 });
+
+describe("groupConsoleRows with the server's redacted, relative paths (#10)", () => {
+  const redacted = [
+    "╭─────────── Traceback (most recent call last) ───────────╮",
+    "│ <site-packages>/manim/cli/render/commands.py:122 in render       │",
+    "│ ❱ 122 │   │   scene.render()                                     │",
+    "│                                                                  │",
+    "│ <site-packages>/manim/scene/scene.py:320 in render               │",
+    "│ ❱  320 │   │   return self._get_manager().render(preview)        │",
+    "│                                                                  │",
+    "│ <python-lib>/asyncio/runners.py:44 in run                        │",
+    "│                                                                  │",
+    "│ scene.py:7 in construct                                          │",
+    "│ ❱ 7 │   │   self.play(Transform(c, undefined_name))              │",
+    "╰──────────────────────────────────────────────────────────────────╯",
+    "NameError: name 'undefined_name' is not defined",
+  ].map((text, index) => ({ id: index + 1, level: "stderr", text }));
+
+  it("hides redacted library frames and links the relative user frame", () => {
+    const rows = groupConsoleRows(redacted, ["scene.py"]);
+    const hidden = rows.filter((row) => row.kind === "hidden");
+    expect(hidden).toHaveLength(1);
+    expect(hidden[0].kind === "hidden" && hidden[0].frames).toBe(3);
+    const header = rows.find((row) => row.kind === "line" && row.entry.text.includes("scene.py:7 in construct"));
+    expect(header?.kind === "line" && header.line).toBe(7);
+    const failing = rows.find((row) => row.kind === "line" && row.failing);
+    expect(failing?.kind === "line" && failing.line).toBe(7);
+  });
+});
