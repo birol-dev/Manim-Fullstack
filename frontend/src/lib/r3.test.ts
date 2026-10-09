@@ -61,3 +61,25 @@ describe("pathSegments (item 3)", () => {
     expect(pathSegments("C:\\Tools\\manim.exe")).toEqual(["C:\\", "Tools\\", "manim.exe"]);
   });
 });
+
+describe("timeline total with an unknown outer loop (round 3 gap)", () => {
+  it("applies the known inner multiplier per outer pass and marks the total open-ended", async () => {
+    const { knownRuns, timelineTotal } = await import("./timeline");
+    // for i in range(n):            <- unknown
+    //     for j in range(3): play   <- ×3 per pass
+    //     wait(1)
+    const steps = [
+      { type: "play" as const, label: "Create(Circle())", line: 6, duration: 1, estimated: true, repeat: null, loop_line: 4, loops: [[4, 8, null], [5, 12, 3]] as Array<[number, number, number | null]> },
+      { type: "wait" as const, label: "Wait 1s", line: 7, duration: 1, repeat: null, loop_line: 4, loops: [[4, 8, null]] as Array<[number, number, number | null]> },
+    ];
+    expect(knownRuns(steps[0])).toBe(3);
+    expect(knownRuns(steps[1])).toBe(1);
+    expect(timelineTotal(steps)).toEqual({ seconds: 4, estimated: true, runs: 4, unknownLoops: true });
+  });
+
+  it("keeps fully known nested loops exact", async () => {
+    const { timelineTotal } = await import("./timeline");
+    const step = { type: "play" as const, label: "x", line: 3, duration: 2, repeat: 6, loop_line: 2, loops: [[2, 4, 2], [3, 8, 3]] as Array<[number, number, number | null]> };
+    expect(timelineTotal([step])).toEqual({ seconds: 12, estimated: false, runs: 6, unknownLoops: false });
+  });
+});

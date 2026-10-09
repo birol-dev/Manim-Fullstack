@@ -97,7 +97,7 @@ Publish on **127.0.0.1** only. `docker run -p 8000:8000` listens on every interf
 | `MANIM_MAX_CODE_BYTES`  | `2097152`               | Largest script the API accepts, measured as UTF-8. Reported to the UI as `max_code_bytes` by `/api/diagnostics`. |
 | `MANIM_MAX_REQUEST_BYTES` | 6 × code limit + 64 KB | Raw request body / WebSocket message cap (room for JSON escaping) |
 | `MANIM_TEMP_DOWNLOAD_TTL` | `3600`               | Seconds before an unfetched download-only render is removed          |
-| `MANIM_HOST` / `MANIM_PORT` | `127.0.0.1` / `8000` | Address for `npm run backend` / `python backend/main.py` (or pass `--host` / `--port`) |
+| `MANIM_HOST` / `MANIM_PORT` | `127.0.0.1` / `8000` | Address for `npm run backend` / `python backend/main.py` (or pass `--host` / `--port`, which win). The port must be an integer 1–65535 (otherwise exit status 2); a host other than `127.0.0.1`/`localhost`/`::1` prints the same LAN warning as `run.py`, and a port that is already in use stops it before startup. |
 | `MANIM_ALLOW_INSTALLS`  | enabled                 | Set to `0` to disable the installer endpoints                        |
 | `MANIM_BACKEND_URL`     | `http://127.0.0.1:8000` | Backend the Vite dev server proxies to                               |
 | `VITE_BACKEND_URL`      | same origin             | Build-time: point a separately hosted frontend at a backend          |

@@ -47,6 +47,8 @@ export interface AnimationStep {
   repeat?: number | null;
   /** Line of the outermost loop that repeats this call. */
   loop_line?: number;
+  /** Enclosing loops, outermost first: [line, column, iterations or null when unknown]. */
+  loops?: Array<[number, number, number | null]>;
 }
 
 export type SceneAnimations = Record<string, AnimationStep[]>;

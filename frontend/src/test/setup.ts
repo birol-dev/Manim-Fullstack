@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { FakeWebSocket } from "./fakeSocket";
 
 globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+
+// findBy*/waitFor give up after 1 s by default, which a loaded CI box can exceed while
+// the App re-renders. 5 s still fails fast on a real bug, well inside testTimeout.
+configure({ asyncUtilTimeout: 5_000 });
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
