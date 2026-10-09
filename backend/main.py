@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
 from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
-from scene_parser import get_scene_animations, get_scenes_from_code, get_syntax_error
+from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
     UnsafePathError,
     find_case_insensitive_match,
@@ -325,12 +325,29 @@ def _render_block_reason(code: str, scene_name: str) -> Optional[str]:
     error = get_syntax_error(code)
     if error:
         return f"Syntax error on line {error['line']}: {error['message']}"
+    # Only reject what the AST can prove. Anything else (aliased or factory-made
+    # bases, Slide, classes under if/try) goes to Manim, and a run that writes
+    # nothing is still reported as failed afterwards.
     scenes = get_scenes_from_code(code)
-    if not scenes:
+    if scene_name in scenes:
+        return None
+    info = get_render_names(code)
+    if not info["has_class"] and not info["open_namespace"]:
         return "No Scene class found. Add one, for example: class Intro(Scene):"
-    if scene_name not in scenes:
-        return f"Scene '{scene_name}' is not in this file. Found: {', '.join(scenes)}."
-    return None
+    if scene_name in info["names"] or info["open_namespace"]:
+        return None
+    found = ", ".join(scenes) if scenes else "no Scene classes"
+    return f"Scene '{scene_name}' is not in this file. Found: {found}."
+
+
+def _render_scene_warning(code: str, scene_name: str) -> Optional[str]:
+    """A note for scenes the AST could not confirm; the render still runs."""
+    if get_syntax_error(code) or scene_name in get_scenes_from_code(code):
+        return None
+    return (
+        f"Couldn't confirm that '{scene_name}' is a Scene subclass from the code alone; "
+        "letting Manim decide."
+    )
 
 
 def _ensure_code_within_limit(code: str) -> None:
@@ -1077,6 +1094,9 @@ async def websocket_render(websocket: WebSocket):
                 await send({"type": "error", "render_id": render_id, "message": blocked})
                 result = {"success": False, "status": "rejected"}
                 return
+            warning = _render_scene_warning(checked, request["scene"])
+            if warning:
+                await send({"type": "info", "render_id": render_id, "message": warning})
 
             phase["value"] = "rendering"
             slots = _render_semaphore()
