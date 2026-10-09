@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -86,6 +87,10 @@ ALLOWED_ASSET_EXTENSIONS = {
 MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
 DEFAULT_SCRIPT_NAME = "example.py"
+# Written once the starter script has been offered, so deleting example.py sticks.
+SEED_MARKER_NAME = ".composer-initialized"
+# A download-only render that nobody fetched is removed after this many seconds.
+TEMP_DOWNLOAD_TTL_SECONDS = int(os.environ.get("MANIM_TEMP_DOWNLOAD_TTL", "3600"))
 DEFAULT_SCRIPT = '''from manim import *
 
 
@@ -485,13 +490,24 @@ def _list_media() -> list:
 @app.get("/api/files")
 def get_files():
     """List workspace scripts, uploaded assets, and rendered media (newest first)."""
-    scripts = _list_scripts()
-    if not scripts:
-        # Never leave the editor empty: seed the workspace with a starter script.
-        with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
-            f.write(DEFAULT_SCRIPT)
-        scripts = _list_scripts()
-    return {"scripts": scripts, "assets": _list_assets(), "media": _list_media()}
+    _seed_starter_script_once()
+    _sweep_stale_temp_downloads()
+    return {"scripts": _list_scripts(), "assets": _list_assets(), "media": _list_media()}
+
+
+def _seed_starter_script_once() -> None:
+    """Write example.py into an empty workspace on first setup only, not after a delete."""
+    marker = os.path.join(WORKSPACE_DIR, SEED_MARKER_NAME)
+    if os.path.exists(marker):
+        return
+    try:
+        if not _list_scripts():
+            with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
+                f.write(DEFAULT_SCRIPT)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("The starter script has been created; delete this file to get it back.\n")
+    except OSError:
+        pass
 
 
 def _script_path(filename: str, *, new: bool = False) -> tuple:
@@ -943,6 +959,45 @@ def _relocate_temp_output(abs_path: str, temp_stem: str, target_stem: str) -> Op
         return None
 
 
+# Temp stems of renders still running; the stale-download sweep never touches these.
+_active_temp_stems: set = set()
+
+
+def _newest_mtime(path: str) -> float:
+    newest = os.path.getmtime(path)
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+            except OSError:
+                pass
+    return newest
+
+
+def _sweep_stale_temp_downloads(ttl: Optional[float] = None) -> None:
+    """Remove download-only outputs whose one-time link was never fetched.
+
+    Only ``media/*/_temp_run_*`` directories untouched for *ttl* seconds are removed,
+    and never one that belongs to a render that is still running.
+    """
+    ttl = TEMP_DOWNLOAD_TTL_SECONDS if ttl is None else ttl
+    cutoff = time.time() - ttl
+    for sub in MEDIA_SUBDIRS:
+        root = os.path.join(MEDIA_DIR, sub)
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(TEMP_PREFIX) or entry.name in _active_temp_stems:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False) and _newest_mtime(entry.path) < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                pass
+
+
 def _remove_temp_media(temp_stem: str) -> None:
     for sub in MEDIA_SUBDIRS:
         shutil.rmtree(os.path.join(MEDIA_DIR, sub, temp_stem), ignore_errors=True)
@@ -1088,6 +1143,7 @@ async def websocket_render(websocket: WebSocket):
                         code_content = f.read()
                 script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
                 temp_stem = os.path.splitext(script_name)[0]
+                _active_temp_stems.add(temp_stem)
                 relocate = not download_only
                 temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
                 with open(temp_filepath, "w", encoding="utf-8") as f:
@@ -1153,6 +1209,7 @@ async def websocket_render(websocket: WebSocket):
                     pass
             if relocate and temp_stem:
                 _remove_temp_media(temp_stem)
+            _active_temp_stems.discard(temp_stem)
             await send(
                 {
                     "type": "result",
@@ -1232,7 +1289,22 @@ else:
         return read_status()
 
 
+def _cli_address(argv=None) -> tuple:
+    """Host and port for ``python backend/main.py`` / ``npm run backend``.
+
+    ``--host``/``--port`` win, then MANIM_HOST/MANIM_PORT, then 127.0.0.1:8000.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the Manim Composer API (no frontend build).")
+    parser.add_argument("--host", default=os.environ.get("MANIM_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("MANIM_PORT", "8000")))
+    args = parser.parse_args(argv)
+    return args.host, args.port
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    _host, _port = _cli_address()
+    uvicorn.run(app, host=_host, port=_port)

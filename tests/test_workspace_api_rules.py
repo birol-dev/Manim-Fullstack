@@ -1,4 +1,6 @@
-"""File-name rules and size limits."""
+"""File-name rules, size limits, starter seeding, temp-download cleanup, and the CLI address."""
+import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -247,3 +249,82 @@ def test_diagnostics_reports_max_code_bytes(client):
     with patch.object(main, "MAX_CODE_BYTES", 12345):
         data = client.get("/api/diagnostics").json()
     assert data["max_code_bytes"] == 12345
+
+
+# ------------------------------------------------------------ starter script --
+
+def test_example_is_seeded_once_and_stays_deleted(client, dirs):
+    root, _, _ = dirs
+    first = client.get("/api/files").json()
+    assert [s["name"] for s in first["scripts"]] == ["example.py"]
+    assert (root / main.SEED_MARKER_NAME).exists()
+
+    assert client.delete("/api/scripts", params={"filename": "example.py"}).status_code == 200
+    after = client.get("/api/files").json()
+    assert after["scripts"] == []
+    assert not (root / "example.py").exists()
+
+
+def test_existing_workspace_is_not_seeded(client, dirs):
+    root, _, _ = dirs
+    (root / "mine.py").write_text("x = 1\n")
+    client.get("/api/files")
+    assert not (root / "example.py").exists()
+    (root / "mine.py").unlink()
+    assert client.get("/api/files").json()["scripts"] == []
+
+
+# ------------------------------------------------------- temp download sweep --
+
+def _temp_output(media, stem, age):
+    clip = media / "videos" / stem / "480p15" / "Intro.mp4"
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"mp4")
+    old = time.time() - age
+    for path in [clip, clip.parent, clip.parent.parent]:
+        os.utime(path, (old, old))
+    return clip.parent.parent
+
+
+def test_unfetched_download_is_swept_after_ttl(client, dirs):
+    _, media, _ = dirs
+    stale = _temp_output(media, "_temp_run_stale001", age=7200)
+    recent = _temp_output(media, "_temp_run_recent01", age=60)
+    running = _temp_output(media, "_temp_run_running1", age=7200)
+    kept = media / "videos" / "demo" / "480p15" / "Intro.mp4"
+    kept.parent.mkdir(parents=True)
+    kept.write_bytes(b"keep")
+    os.utime(kept, (1, 1))
+
+    with patch.object(main, "TEMP_DOWNLOAD_TTL_SECONDS", 3600), patch.object(
+        main, "_active_temp_stems", {"_temp_run_running1"}
+    ):
+        assert client.get("/api/files").status_code == 200
+
+    assert not stale.exists()
+    assert recent.exists()
+    assert running.exists()
+    assert kept.exists()
+
+
+def test_sweep_uses_newest_file_time(dirs):
+    _, media, _ = dirs
+    temp = _temp_output(media, "_temp_run_longjob1", age=7200)
+    fresh = temp / "480p15" / "Late.mp4"
+    fresh.write_bytes(b"new")  # written just now: a long render that only just finished
+    main._sweep_stale_temp_downloads(ttl=3600)
+    assert temp.exists()
+    main._sweep_stale_temp_downloads(ttl=-1)
+    assert not temp.exists()
+
+
+# --------------------------------------------------------------------- CLI ----
+
+def test_cli_address_defaults_env_and_flags(monkeypatch):
+    monkeypatch.delenv("MANIM_HOST", raising=False)
+    monkeypatch.delenv("MANIM_PORT", raising=False)
+    assert main._cli_address([]) == ("127.0.0.1", 8000)
+    monkeypatch.setenv("MANIM_HOST", "0.0.0.0")
+    monkeypatch.setenv("MANIM_PORT", "8100")
+    assert main._cli_address([]) == ("0.0.0.0", 8100)
+    assert main._cli_address(["--host", "::1", "--port", "9000"]) == ("::1", 9000)
