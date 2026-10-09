@@ -1,4 +1,4 @@
-"""File-name rules for scripts and assets."""
+"""File-name rules and size limits."""
 from unittest.mock import patch
 
 import pytest
@@ -200,3 +200,50 @@ def test_delete_media_refuses_parent_segments(client, dirs):
     res = client.delete("/api/media", params={"path": "videos/../images/keep.png"})
     assert res.status_code == 400
     assert keep.exists()
+
+
+# --------------------------------------------------------------- size limits --
+
+def test_code_limit_counts_utf8_bytes_not_json(client, dirs):
+    root, _, _ = dirs
+    limit = 1024
+    # Control characters are escaped as \u00XX in JSON: 6x the bytes on the wire.
+    code_text = "\x01" * limit
+    with patch.object(main, "MAX_CODE_BYTES", limit), patch.object(
+        main, "MAX_REQUEST_BODY_BYTES", 6 * limit + 64 * 1024
+    ):
+        ok = client.post("/api/save", json={"filename": "ctrl.py", "code": code_text})
+        assert ok.status_code == 200
+        multi = client.post("/api/parse-code", json={"code": "é" * (limit // 2)})
+        assert multi.status_code == 200
+        over = client.post("/api/parse-code", json={"code": "é" * (limit // 2 + 1)})
+        assert over.status_code == 413
+        assert f"({limit} bytes)" in over.json()["detail"]
+    assert (root / "ctrl.py").read_text() == code_text
+
+
+def test_raw_body_cap_is_separate(client):
+    with patch.object(main, "MAX_REQUEST_BODY_BYTES", 128):
+        res = client.post("/api/parse-code", json={"code": "x" * 200})
+    assert res.status_code == 413
+    assert res.json()["detail"] == "Request body exceeds maximum size (128 bytes)."
+
+
+def test_default_body_cap_leaves_room_for_escaping():
+    assert main.MAX_REQUEST_BODY_BYTES >= 6 * main.MAX_CODE_BYTES
+
+
+def test_websocket_code_limit_uses_utf8_bytes(client, dirs):
+    limit = 256
+    with patch.object(main, "MAX_CODE_BYTES", limit), client.websocket_connect("/api/render") as ws:
+        ws.send_json({"type": "start", "filename": "a.py", "scene": "Intro", "quality": "l",
+                      "code": "é" * (limit // 2 + 1)})
+        error, result = ws.receive_json(), ws.receive_json()
+    assert "maximum size" in error["message"]
+    assert result["status"] == "rejected"
+
+
+def test_diagnostics_reports_max_code_bytes(client):
+    with patch.object(main, "MAX_CODE_BYTES", 12345):
+        data = client.get("/api/diagnostics").json()
+    assert data["max_code_bytes"] == 12345
