@@ -109,7 +109,7 @@ export function LatexPanel({ latexAvailable, canInsert, onInsert, onOpenSetup }:
                   <span className="text-2xs text-fg-subtle">{template.name}</span>
                   <Formula math={template.code} className="max-w-full overflow-hidden text-[13px] text-fg" />
                 </button>
-                <Tooltip content="Insert MathTex">
+                <Tooltip content={canInsert ? "Insert MathTex" : "Open a script to insert this formula"} wrap>
                   <Button
                     variant="ghost"
                     size="icon-xs"

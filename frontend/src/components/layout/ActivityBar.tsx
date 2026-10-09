@@ -29,7 +29,7 @@ interface ActivityBarProps {
 export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarProps) {
   const item = ({ id, label, icon: Icon }: (typeof PRIMARY)[number]) => {
     const active = open && view === id;
-    // The selected view keeps its accent bar while the sidebar is collapsed, dimmed, so you can see which panel reopens.
+    // The selected view keeps its accent bar while the sidebar is collapsed, at 80% (clearly visible, a shade softer than open), so you can see which panel reopens.
     const selected = view === id;
     return (
       <Tooltip key={id} content={open || !selected ? label : `${label} (collapsed, click to open)`} side="right">
@@ -47,7 +47,7 @@ export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarPr
             <span
               aria-hidden
               data-testid={`accent-${id}`}
-              className={cn("absolute -left-1 top-2 bottom-2 w-0.5 rounded-full bg-accent", !open && "opacity-50")}
+              className={cn("absolute -left-1 top-2 bottom-2 w-0.5 rounded-full bg-accent", !open && "opacity-80")}
             />
           )}
           <Icon className="size-[18px]" strokeWidth={1.75} />

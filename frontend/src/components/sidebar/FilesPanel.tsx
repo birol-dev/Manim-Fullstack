@@ -299,8 +299,9 @@ export function FilesPanel(props: FilesPanelProps) {
                     >
                       <Icon className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
                       <span className="min-w-0">
-                        <span className={cn("block truncate text-xs", active ? "text-fg" : "text-fg-muted")}>{item.scene}</span>
-                        <span className="block truncate text-2xs text-fg-subtle">{meta}</span>
+                        <span className={cn("block truncate text-xs text-fg", active && "font-medium")}>{item.scene}</span>
+                        {/* 12px fg-muted: >= 6.5:1 on every row background (fg-subtle 11px was 4.1:1 on the selected row). */}
+                        <span className="block truncate text-xs text-fg-muted">{meta}</span>
                       </span>
                     </button>
                     <RowActions>
