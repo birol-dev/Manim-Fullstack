@@ -31,6 +31,7 @@ import { classNameFromFile } from "@/lib/format";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
 import { overallPercent, risingPercent } from "@/lib/progress";
+import { expandedStepCount, stepIndexForAnimation } from "@/lib/timeline";
 import { STORAGE_KEYS } from "@/lib/storage";
 import { newSceneCode, type SceneTemplate } from "@/lib/templates";
 import type { AssetFile, MediaFile, ParseResult, PreviewItem, Quality, StorageMode, WorkspaceFiles } from "@/lib/types";
@@ -539,7 +540,7 @@ export default function App() {
   const activeSteps = workspace.animations[workspace.selectedScene] ?? [];
   const renderingSteps = session.active ? (workspace.animations[session.active.request.scene] ?? []) : [];
   const [percentFloor, setPercentFloor] = useState<{ id: string; value: number } | null>(null);
-  const rawPercent = session.active ? overallPercent(session.active, renderingSteps.length) : null;
+  const rawPercent = session.active ? overallPercent(session.active, expandedStepCount(renderingSteps)) : null;
   let renderPercent: number | null = null;
   if (!session.active) {
     if (percentFloor !== null) setPercentFloor(null);
@@ -551,7 +552,7 @@ export default function App() {
   }
   const activeStep =
     session.active && session.active.request.scene === workspace.selectedScene
-      ? (session.active.progress?.animation ?? null)
+      ? stepIndexForAnimation(activeSteps, session.active.progress?.animation)
       : null;
   const canRender = online && Boolean(workspace.activeFile) && !session.active;
 
@@ -680,11 +681,12 @@ export default function App() {
               {sidebarContent}
             </Panel>
             <ResizeHandle direction="horizontal" />
-            <Panel id="work" minSize="400px">
+            {/* Must cover the editor + preview minimums below, or the group fights itself at 1024 px. */}
+            <Panel id="work" minSize="568px">
               <Group orientation="vertical" id="mc-layout-work" {...workLayout}>
-                <Panel id="top" minSize="200px">
+                <Panel id="top" minSize="240px">
                   <Group orientation="horizontal" id="mc-layout-top" {...topLayout}>
-                    <Panel id="editor" minSize="320px">
+                    <Panel id="editor" minSize="300px">
                       <EditorPane
                         ref={editorRef}
                         storageKey={storageMode}
@@ -714,12 +716,12 @@ export default function App() {
                       />
                     </Panel>
                     <ResizeHandle direction="horizontal" />
-                    <Panel id="preview" defaultSize="42%" minSize="280px">
+                    <Panel id="preview" defaultSize="42%" minSize="260px">
                       <PreviewPane
                         preview={preview}
                         active={session.active}
                         stopping={session.stopping}
-                        stepCount={renderingSteps.length}
+                        stepCount={expandedStepCount(renderingSteps)}
                         lastOutcome={lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null}
                         loop={loopPreview}
                         selectedScene={workspace.selectedScene}
@@ -740,8 +742,9 @@ export default function App() {
                 <Panel
                   id="bottom"
                   panelRef={bottomPanelRef}
-                  defaultSize="220px"
+                  defaultSize="26%"
                   minSize="120px"
+                  maxSize="60%"
                   collapsible
                   collapsedSize="36px"
                   groupResizeBehavior="preserve-pixel-size"

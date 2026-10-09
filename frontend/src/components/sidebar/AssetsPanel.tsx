@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft, FileAudio, FileType, Loader2, Trash2, Uplo
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { FileNameText } from "@/components/ui/code-text";
 import { Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { ApiError, apiUrl, errorMessage } from "@/lib/api";
@@ -129,37 +130,42 @@ export function AssetsPanel({ assets, canInsert, onUpload, onInsert, onDelete }:
           ) : (
             <ul className="flex flex-col gap-px">
               {assets.map((asset) => (
-                <li key={asset.name} className="group flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-raised">
+                <li key={asset.name} className="group flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-raised">
                   <AssetThumb asset={asset} />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs text-fg" title={asset.name}>
-                      {asset.name}
-                    </p>
-                    <p className="text-2xs text-fg-subtle">{formatBytes(asset.size)}</p>
+                    {/* The full name wraps at _ - . boundaries; actions sit on the size row so they never squeeze it. */}
+                    <Tooltip content={asset.name} side="right">
+                      <p className="code-wrap text-xs leading-snug text-fg" data-testid="asset-name">
+                        <FileNameText name={asset.name} />
+                      </p>
+                    </Tooltip>
+                    <div className="flex h-6 items-center justify-between gap-1">
+                      <p className="text-2xs text-fg-subtle">{formatBytes(asset.size)}</p>
+                      <RowActions>
+                        <Tooltip content={`Insert ${assetUsageSnippet(asset.name).split("(")[0]}`} wrap>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Insert ${asset.name}`}
+                            disabled={!canInsert}
+                            onClick={() => onInsert(assetUsageSnippet(asset.name))}
+                          >
+                            <CornerDownLeft />
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Copy path">
+                          <Button variant="ghost" size="icon-xs" aria-label={`Copy path of ${asset.name}`} onClick={() => void copyPath(asset)}>
+                            {copied === asset.name ? <Check className="text-success" /> : <Copy />}
+                          </Button>
+                        </Tooltip>
+                        <Tooltip content="Delete">
+                          <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete ${asset.name}`} onClick={() => onDelete(asset)}>
+                            <Trash2 />
+                          </Button>
+                        </Tooltip>
+                      </RowActions>
+                    </div>
                   </div>
-                  <RowActions>
-                    <Tooltip content={`Insert ${assetUsageSnippet(asset.name).split("(")[0]}`}>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Insert ${asset.name}`}
-                        disabled={!canInsert}
-                        onClick={() => onInsert(assetUsageSnippet(asset.name))}
-                      >
-                        <CornerDownLeft />
-                      </Button>
-                    </Tooltip>
-                    <Tooltip content="Copy path">
-                      <Button variant="ghost" size="icon-xs" aria-label={`Copy path of ${asset.name}`} onClick={() => void copyPath(asset)}>
-                        {copied === asset.name ? <Check className="text-success" /> : <Copy />}
-                      </Button>
-                    </Tooltip>
-                    <Tooltip content="Delete">
-                      <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete ${asset.name}`} onClick={() => onDelete(asset)}>
-                        <Trash2 />
-                      </Button>
-                    </Tooltip>
-                  </RowActions>
                 </li>
               ))}
             </ul>

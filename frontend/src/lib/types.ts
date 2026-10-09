@@ -41,6 +41,12 @@ export interface AnimationStep {
   line: number;
   /** Seconds when known; an expression string when computed at runtime. */
   duration?: number | string;
+  /** True when *duration* is the parser's guess from Manim's defaults (no explicit run_time). */
+  estimated?: boolean;
+  /** Present for calls inside a for/while loop: total times the call runs, or null when unknown. */
+  repeat?: number | null;
+  /** Line of the outermost loop that repeats this call. */
+  loop_line?: number;
 }
 
 export type SceneAnimations = Record<string, AnimationStep[]>;
