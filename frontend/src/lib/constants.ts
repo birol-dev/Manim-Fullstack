@@ -20,8 +20,29 @@ export const ALLOWED_ASSET_EXTENSIONS = [
 ] as const;
 
 export const MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024;
-/** Matches the backend's MANIM_MAX_CODE_BYTES default. */
+/** The backend's MANIM_MAX_CODE_BYTES default, used until the server reports its own. */
 export const MAX_CODE_BYTES = 2 * 1024 * 1024;
+
+let serverMaxCodeBytes: number | null = null;
+
+/** Largest script the server accepts: its reported limit, or the default. */
+export function getMaxCodeBytes(): number {
+  return serverMaxCodeBytes ?? MAX_CODE_BYTES;
+}
+
+/** Record the limit from /api/diagnostics (`max_code_bytes`). Invalid values are ignored. */
+export function setMaxCodeBytes(value: unknown): void {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    serverMaxCodeBytes = value;
+  }
+}
+
+/** "2 MB", "512 KB": the limit as people read it. */
+export function formatByteLimit(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MB`;
+  if (bytes >= 1024) return `${Number((bytes / 1024).toFixed(1))} KB`;
+  return `${bytes} bytes`;
+}
 
 /** Manim's named colors with their hex values (manim.utils.color.manim_colors). */
 export const MANIM_COLORS = [

@@ -75,6 +75,8 @@ export interface Diagnostics {
   default_resolution: string;
   recommended_threads: number;
   opengl_supported: boolean;
+  /** Largest script the server accepts (MANIM_MAX_CODE_BYTES). */
+  max_code_bytes?: number;
   hardware: {
     cpu: { model: string; physical_cores: number; logical_threads: number };
     ram_gb: number;

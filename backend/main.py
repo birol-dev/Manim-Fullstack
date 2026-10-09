@@ -56,6 +56,17 @@ MEDIA_SUBDIRS = ("videos", "images")
 
 # Max size for code sent to /api/save, /api/parse-code, and the render socket.
 MAX_CODE_BYTES = int(os.environ.get("MANIM_MAX_CODE_BYTES", str(2 * 1024 * 1024)))
+# Raw request / WebSocket message cap. The code limit above is checked on the decoded
+# code itself; JSON escaping can grow it up to 6x (control chars become \u00XX).
+MAX_REQUEST_BODY_BYTES = int(
+    os.environ.get("MANIM_MAX_REQUEST_BYTES", str(6 * MAX_CODE_BYTES + 64 * 1024))
+)
+
+
+def _body_too_large() -> str:
+    return f"Request body exceeds maximum size ({MAX_REQUEST_BODY_BYTES} bytes)."
+
+
 ALLOWED_QUALITIES = frozenset({"l", "m", "h", "k"})
 
 ALLOWED_ASSET_EXTENSIONS = {
@@ -176,7 +187,8 @@ async def reject_untrusted_requests(request: Request, call_next):
 class LimitCodeBodyMiddleware:
     """Reject oversized script uploads from Content-Length, before the body is parsed.
 
-    The JSON envelope around the code is allowed a few extra kilobytes.
+    The code itself is checked against MANIM_MAX_CODE_BYTES by the endpoint; this is
+    only a raw-size backstop (MAX_REQUEST_BODY_BYTES) sized for JSON escaping.
     """
 
     PATHS = {"/api/save", "/api/parse-code"}
@@ -188,7 +200,7 @@ class LimitCodeBodyMiddleware:
         if scope["type"] != "http" or scope.get("path") not in self.PATHS or scope.get("method") not in {"POST", "PUT", "PATCH"}:
             await self.app(scope, receive, send)
             return
-        limit = MAX_CODE_BYTES + 8192
+        limit = MAX_REQUEST_BODY_BYTES
         headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers", [])}
         declared = headers.get("content-length")
         if declared is not None:
@@ -198,7 +210,7 @@ class LimitCodeBodyMiddleware:
                 too_big = True
             if too_big:
                 response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    {"detail": _body_too_large()},
                     status_code=413,
                 )
                 await response(scope, receive, send)
@@ -216,7 +228,7 @@ class LimitCodeBodyMiddleware:
             total += len(message.get("body", b""))
             if total > limit:
                 response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    {"detail": _body_too_large()},
                     status_code=413,
                 )
                 await response(scope, receive, send)
@@ -383,6 +395,7 @@ def get_diagnostics():
     """
     profile = get_cached_profile()
     profile["dependencies"] = get_binary_paths()
+    profile["max_code_bytes"] = MAX_CODE_BYTES
     return profile
 
 
@@ -1153,10 +1166,10 @@ async def websocket_render(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            if len(data.encode("utf-8")) > MAX_CODE_BYTES + 8192:
+            if len(data.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
                 await send({
                     "type": "error",
-                    "message": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
+                    "message": _body_too_large(),
                 })
                 continue
             try:

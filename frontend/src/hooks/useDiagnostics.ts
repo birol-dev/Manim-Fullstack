@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { postJson, requestJson } from "@/lib/api";
+import { setMaxCodeBytes } from "@/lib/constants";
 import type { Dependency, Diagnostics } from "@/lib/types";
 
 export type BackendStatus = "loading" | "online" | "offline";
@@ -27,6 +28,7 @@ export function useDiagnostics() {
   const refresh = useCallback(async () => {
     try {
       const next = await requestJson<Diagnostics>("/api/diagnostics");
+      setMaxCodeBytes(next.max_code_bytes);
       setData(next);
       setStatus("online");
       setInstalling((previous) => {
