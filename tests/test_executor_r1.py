@@ -60,7 +60,8 @@ def test_redaction_matches_whole_paths_only(tmp_path):
     assert executor._redact_paths(sibling).endswith("/wser/file.py")  # temp dir hidden, workspace not
     assert executor._redact_paths(nested) == nested
     assert executor._redact_paths(f"'{workspace}/a.py'") == "'a.py'"
-    assert executor._redact_paths(f"{workspace}") == ""
+    # The bare folder is named, not erased ("cwd is " would read as a bug).
+    assert executor._redact_paths(f"{workspace}") == "<workspace>"
 
 
 def test_redaction_skips_root_like_prefixes(monkeypatch):
@@ -196,9 +197,13 @@ async def test_dash_script_name_reaches_manim_as_a_path(tmp_path):
     executor = ManimExecutor(str(tmp_path))
     spawned = {}
 
+    out = tmp_path / "media" / "videos" / "-ql" / "480p15" / "S.mp4"
+
     async def spawn(*cmd, **kwargs):
         spawned["cmd"] = cmd
-        return _fake_process(b"File ready at '/x/media/videos/-ql/480p15/S.mp4'\n")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"mp4")  # written by "Manim" during this run
+        return _fake_process(f"File ready at '{out}'\n".encode())
 
     with patch("asyncio.create_subprocess_exec", side_effect=spawn):
         result = await executor.execute(["py", "-m", "manim"], "-ql.py", "S", "l", False, AsyncMock())

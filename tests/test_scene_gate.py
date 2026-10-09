@@ -166,7 +166,7 @@ def test_gate_rejects_syntax_errors():
 
 
 def _executor(seen):
-    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         seen.append(scene_name)
         await log_callback({"type": "status", "status": "failed", "message": "no output"})
         return {"success": False, "status": "failed"}

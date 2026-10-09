@@ -75,7 +75,7 @@ def test_cli_main_warns_for_non_loopback(capsys, host, warned):
     with patch.object(main, "_port_in_use", return_value=False), patch("uvicorn.run") as run:
         main._cli_main(["--host", host, "--port", "8123"])
     run.assert_called_once()
-    assert run.call_args.kwargs == {"host": host, "port": 8123}
+    assert run.call_args.kwargs == {"host": host, "port": 8123, "ws_max_size": main.ws_max_message_bytes()}
     assert (main.LAN_WARNING.strip() in capsys.readouterr().err) is warned
 
 
