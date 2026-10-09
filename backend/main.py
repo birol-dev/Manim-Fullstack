@@ -1,6 +1,7 @@
 """FastAPI backend for Manim Composer: workspace files, diagnostics, and live renders."""
 
 import asyncio
+import hashlib
 import json
 import mimetypes
 import os
@@ -546,6 +547,12 @@ def _os_error_detail(exc: OSError, action: str) -> str:
     return f"Could not {action}: {reason}."
 
 
+def _file_version(filepath: str) -> str:
+    """Opaque version of a file on disk (hash of its bytes), for save-conflict checks."""
+    with open(filepath, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()[:16]
+
+
 @app.get("/api/file-content")
 def get_file_content(filename: str):
     """Return a script's code with its parsed scenes and timeline."""
@@ -555,9 +562,10 @@ def get_file_content(filename: str):
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
+        version = _file_version(filepath)
     except OSError as e:
         raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
-    return {"filename": filename, "code": content, **_parsed(content)}
+    return {"filename": filename, "code": content, "version": version, **_parsed(content)}
 
 
 class ParseRequest(BaseModel):
@@ -574,21 +582,42 @@ def parse_code(req: ParseRequest):
 class SaveRequest(BaseModel):
     filename: str
     code: str
+    # The version the editor loaded (from /api/file-content or the last save).
+    # When given, the save only goes through if the file still exists and is
+    # unchanged on disk, so two tabs can't silently overwrite each other and a
+    # save can't recreate a file that was renamed or deleted elsewhere.
+    base_version: Optional[str] = None
+    # New-file dialogs: never overwrite a file that already exists (e.g. created in another tab).
+    create_only: bool = False
 
 
 @app.post("/api/save")
 def save_file(req: SaveRequest):
-    """Write a script and return its parsed scenes."""
+    """Write a script and return its parsed scenes and new version."""
     _ensure_code_within_limit(req.code)
     filename = req.filename if req.filename.endswith(".py") else f"{req.filename}.py"
     filename, filepath = _script_path(filename, new=True)
+    if req.base_version is not None:
+        # 412 (not 409, which means a case-only name clash here) when the file
+        # changed since the editor loaded it; 404 when it is gone.
+        if not os.path.isfile(filepath):
+            raise HTTPException(status_code=404, detail="This file was renamed or deleted outside this tab.")
+        try:
+            current = _file_version(filepath)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
+        if current != req.base_version:
+            raise HTTPException(status_code=412, detail="This file was changed outside this tab since you opened it.")
+    if req.create_only and os.path.exists(filepath):
+        raise HTTPException(status_code=409, detail=f"{filename} already exists.")
     _reject_case_collision(WORKSPACE_DIR, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(req.code)
+        version = _file_version(filepath)
     except OSError as e:
         raise HTTPException(status_code=500, detail=_os_error_detail(e, "save the script"))
-    return {"success": True, "filename": filename, "message": "File saved.", **_parsed(req.code)}
+    return {"success": True, "filename": filename, "message": "File saved.", "version": version, **_parsed(req.code)}
 
 
 class RenameRequest(BaseModel):
