@@ -27,7 +27,8 @@ export interface ConfirmRequest {
 
 interface ConfirmDialogProps {
   request: ConfirmRequest | null;
-  onClose: () => void;
+  /** Close *request* (the one shown when the action started; a newer one stays open). */
+  onClose: (request: ConfirmRequest | null) => void;
 }
 
 export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
@@ -43,10 +44,12 @@ export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
   const focusTarget = request?.defaultFocus ?? (request?.tone === "danger" || request?.secondaryLabel || request?.conflict ? "cancel" : "confirm");
 
   const run = async (action?: () => void | Promise<void>) => {
+    const shown = request;
     setBusy(true);
     try {
       await action?.();
-      onClose();
+      // The action may have opened a new request (a save that conflicted again): keep that one.
+      onClose(shown);
     } catch (err) {
       toast.error(errorMessage(err));
     } finally {
@@ -55,7 +58,7 @@ export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
   };
 
   return (
-    <Dialog open={request !== null} onOpenChange={(open) => !open && !busy && onClose()}>
+    <Dialog open={request !== null} onOpenChange={(open) => !open && !busy && onClose(request)}>
       <DialogContent
         className="max-w-sm"
         hideClose
@@ -74,7 +77,7 @@ export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
               <DialogDescription>{request.description}</DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button ref={cancelRef} variant="ghost" onClick={onClose} disabled={busy}>
+              <Button ref={cancelRef} variant="ghost" onClick={() => onClose(request)} disabled={busy}>
                 Cancel
               </Button>
               {request.secondaryLabel && (
