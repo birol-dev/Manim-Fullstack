@@ -7,7 +7,7 @@ import threading
 import pytest
 
 import file_ops
-from file_ops import atomic_write, content_version, locked, path_lock, read_bytes, rename_no_replace
+from file_ops import atomic_write, content_version, held_lock, lock_key, locked, read_bytes, rename_no_replace
 
 
 def test_atomic_write_returns_the_version_of_the_bytes_written(tmp_path):
@@ -117,8 +117,12 @@ def test_case_only_rename_on_a_case_insensitive_filesystem(tmp_path, monkeypatch
 
 
 def test_locks_fold_case(tmp_path):
-    assert path_lock(str(tmp_path / "Foo.py")) is path_lock(str(tmp_path / "foo.py"))
-    assert path_lock(str(tmp_path / "foo.py")) is not path_lock(str(tmp_path / "bar.py"))
+    # Round 4: entries only exist while held, so compare keys and the held lock.
+    assert lock_key(str(tmp_path / "Foo.py")) == lock_key(str(tmp_path / "foo.py"))
+    assert lock_key(str(tmp_path / "foo.py")) != lock_key(str(tmp_path / "bar.py"))
+    with locked(str(tmp_path / "Foo.py")):
+        assert held_lock(str(tmp_path / "foo.py")) is not None
+        assert held_lock(str(tmp_path / "bar.py")) is None
 
 
 def test_locked_takes_several_names_in_a_fixed_order(tmp_path):

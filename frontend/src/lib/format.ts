@@ -27,9 +27,23 @@ export function dedupeExtension(input: string): string {
  * to_script_name() in backend/workspace_paths.py, which does not trim; see
  * FILENAME-RULE.md and tests/fixtures/filename_rules.json.
  */
+/**
+ * What counts as a space in a file name: the characters Python's str.isspace()
+ * accepts (WHITESPACE_CHARS in backend/workspace_paths.py): ASCII whitespace,
+ * U+001C-U+001F, U+0085, every Zs space (NBSP, U+1680, U+2000-U+200A, U+202F,
+ * U+205F, U+3000) and U+2028/U+2029.
+ */
+const WHITESPACE = "\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const EDGE_SPACE = new RegExp(`^[${WHITESPACE}]+|[${WHITESPACE}]+$`, "gu");
+const LEADING_SPACE = new RegExp(`^[${WHITESPACE}]`, "u");
+const TRAILING_SPACE = new RegExp(`[${WHITESPACE}]$`, "u");
+const TRAILING_DOTS_SPACES = new RegExp(`[.${WHITESPACE}]+$`, "u");
+const TRAILING_SPACES = new RegExp(`[${WHITESPACE}]+$`, "u");
+const ALL_SPACE = new RegExp(`[${WHITESPACE}]`, "gu");
+
 export function toScriptName(input: string): string {
-  const name = dedupeExtension(input.trim()).normalize("NFC");
-  if (name.endsWith(".") || name.endsWith(" ")) return name;
+  const name = dedupeExtension(input.trim().replace(EDGE_SPACE, "")).normalize("NFC");
+  if (name.endsWith(".") || TRAILING_SPACE.test(name)) return name;
   return name.toLowerCase().endsWith(".py") ? `${name.slice(0, -3)}.py` : `${name}.py`;
 }
 
@@ -40,7 +54,7 @@ export function foldFilename(name: string): string {
 
 function isReservedDeviceName(name: string, nfkc = false): boolean {
   // With nfkc, COM¹, ＣＯＭ１ and COM١ count as COM1 (Windows reserves them too).
-  const base = (nfkc ? name.normalize("NFKC") : name).split(".")[0].trimEnd().toUpperCase();
+  const base = (nfkc ? name.normalize("NFKC") : name).split(".")[0].replace(nfkc ? TRAILING_SPACES : / +$/, "").toUpperCase();
   return RESERVED_NAMES.has(base) || /^(?:COM|LPT)\p{Nd}$/u.test(base);
 }
 
@@ -50,14 +64,15 @@ function isReservedDeviceName(name: string, nfkc = false): boolean {
  * in the same order.
  */
 export function validateScriptName(name: string, existing: readonly string[] = []): string | null {
-  if (!name.trim() || !name.replace(/\.py$/, "").trim()) return "Enter a file name.";
+  if (!name.replace(ALL_SPACE, "") || !name.replace(/\.py$/, "").replace(ALL_SPACE, "")) return "Enter a file name.";
   if (name.endsWith(".") || name.endsWith(" ") || name.startsWith(" ")) {
     return "Filename cannot start or end with a dot or space.";
   }
   const raw = name.replace(/\\/g, "/");
   if (raw.startsWith("/") || (raw.length >= 2 && raw[1] === ":")) return "Absolute paths are not allowed.";
   if (raw.includes("/")) return "Filename cannot contain folders or path separators.";
-  if (/[\p{Cc}\p{Cf}]/u.test(name)) return "Filename cannot contain control or invisible characters.";
+  // U+2028/U+2029 (line and paragraph separators) count as invisible too, on both sides.
+  if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(name)) return "Filename cannot contain control or invisible characters.";
   const bad = [...new Set([...name].filter((char) => RESERVED_CHARS.includes(char)))].sort();
   if (bad.length) return `Filename cannot contain ${bad.join(" ")}.`;
   if (new TextEncoder().encode(name).length > MAX_FILENAME_BYTES) return `Filename is too long (max ${MAX_FILENAME_BYTES} bytes).`;
@@ -68,9 +83,11 @@ export function validateScriptName(name: string, existing: readonly string[] = [
   if (!stem.replace(/\./g, "")) return "Filename needs a name before the extension.";
   if (isReservedDeviceName(name)) return `Filename '${name}' is a reserved device name.`;
   if (!name.endsWith(".py")) return "File must end with .py.";
+  // Any Unicode space, not only " " (new names only on the server).
+  if (LEADING_SPACE.test(name) || TRAILING_SPACE.test(name)) return "Filename cannot start or end with a dot or space.";
   if (name !== name.normalize("NFC")) return "Filename must use the standard Unicode form (NFC).";
   if (isReservedDeviceName(name, true)) return `Filename '${name}' is a reserved device name.`;
-  if (stem !== stem.replace(/[. ]+$/, "")) return "Filename cannot end with a dot or space before the extension.";
+  if (stem !== stem.replace(TRAILING_DOTS_SPACES, "")) return "Filename cannot end with a dot or space before the extension.";
   if (name.startsWith("-")) return "Filename cannot start with a dash.";
   if (name.startsWith(".")) return "Filename cannot start with a dot.";
   if (name.toLowerCase().startsWith(TEMP_SCRIPT_PREFIX)) {

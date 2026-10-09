@@ -1,5 +1,5 @@
 {
- "_comment": "Shared filename rule vectors: to_script_name()/toScriptName() then validate_new_filename()/validateScriptName(). See /workspace/manim-audit-compare/r3/FILENAME-RULE.md. Regenerate only together with both implementations. ui_script_name: what the UI's toScriptName gives when it differs (the UI also trims and collapses a doubled .py).",
+ "_comment": "Shared filename rule vectors: to_script_name()/toScriptName() then validate_new_filename()/validateScriptName(). See /workspace/manim-audit-compare/r3/FILENAME-RULE.md. Regenerate only together with both implementations. ui_script_name: what the UI's toScriptName gives when it differs (the UI also trims and collapses a doubled .py). Round 4: every character in whitespace_chars (exactly Python's str.isspace(): ASCII whitespace, U+001C-U+001F, U+0085, all of Zs incl. NBSP and U+3000, U+2028/U+2029) counts as a space for the leading/trailing and before-.py rules on new names; U+2028/U+2029 (Zl/Zp) count as control/invisible.",
  "vectors": [
   {
    "input": "intro",
@@ -246,6 +246,231 @@
    "script_name": "x.py.py.py",
    "error": null,
    "ui_script_name": "x.py"
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": " intro",
+   "script_name": " intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro ",
+   "script_name": "intro ",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro .py",
+   "script_name": "intro .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in tro",
+   "script_name": "in tro.py",
+   "error": null
+  },
+  {
+   "input": "　intro",
+   "script_name": "　intro.py",
+   "error": "Filename cannot start or end with a dot or space.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro　",
+   "script_name": "intro　",
+   "error": "File must end with .py.",
+   "ui_script_name": "intro.py"
+  },
+  {
+   "input": "intro　.py",
+   "script_name": "intro　.py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "input": "in　tro",
+   "script_name": "in　tro.py",
+   "error": null
+  },
+  {
+   "input": "CON .x",
+   "script_name": "CON .x.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "input": "a b",
+   "script_name": "a b.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "input": "a b",
+   "script_name": "a b.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "input": "x ",
+   "script_name": "x ",
+   "error": "Filename cannot contain control or invisible characters.",
+   "ui_script_name": "x.py"
+  },
+  {
+   "input": " x",
+   "script_name": " x.py",
+   "error": "Filename cannot contain control or invisible characters.",
+   "ui_script_name": "x.py"
   }
  ],
  "direct_names": [
@@ -276,6 +501,82 @@
   {
    "name": "COM¹.py",
    "error": "Filename 'COM¹.py' is a reserved device name."
+  },
+  {
+   "name": " x.py",
+   "error": "Filename cannot start or end with a dot or space."
+  },
+  {
+   "name": "x .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "x　.py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "x.py ",
+   "error": "File must end with .py."
+  },
+  {
+   "name": "x　　.py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "x . .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "x .py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "name": "CON .x.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "name": "CON　.tar.py",
+   "error": "Filename 'CON　.tar.py' is a reserved device name."
+  },
+  {
+   "name": "CON .py",
+   "error": "Filename 'CON .py' is a reserved device name."
+  },
+  {
+   "name": "a b.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "name": "a b.py",
+   "error": null
+  },
+  {
+   "name": "a　b.py",
+   "error": null
+  },
+  {
+   "name": " x.py",
+   "error": "Filename cannot start or end with a dot or space."
+  },
+  {
+   "name": "x .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "x .py",
+   "error": "Filename cannot end with a dot or space before the extension."
+  },
+  {
+   "name": "​x.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "name": "x﻿.py",
+   "error": "Filename cannot contain control or invisible characters."
+  },
+  {
+   "name": "﻿.py",
+   "error": "Filename cannot contain control or invisible characters."
   }
  ],
  "collisions": [
@@ -309,5 +610,36 @@
    "b": "été.py",
    "collide": true
   }
+ ],
+ "whitespace_chars": [
+  "U+0009",
+  "U+000A",
+  "U+000B",
+  "U+000C",
+  "U+000D",
+  "U+001C",
+  "U+001D",
+  "U+001E",
+  "U+001F",
+  "U+0020",
+  "U+0085",
+  "U+00A0",
+  "U+1680",
+  "U+2000",
+  "U+2001",
+  "U+2002",
+  "U+2003",
+  "U+2004",
+  "U+2005",
+  "U+2006",
+  "U+2007",
+  "U+2008",
+  "U+2009",
+  "U+200A",
+  "U+2028",
+  "U+2029",
+  "U+202F",
+  "U+205F",
+  "U+3000"
  ]
 }

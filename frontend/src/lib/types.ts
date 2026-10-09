@@ -6,6 +6,10 @@ export interface ScriptFile {
   name: string;
   size: number;
   type: "script";
+  /** A symbolic link to a file outside the workspace: it can only be deleted (only the link is removed). */
+  outside?: boolean;
+  /** A symbolic link that points nowhere: it can only be deleted. */
+  broken?: boolean;
 }
 
 export interface AssetFile {
@@ -41,8 +45,17 @@ export interface AnimationStep {
   line: number;
   /** Seconds when known; an expression string when computed at runtime. */
   duration?: number | string;
-  /** True when *duration* is the parser's guess from Manim's defaults (no explicit run_time). */
+  /**
+   * True when *duration* is the parser's guess from Manim's defaults (no explicit run_time),
+   * or when the step sits in an if/elif/else or match/case branch inside a loop (only one
+   * branch runs per pass, so its count is a guess).
+   */
   estimated?: boolean;
+  /**
+   * A branch inside a loop that is not counted: the parser counts only the branch with the
+   * most animations per pass. Left out of the totals and the execution order.
+   */
+  alternative?: boolean;
   /** Present for calls inside a for/while loop: total times the call runs, or null when unknown. */
   repeat?: number | null;
   /** Line of the outermost loop that repeats this call. */
