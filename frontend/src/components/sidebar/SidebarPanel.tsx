@@ -15,7 +15,7 @@ export function SidebarPanel({ title, actions, children }: SidebarPanelProps) {
         <PaneTitle>{title}</PaneTitle>
         {actions && <div className="flex items-center gap-0.5">{actions}</div>}
       </PaneHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">{children}</div>
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-2">{children}</div>
     </div>
   );
 }

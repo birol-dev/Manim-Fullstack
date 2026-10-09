@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
-import { CornerDownRight, FileCode2, Terminal } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronRight, CornerDownRight, FileCode2, Terminal } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/panel";
 import type { LogEntry, LogLevel } from "@/hooks/useLogs";
-import { findLineReferenceMatch } from "@/lib/logs";
+import { findLineReferenceMatch, type LineReference } from "@/lib/logs";
+import { groupConsoleRows } from "@/lib/traceback";
 import { cn } from "@/lib/utils";
 
 const LEVEL_STYLES: Record<LogLevel, string> = {
@@ -15,6 +16,9 @@ const LEVEL_STYLES: Record<LogLevel, string> = {
   stdout: "text-fg-muted",
   stderr: "text-fg-subtle",
 };
+
+/** Rich code row inside a traceback box: "│ ❱ 7 │ code │" (gutter = everything up to the second "│"). */
+const RICH_CODE_GUTTER = /^│\s+(?:❱\s*)?\d+\s+│/;
 
 interface ConsoleViewProps {
   logs: LogEntry[];
@@ -36,14 +40,103 @@ function selectingIn(element: Element): boolean {
   return false;
 }
 
+/**
+ * The clickable part of a row. In a user traceback frame's code rows that is
+ * the code after the line-number gutter (or the whole indented line in a plain
+ * Python traceback); elsewhere it is the `file:line` reference itself.
+ */
+function linkRange(text: string, line: number, userFrame: boolean, linkFiles: string[]): LineReference | null {
+  const reference = findLineReferenceMatch(text, linkFiles);
+  if (reference) return reference;
+  if (!userFrame) return null;
+  const gutter = RICH_CODE_GUTTER.exec(text);
+  const start = gutter ? gutter[0].length : text.length - text.trimStart().length;
+  const body = text.slice(start).replace(/\s*│?\s*$/, "");
+  if (!body.trim()) return null;
+  const lead = body.length - body.trimStart().length;
+  return { line, start: start + lead, end: start + body.length };
+}
+
+function LogLine({
+  entry,
+  line,
+  linkFiles,
+  userFrame = false,
+  failing = false,
+  header = false,
+  onJumpToLine,
+}: {
+  entry: LogEntry;
+  line: number | null;
+  linkFiles: string[];
+  userFrame?: boolean;
+  failing?: boolean;
+  header?: boolean;
+  onJumpToLine: (line: number) => void;
+}) {
+  const range = line !== null ? linkRange(entry.text, line, userFrame, linkFiles) : null;
+  // Code rows of the user's frame jump to their own line; the "Line N" button (the keyboard and
+  // screen reader control) stays on plain references and the frame header.
+  const target = userFrame && !header ? line : (range?.line ?? line);
+  const showButton = target !== null && range !== null && (!userFrame || header);
+  // Rich draws tracebacks as a box; wrapping its rows shreds the border, so they scroll sideways instead.
+  const boxed = /^[╭│╰]/.test(entry.text);
+  return (
+    <div
+      className={cn(
+        "group flex items-start gap-2",
+        boxed ? "w-max min-w-full whitespace-pre" : "whitespace-pre-wrap break-words",
+        LEVEL_STYLES[entry.level],
+        userFrame && "text-fg",
+        failing && "bg-danger-soft",
+      )}
+    >
+      {range && target !== null ? (
+        <span className="min-w-0 flex-1">
+          {entry.text.slice(0, range.start)}
+          {/* Mouse shortcut only; the "Line N" button is the keyboard and screen reader control. */}
+          <span
+            data-line-link
+            title={`Jump to line ${target}`}
+            onClick={(event) => {
+              // Selecting the link's text to copy it shouldn't jump; a selection elsewhere doesn't matter.
+              if (!selectingIn(event.currentTarget)) onJumpToLine(target);
+            }}
+            className="cursor-pointer underline decoration-dotted decoration-fg-subtle/50 underline-offset-2 hover:text-fg hover:decoration-accent"
+          >
+            {entry.text.slice(range.start, range.end)}
+          </span>
+          {entry.text.slice(range.end)}
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1">{entry.text}</span>
+      )}
+      {showButton && (
+        <button
+          type="button"
+          onClick={() => onJumpToLine(target)}
+          aria-label={`Go to line ${target}`}
+          className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded border border-line-strong bg-raised px-1.5 font-sans text-2xs text-fg-muted transition-colors hover:border-accent hover:text-accent"
+          title={`Jump to line ${target}`}
+        >
+          <CornerDownRight className="size-3" />
+          Line {target}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ConsoleView({ logs, linkFiles, otherFile = null, onOpenFile, onJumpToLine }: ConsoleViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
+  const rows = useMemo(() => groupConsoleRows(logs, linkFiles), [logs, linkFiles]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
     if (element && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, [logs]);
+  }, [rows]);
 
   // A cleared console starts following new output again.
   useEffect(() => {
@@ -71,10 +164,10 @@ export function ConsoleView({ logs, linkFiles, otherFile = null, onOpenFile, onJ
         stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
       }}
       tabIndex={0}
-      className="h-full min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 font-mono text-[12px] leading-[1.45] select-text outline-none"
+      className="h-full min-h-0 flex-1 overflow-auto overscroll-contain px-3 py-2 font-mono text-[12px] leading-[1.45] select-text outline-none"
     >
       {otherFile && (
-        <div className="sticky -top-2 z-10 -mx-3 -mt-2 mb-1 flex items-center gap-2 border-b border-line bg-surface px-3 py-1 font-sans text-2xs text-fg-subtle">
+        <div className="sticky -top-2 left-0 z-10 -mx-3 -mt-2 mb-1 flex items-center gap-2 border-b border-line bg-surface px-3 py-1 font-sans text-2xs text-fg-subtle">
           <FileCode2 className="size-3 shrink-0" />
           <span className="min-w-0 truncate">
             Output from <span className="font-mono text-fg-muted">{otherFile}</span>, not the open file
@@ -90,42 +183,46 @@ export function ConsoleView({ logs, linkFiles, otherFile = null, onOpenFile, onJ
           )}
         </div>
       )}
-      {logs.map((entry) => {
-        const reference = entry.level === "command" ? null : findLineReferenceMatch(entry.text, linkFiles);
-        const line = reference?.line ?? null;
+      {rows.map((row) => {
+        if (row.kind === "line") {
+          return (
+            <LogLine
+              key={row.entry.id}
+              entry={row.entry}
+              line={row.line}
+              linkFiles={linkFiles}
+              userFrame={row.userFrame}
+              failing={row.failing}
+              header={row.header}
+              onJumpToLine={onJumpToLine}
+            />
+          );
+        }
+        const open = expanded.has(row.id);
         return (
-          <div key={entry.id} className={cn("group flex items-start gap-2 whitespace-pre-wrap break-words", LEVEL_STYLES[entry.level])}>
-            {reference ? (
-              <span className="min-w-0 flex-1">
-                {entry.text.slice(0, reference.start)}
-                {/* Mouse shortcut only; the "Line N" button is the keyboard and screen reader control. */}
-                <span
-                  data-line-link
-                  onClick={(event) => {
-                    // Selecting the link's text to copy it shouldn't jump; a selection elsewhere doesn't matter.
-                    if (!selectingIn(event.currentTarget)) onJumpToLine(reference.line);
-                  }}
-                  className="cursor-pointer underline decoration-dotted decoration-fg-subtle/50 underline-offset-2 hover:decoration-accent"
-                >
-                  {entry.text.slice(reference.start, reference.end)}
-                </span>
-                {entry.text.slice(reference.end)}
-              </span>
-            ) : (
-              <span className="min-w-0 flex-1">{entry.text}</span>
-            )}
-            {line !== null && (
-              <button
-                type="button"
-                onClick={() => onJumpToLine(line)}
-                aria-label={`Go to line ${line}`}
-                className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded border border-line-strong bg-raised px-1.5 font-sans text-2xs text-fg-muted transition-colors hover:border-accent hover:text-accent"
-                title={`Jump to line ${line}`}
-              >
-                <CornerDownRight className="size-3" />
-                Line {line}
-              </button>
-            )}
+          <div key={`hidden-${row.id}`}>
+            <button
+              type="button"
+              aria-expanded={open}
+              onClick={() =>
+                setExpanded((previous) => {
+                  const next = new Set(previous);
+                  if (open) next.delete(row.id);
+                  else next.add(row.id);
+                  return next;
+                })
+              }
+              className="sticky left-0 my-0.5 inline-flex items-center gap-1 rounded px-1 font-sans text-2xs text-fg-subtle transition-colors hover:bg-raised hover:text-fg-muted focus-visible:outline-1 focus-visible:outline-accent"
+            >
+              <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
+              {open
+                ? `Hide ${row.frames} library ${row.frames === 1 ? "frame" : "frames"}`
+                : `${row.frames} library ${row.frames === 1 ? "frame" : "frames"} hidden (Manim internals) · show`}
+            </button>
+            {open &&
+              row.entries.map((entry) => (
+                <LogLine key={entry.id} entry={entry} line={null} linkFiles={linkFiles} onJumpToLine={onJumpToLine} />
+              ))}
           </div>
         );
       })}

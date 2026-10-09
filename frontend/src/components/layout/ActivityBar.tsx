@@ -29,8 +29,10 @@ interface ActivityBarProps {
 export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarProps) {
   const item = ({ id, label, icon: Icon }: (typeof PRIMARY)[number]) => {
     const active = open && view === id;
+    // The selected view keeps its accent bar while the sidebar is collapsed, dimmed, so you can see which panel reopens.
+    const selected = view === id;
     return (
-      <Tooltip key={id} content={label} side="right">
+      <Tooltip key={id} content={open || !selected ? label : `${label} (collapsed, click to open)`} side="right">
         <button
           type="button"
           aria-label={label}
@@ -38,10 +40,16 @@ export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarPr
           onClick={() => onSelect(id)}
           className={cn(
             "relative flex size-10 items-center justify-center rounded-md transition-colors",
-            active ? "text-fg" : "text-fg-subtle hover:bg-raised hover:text-fg-muted",
+            active ? "text-fg" : selected ? "text-fg-muted hover:bg-raised" : "text-fg-subtle hover:bg-raised hover:text-fg-muted",
           )}
         >
-          {active && <span className="absolute -left-1 top-2 bottom-2 w-0.5 rounded-full bg-accent" />}
+          {selected && (
+            <span
+              aria-hidden
+              data-testid={`accent-${id}`}
+              className={cn("absolute -left-1 top-2 bottom-2 w-0.5 rounded-full bg-accent", !open && "opacity-50")}
+            />
+          )}
           <Icon className="size-[18px]" strokeWidth={1.75} />
           {badges[id] && <span className="absolute right-2 top-2 size-1.5 rounded-full bg-warning" />}
         </button>

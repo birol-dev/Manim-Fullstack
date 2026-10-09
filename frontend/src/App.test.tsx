@@ -347,7 +347,7 @@ describe("App", () => {
     expect(screen.getByLabelText("Formula preview").querySelector(".katex")).not.toBeNull();
 
     fireEvent.change(input, { target: { value: "\\frac{1" } });
-    expect(screen.getByLabelText("Formula preview")).toHaveTextContent(/expected '}'/i);
+    expect(screen.getByLabelText("Formula preview")).toHaveTextContent(/missing closing brace/i);
 
     fireEvent.change(input, { target: { value: "a^2" } });
     // KaTeX's MathML output trips jsdom's accessible-name computation, so avoid role queries here.
