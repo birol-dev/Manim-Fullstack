@@ -164,7 +164,6 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
       }
     });
     setTabFocusMode(editor.getOption(monaco.editor.EditorOption.tabFocusMode));
-    editor.focus();
   };
 
   return (

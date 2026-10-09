@@ -11,6 +11,7 @@ import {
   formatRelativeTime,
   pythonString,
   toScriptName,
+  dedupeExtension,
   validateScriptName,
 } from "./format";
 import { findErrorLocation, findLineReference, findLineReferenceMatch } from "./logs";
@@ -24,6 +25,11 @@ describe("format", () => {
   it("normalizes and validates script names", () => {
     expect(toScriptName("  intro ")).toBe("intro.py");
     expect(toScriptName("Intro.PY")).toBe("Intro.PY");
+    // Idempotent, even when a pasted name kept the old extension.
+    expect(toScriptName("intro.py.py")).toBe("intro.py");
+    expect(toScriptName(toScriptName("intro"))).toBe("intro.py");
+    expect(dedupeExtension("a:b.py.PY.py")).toBe("a:b.py");
+    expect(dedupeExtension("my.python.py")).toBe("my.python.py");
 
     expect(validateScriptName("intro.py")).toBeNull();
     expect(validateScriptName(".py")).toBe("Enter a file name.");

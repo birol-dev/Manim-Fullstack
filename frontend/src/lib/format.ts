@@ -11,8 +11,17 @@ export const MAX_FILENAME_STEM_CHARS = 100;
 export const TEMP_SCRIPT_PREFIX = "_temp_run_";
 
 /** "My Scene" -> "My Scene.py"; leaves an existing .py suffix alone. */
+/**
+ * Collapse a doubled extension ("intro.py.py" -> "intro.py"). The name inputs
+ * select only the stem on focus, so pasting "intro.py" over it keeps the old ".py".
+ */
+export function dedupeExtension(input: string): string {
+  return input.replace(/(\.py)(?:\.py)+(\s*)$/i, "$1$2");
+}
+
+/** The file name for *input*: trimmed, with exactly one ".py". Idempotent. */
 export function toScriptName(input: string): string {
-  const name = input.trim();
+  const name = dedupeExtension(input.trim());
   return name.toLowerCase().endsWith(".py") ? name : `${name}.py`;
 }
 

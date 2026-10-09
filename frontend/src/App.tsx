@@ -107,6 +107,8 @@ export default function App() {
   const objectUrlRef = useRef<string | null>(null);
   const [lastOutcome, setLastOutcome] = useState<RenderOutcome | null>(null);
   const [cursor, setCursor] = useState<{ line: number; column: number } | null>(null);
+  // The script whose render output the console is showing.
+  const [logsFile, setLogsFile] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -284,7 +286,9 @@ export default function App() {
       const buffer = workspace.code;
       try {
         if (storageMode === "disk" && autoSave) {
-          parsed = workspace.isDirty ? await workspace.save() : await workspace.parseNow();
+          // Check first: a render refused for a syntax error must not write the broken buffer to disk.
+          parsed = await workspace.parseNow();
+          if (workspace.isDirty && !parsed?.syntaxError) parsed = await workspace.save();
         } else {
           parsed = await workspace.parseNow();
           // Send the buffer unless it is identical to the file on disk.
@@ -317,6 +321,7 @@ export default function App() {
       if (scene !== workspace.selectedScene) workspace.setSelectedScene(scene);
 
       clearLogs();
+      setLogsFile(filename);
       lastRenderedCode.current = buffer;
       session.start({ filename, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
     } finally {
@@ -489,6 +494,10 @@ export default function App() {
         // Nothing about the deleted file should linger in the preview or status bar.
         setLastOutcome((outcome) => (outcome?.request.filename === name ? null : outcome));
         setCursor(null);
+        if (logsFile === name) {
+          clearLogs();
+          setLogsFile(null);
+        }
         toast.dismiss("syntax-error");
         toast.dismiss("render-failed");
       },
@@ -554,9 +563,10 @@ export default function App() {
     const progress = renderPercent !== null ? `${renderPercent}% · ` : "";
     document.title = `${progress}${file}Manim Composer`;
   }, [activeFileName, isDirty, renderPercent]);
+  // Line links only make sense when the output belongs to the open file.
   const linkFiles = useMemo(
-    () => [lastOutcome?.request.filename, session.active?.request.filename, workspace.activeFile].filter((name): name is string => Boolean(name)),
-    [lastOutcome, session.active, workspace.activeFile],
+    () => (logsFile && logsFile === workspace.activeFile ? [logsFile] : []),
+    [logsFile, workspace.activeFile],
   );
 
   // ---- Layout ------------------------------------------------------------
@@ -573,9 +583,12 @@ export default function App() {
             previewPath={preview?.mediaPath ?? null}
             onOpen={openFile}
             onNew={() => setNewFile({ suggestedName: uniqueName("scene.py", scriptNames) })}
-            onRename={(oldName, newName) => workspace.renameFile(oldName, newName)}
+            onRename={async (oldName, newName) => {
+              await workspace.renameFile(oldName, newName);
+              setLogsFile((file) => (file === oldName ? newName : file));
+            }}
             onDelete={requestDeleteScript}
-            onRefresh={() => void workspace.refreshFiles()}
+            onRefresh={() => void workspace.refresh()}
             onPreviewMedia={(item) => showPreview(previewFromMedia(item))}
             onDeleteMedia={requestDeleteMedia}
             onCompare={() => setCompareOpen(true)}
@@ -744,7 +757,12 @@ export default function App() {
                     onToggleCollapsed={() => (bottomCollapsed ? bottomPanelRef.current?.expand() : bottomPanelRef.current?.collapse())}
                     logs={logs}
                     linkFiles={linkFiles}
-                    onClearLogs={clearLogs}
+                    logsFile={logsFile !== workspace.activeFile ? logsFile : null}
+                    onOpenLogsFile={openFile}
+                    onClearLogs={() => {
+                      clearLogs();
+                      setLogsFile(null);
+                    }}
                     scene={workspace.selectedScene}
                     steps={activeSteps}
                     activeStep={activeStep}
