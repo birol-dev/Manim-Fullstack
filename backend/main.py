@@ -25,8 +25,10 @@ from scene_parser import get_render_names, get_scene_animations, get_scenes_from
 from workspace_paths import (
     UnsafePathError,
     find_case_insensitive_match,
+    nfc_filename,
     safe_basename,
     safe_join,
+    to_script_name,
     validate_new_filename,
 )
 from fastapi import (
@@ -528,7 +530,34 @@ def _script_path(filename: str, *, new: bool = False) -> tuple:
             name = safe_basename(filename, required_suffix=".py")
         return name, safe_join(WORKSPACE_DIR, name)
     except UnsafePathError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid script filename: {exc}")
+        raise HTTPException(status_code=400, detail=_bad_script_name_detail(filename, exc))
+
+
+def _is_existing_script(filename) -> bool:
+    """True if *filename* names a file that is already in the workspace (legacy names too)."""
+    try:
+        return os.path.isfile(safe_join(WORKSPACE_DIR, safe_basename(filename)))
+    except (UnsafePathError, TypeError, ValueError):
+        return False
+
+
+def _bad_script_name_detail(filename, exc: Exception) -> str:
+    """Files that exist under a name today's rules forbid can still be opened and
+    renamed; saving or rendering them says so instead of a bare refusal."""
+    if _is_existing_script(filename):
+        return f"Rename this file to save or render it: {exc}"
+    return f"Invalid script filename: {exc}"
+
+
+def _new_script_path(raw: str) -> tuple:
+    """Save / rename target: ``Foo.PY`` -> ``Foo.py`` (NFC), then the rules for new names."""
+    name = to_script_name(raw)
+    if name != raw and raw.lower().endswith(".py") and _is_existing_script(raw):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rename this file to save or render it: it would be saved as '{name}'.",
+        )
+    return _script_path(name, new=True)
 
 
 def _reject_case_collision(directory: str, name: str) -> None:
@@ -595,8 +624,7 @@ class SaveRequest(BaseModel):
 def save_file(req: SaveRequest):
     """Write a script and return its parsed scenes and new version."""
     _ensure_code_within_limit(req.code)
-    filename = req.filename if req.filename.endswith(".py") else f"{req.filename}.py"
-    filename, filepath = _script_path(filename, new=True)
+    filename, filepath = _new_script_path(req.filename)
     if req.base_version is not None:
         # 412 (not 409, which means a case-only name clash here) when the file
         # changed since the editor loaded it; 404 when it is gone.
@@ -629,7 +657,7 @@ class RenameRequest(BaseModel):
 def rename_file(req: RenameRequest):
     """Rename a workspace script."""
     old_name, old_path = _script_path(req.old_name)
-    new_name, new_path = _script_path(req.new_name, new=True)
+    new_name, new_path = _script_path(to_script_name(req.new_name), new=True)
 
     if not os.path.exists(old_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
@@ -677,7 +705,7 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
     so a rejected upload cannot delete the file it was replacing.
     """
     try:
-        filename = validate_new_filename(file.filename)
+        filename = validate_new_filename(nfc_filename(file.filename))
         dest_path = safe_join(ASSETS_DIR, filename)
     except UnsafePathError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
@@ -1070,7 +1098,7 @@ def _validate_start_message(message: dict) -> dict:
     try:
         filename = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
     except UnsafePathError as exc:
-        raise _RenderRequestError(f"Invalid script filename: {exc}")
+        raise _RenderRequestError(_bad_script_name_detail(filename, exc))
     if code_content is not None:
         if not isinstance(code_content, str):
             raise _RenderRequestError("Code payload must be a string.")
