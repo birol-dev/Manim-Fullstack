@@ -12,6 +12,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -30,9 +31,10 @@ from file_ops import (
     ReadOnlyFileError,
     atomic_write,
     content_version,
-    locked,
     ensure_writable,
     held_lock,
+    lock_key,
+    locked,
     move_into_place,
     read_bytes,
     rename_no_replace,
@@ -311,6 +313,9 @@ def _peer_host(client) -> Optional[str]:
 
 @app.middleware("http")
 async def reject_untrusted_requests(request: Request, call_next):
+    # When the request reached the app, before it waits for a worker thread
+    # (DELETE /api/scripts uses it to tell what existed when it was sent).
+    request.scope.setdefault("manim_arrived", time.monotonic())
     if not _request_allowed(request.headers, _peer_host(request.client)):
         return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
     return await call_next(request)
@@ -985,6 +990,7 @@ def rename_file(req: RenameRequest):
             _reject_case_collision(WORKSPACE_DIR, new_name)
         try:
             rename_no_replace(old_path, new_path)
+            _note_new_name(new_path)
         except FileExistsError:
             if is_case_only:
                 raise HTTPException(status_code=409, detail=f"'{new_name}' already exists.")
@@ -995,8 +1001,28 @@ def rename_file(req: RenameRequest):
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
 
+# lock_key -> time.monotonic() when a rename last put a file under that name.
+_new_names: dict = {}
+_new_names_guard = threading.Lock()
+_NEW_NAME_MEMORY_SECONDS = 30.0
+
+
+def _note_new_name(path: str) -> None:
+    now = time.monotonic()
+    with _new_names_guard:
+        _new_names[lock_key(path)] = now
+        for key in [k for k, t in _new_names.items() if now - t > _NEW_NAME_MEMORY_SECONDS]:
+            del _new_names[key]
+
+
+def _appeared_after(path: str, moment: float) -> bool:
+    with _new_names_guard:
+        when = _new_names.get(lock_key(path))
+    return when is not None and when > moment
+
+
 @app.delete("/api/scripts")
-def delete_script(filename: str):
+def delete_script(filename: str, request: Request = None):  # type: ignore[assignment]
     """Delete a workspace script, under the same per-name lock as save and rename.
 
     A symbolic link that points outside the workspace or nowhere can't be opened,
@@ -1014,6 +1040,9 @@ def delete_script(filename: str):
             except OSError as e:
                 raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the link"))
         return {"success": True, "filename": os.path.basename(link), "link_removed": True}
+    arrived = request.scope.get("manim_arrived") if request is not None else None
+    if arrived is None:
+        arrived = time.monotonic()
     filename, filepath = _script_path(filename)
     # What the caller can mean is the file that exists, settled, as the request
     # arrives: a save or rename of this name in flight (or one that creates the
@@ -1029,6 +1058,10 @@ def delete_script(filename: str):
         with locked(filepath, blocking=False):
             if not os.path.isfile(filepath):
                 raise HTTPException(status_code=404, detail="Python script not found.")
+            if _appeared_after(filepath, arrived):
+                # A rename put this file here after the delete was sent: not the
+                # file the caller asked to delete (it didn't exist yet).
+                raise HTTPException(status_code=409, detail=DELETE_RACE_DETAIL)
             try:
                 os.remove(filepath)
             except FileNotFoundError:

@@ -120,6 +120,36 @@ def test_delete_racing_a_rename_never_500s_and_never_removes_a_file_mid_rename(w
     assert any(d in (404, 409) for d, _ in seen)
 
 
+def test_delete_sent_before_a_rename_created_the_name_is_refused(ws):
+    """The request arrived (event loop) before the rename committed, but its worker
+    thread only looked afterwards: B is not the file the caller meant, so 409."""
+
+    class _Req:
+        scope = {}
+
+    (ws / "a.py").write_text("A\n")
+    request = _Req()
+    request.scope = {"manim_arrived": time.monotonic()}
+    assert _call(main.rename_file, main.RenameRequest(old_name="a.py", new_name="b.py"))[0] == 200
+    code, body = _call(main.delete_script, "b.py", request)
+    assert code == 409 and (ws / "b.py").read_text() == "A\n"
+    # A delete sent after the rename deletes it.
+    request.scope = {"manim_arrived": time.monotonic()}
+    assert _call(main.delete_script, "b.py", request)[0] == 200
+
+
+def test_new_name_memory_is_bounded(ws, monkeypatch):
+    monkeypatch.setattr(main, "_NEW_NAME_MEMORY_SECONDS", 0.0)
+    for i in range(200):
+        main._note_new_name(str(ws / f"n{i}.py"))
+    assert len(main._new_names) <= 2
+
+
+def test_http_delete_stamps_the_arrival_time(client, ws):
+    (ws / "x.py").write_text("x\n")
+    assert client.delete("/api/scripts", params={"filename": "x.py"}).status_code == 200
+
+
 def test_delete_racing_a_rename_of_the_same_file(ws):
     for _ in range(100):
         for name in ("a.py", "b.py"):
