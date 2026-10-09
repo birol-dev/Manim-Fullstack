@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Link2, Pencil, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { FileNameText } from "@/components/ui/code-text";
@@ -211,6 +211,37 @@ export function FilesPanel(props: FilesPanelProps) {
                   : script.broken
                     ? "broken link"
                     : null;
+                const nameButton = (
+                  <button
+                    type="button"
+                    data-roving-item
+                    data-name={script.name}
+                    tabIndex={tabIndex}
+                    aria-current={active ? "true" : undefined}
+                    onClick={() => {
+                      if (!linkNote) props.onOpen(script.name);
+                    }}
+                    onDoubleClick={() => {
+                      if (!linkNote) startRename(script.name);
+                    }}
+                    aria-disabled={linkNote ? "true" : undefined}
+                    onKeyDown={(event) => {
+                      if (event.key === "F2" && !linkNote) startRename(script.name);
+                      else if (event.key === "Delete") props.onDelete(script.name);
+                      else return;
+                      event.preventDefault();
+                    }}
+                    aria-keyshortcuts="F2 Delete ArrowRight"
+                    aria-describedby="script-row-keys"
+                    // Link rows explain themselves in a tooltip (below); plain rows keep the native title.
+                    title={linkNote ? undefined : `${script.name} · ${formatBytes(script.size)}`}
+                    // fg-muted (>= 6.6:1 on every row background; fg-subtle was ~4.4:1) and not-allowed, but the same box as other rows.
+                    className={cn("h-7 min-w-0 flex-1 truncate text-left text-xs", linkNote && "cursor-not-allowed italic text-fg-muted")}
+                  >
+                    {script.name}
+                    {linkNote && <span className="sr-only"> ({linkNote}, can only be deleted)</span>}
+                  </button>
+                );
                 return (
                   <li
                     key={script.name}
@@ -221,7 +252,14 @@ export function FilesPanel(props: FilesPanelProps) {
                     )}
                   >
                     {active && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />}
-                    <FileCode2 className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
+                    {/* Link rows: a link icon says what they are (same size and slot, so names stay aligned). */}
+                    {script.outside ? (
+                      <Link2 aria-hidden className="size-3.5 shrink-0 text-fg-subtle" />
+                    ) : script.broken ? (
+                      <Unlink aria-hidden className="size-3.5 shrink-0 text-warning/80" />
+                    ) : (
+                      <FileCode2 className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
+                    )}
                     {renaming === script.name ? (
                       <RenameInput
                         initial={script.name}
@@ -238,33 +276,13 @@ export function FilesPanel(props: FilesPanelProps) {
                       />
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          data-roving-item
-                          data-name={script.name}
-                          tabIndex={tabIndex}
-                          aria-current={active ? "true" : undefined}
-                          onClick={() => {
-                            if (!linkNote) props.onOpen(script.name);
-                          }}
-                          onDoubleClick={() => {
-                            if (!linkNote) startRename(script.name);
-                          }}
-                          aria-disabled={linkNote ? "true" : undefined}
-                          onKeyDown={(event) => {
-                            if (event.key === "F2" && !linkNote) startRename(script.name);
-                            else if (event.key === "Delete") props.onDelete(script.name);
-                            else return;
-                            event.preventDefault();
-                          }}
-                          aria-keyshortcuts="F2 Delete ArrowRight"
-                          aria-describedby="script-row-keys"
-                          title={linkNote ? `${script.name} · ${linkNote} (can only be deleted)` : `${script.name} · ${formatBytes(script.size)}`}
-                          className={cn("h-7 min-w-0 flex-1 truncate text-left text-xs", linkNote && "italic text-fg-subtle")}
-                        >
-                          {script.name}
-                          {linkNote && <span className="sr-only"> ({linkNote}, can only be deleted)</span>}
-                        </button>
+                        {linkNote ? (
+                          <Tooltip content={`${linkNote[0].toUpperCase()}${linkNote.slice(1)}: it can't be opened, only deleted.`} side="right">
+                            {nameButton}
+                          </Tooltip>
+                        ) : (
+                          nameButton
+                        )}
                         {dirtyFiles.includes(script.name) && (
                           <span className="size-1.5 shrink-0 rounded-full bg-fg-muted group-hover:hidden" aria-label="Unsaved changes" />
                         )}

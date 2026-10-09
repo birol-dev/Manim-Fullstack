@@ -219,3 +219,14 @@
 .resize-handle[data-separator="focus"]::before {
   opacity: 1;
 }
+
+/*
+ * Toast descriptions stop at two lines (the full message is in the console and on the editor's
+ * error marker), so a toast is at most ~90 px tall and ends above the preview's Render failed card.
+ */
+[data-sonner-toast] [data-description] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}

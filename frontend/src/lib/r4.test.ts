@@ -43,6 +43,17 @@ describe("live queue position in the console (item 3)", () => {
   });
 });
 
+describe("alternative steps in the meta width (extra f)", () => {
+  it("reserves room for the alt chip instead of the ×N badge", () => {
+    const step = { type: "play" as const, label: "x", line: 9, duration: 0.3, loop_line: 7, repeat: 4 };
+    const counted = stepMetaWidth(step, "0.3s");
+    const alt = stepMetaWidth({ ...step, alternative: true }, "0.3s");
+    const plain = stepMetaWidth({ type: "play", label: "x", line: 9, duration: 0.3 }, "0.3s");
+    expect(alt).toBeGreaterThan(plain);
+    expect(alt).toBeLessThan(counted);
+  });
+});
+
 describe("timeline wrapping (item 4)", () => {
   it("keeps short calls whole and wraps after the attribute dots", () => {
     expect(codeBreakSegments("dot.animate.shift(RIGHT * 0.5)")).toEqual(["dot.", "animate.", "shift(RIGHT * 0.5)"]);
