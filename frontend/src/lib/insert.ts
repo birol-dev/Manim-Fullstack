@@ -29,6 +29,8 @@ export interface LineInfo {
   lastCode: string;
   /** Only whitespace and/or a comment, and not inside a statement. */
   trivia: boolean;
+  /** A single-quoted string on this line never ends (a syntax error Python reports here). */
+  unterminated: boolean;
 }
 
 const STRING_PREFIX = /(?:^|[^\w])([rRbBuUfF]{1,2})$/;
@@ -103,9 +105,11 @@ export function scanLines(lines: readonly string[]): LineInfo[] {
     }
 
     // A single-quoted string can't span lines without a backslash; recover like Python.
+    let unterminated = false;
     while (stack.length > 1) {
       const top = stack[stack.length - 1];
       if (top.kind === "string" && (top.triple || backslash)) break;
+      if (top.kind === "string") unterminated = true;
       if (top.kind === "code" && top.field) {
         // An f-string field only spans lines inside a triple-quoted f-string.
         const outer = stack[stack.length - 2];
@@ -123,6 +127,7 @@ export function scanLines(lines: readonly string[]): LineInfo[] {
       startsInString,
       lastCode,
       trivia: !continues && !sawCode,
+      unterminated,
     });
   }
   return infos;
@@ -290,8 +295,32 @@ export interface BlockInsertRefusal {
  * - Indentation follows the file (tabs, or its own number of spaces).
  * - Never inside a string: a cursor in an unterminated string is refused.
  */
+/** Why the code up to *line* is too broken to insert into, or null. */
+function brokenLine(infos: readonly LineInfo[], line: number): string | null {
+  for (let index = 0; index < Math.min(line, infos.length); index += 1) {
+    if (infos[index].unterminated) return `Line ${index + 1} has a string that never ends. Close it, then insert again.`;
+  }
+  // An open bracket (or trailing \\) that nothing closes: everything after it is one broken statement.
+  const lastInfo = infos[infos.length - 1];
+  if (lastInfo?.open && !lastInfo.startsInString) {
+    let start = infos.length;
+    while (start > 1 && infos[start - 1].continues) start -= 1;
+    if (start <= line) return `The statement on line ${start} never ends (an open bracket or a trailing \\). Finish it, then insert again.`;
+  }
+  return null;
+}
+
 export function planBlockInsert(lines: readonly string[], cursorLine: number, block: string): BlockInsertPlan | BlockInsertRefusal {
   const infos = scanLines(lines);
+  const plan = planUnchecked(lines, infos, cursorLine, block);
+  if (isInsertRefusal(plan)) return plan;
+  // Broken code (a string or bracket that never closes) at or before the cursor or the
+  // insertion point makes the statement structure a guess, so don't insert into it.
+  const broken = brokenLine(infos, Math.max(cursorLine, plan.line + 1));
+  return broken ? { refused: broken } : plan;
+}
+
+function planUnchecked(lines: readonly string[], infos: readonly LineInfo[], cursorLine: number, block: string): BlockInsertPlan | BlockInsertRefusal {
   const unit = detectIndentUnit(lines, infos);
   const line = Math.min(Math.max(cursorLine, 1), Math.max(lines.length, 1));
   const text = lines[line - 1] ?? "";

@@ -46,6 +46,11 @@ const AUTO_RENDER_DELAY_MS = 1500;
 const NO_STEPS: AnimationStep[] = [];
 const SETUP_SHOWN_KEY = "mc.setupShown";
 
+/** Why this file can't start a render while *running* (another file's job) is in progress. */
+function busyReason(running: ActiveRender): string {
+  return `${running.queued ? "Waiting to render" : "Rendering"} ${running.request.scene} from ${running.request.filename}. Wait for it or cancel it, then render this file.`;
+}
+
 function uniqueName(base: string, existing: string[]): string {
   const taken = new Set(existing.map((name) => name.toLowerCase()));
   if (!taken.has(base.toLowerCase())) return base;
@@ -290,7 +295,13 @@ export default function App() {
   const startRender = useCallback(async () => {
     const filename = workspace.activeFile;
     // Ctrl+Enter can arrive twice (editor and window) while the first call is still saving.
-    if (sessionActiveRef.current || startingRef.current || !filename) return;
+    const running = sessionActiveRef.current;
+    if (running && running.request.filename !== filename) {
+      // One render at a time per tab: say why instead of doing nothing.
+      toast.error("Can't render this script", { id: "render-blocked", description: busyReason(running) });
+      return;
+    }
+    if (running || startingRef.current || !filename) return;
     startingRef.current = true;
     try {
       editorRef.current?.clearMarkers();
@@ -602,11 +613,18 @@ export default function App() {
     ownRender && ownRender.request.scene === workspace.selectedScene && sameSteps
       ? stepIndexForAnimation(renderingSteps, ownRender.progress?.animation)
       : null;
-  const canRender = online && Boolean(workspace.activeFile) && !session.active;
+  // Another file's job doesn't turn this file's Render into Cancel: it stays Render,
+  // blocked with the reason (one render per tab; cancel it from the preview banner).
+  // (The session's own state, not the held "Stopping…" frame: Render is back as soon as the job ends.)
+  const canRender = online && Boolean(workspace.activeFile) && session.active?.request.filename !== workspace.activeFile;
   // Why Render (and Ctrl+Enter) won't run this buffer, shown on the button.
   const maxCodeBytes = diagnostics.data?.max_code_bytes ?? getMaxCodeBytes();
   const codeBytes = useMemo(() => utf8ByteLength(workspace.code), [workspace.code]);
-  const renderBlocked = workspace.activeFile ? renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: workspace.syntaxError }) : null;
+  const renderBlocked = !workspace.activeFile
+    ? null
+    : session.active && session.active.request.filename !== workspace.activeFile
+      ? busyReason(session.active)
+      : renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: workspace.syntaxError });
   // Outcome of the open file's last render (the status bar and preview don't show another file's).
   const ownOutcome = lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null;
 
@@ -751,7 +769,7 @@ export default function App() {
                         selectedScene={workspace.selectedScene}
                         quality={quality}
                         autoRender={autoRender}
-                        active={shownRender.active}
+                        active={ownRender}
                         latexAvailable={latexAvailable}
                         canRender={canRender}
                         renderBlocked={renderBlocked}

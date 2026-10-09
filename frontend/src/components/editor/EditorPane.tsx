@@ -131,6 +131,7 @@ interface EditorPaneProps {
   selectedScene: string;
   quality: Quality;
   autoRender: boolean;
+  /** This file's render (another file's job shows in the preview banner, not here). */
   active: ActiveRender | null;
   latexAvailable: boolean;
   canRender: boolean;
@@ -232,17 +233,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           {rendering ? (
-            <Tooltip
-              key="cancel"
-              content={
-                props.stopping
-                  ? "Stopping the render…"
-                  : active.request.filename !== activeFile
-                    ? `Cancel the render of ${active.request.scene} (${active.request.filename})`
-                    : "Cancel render"
-              }
-              wrap
-            >
+            <Tooltip key="cancel" content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
               <Button
                 variant="secondary"
                 size="sm"
@@ -265,7 +256,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
                 // Still focusable when blocked, so the reason is reachable by keyboard and read out.
                 aria-disabled={blocked ? true : undefined}
                 aria-describedby={blocked ? "render-blocked-reason" : undefined}
-                className={cn("w-[92px] @max-[520px]:w-auto", blocked && "cursor-not-allowed opacity-50 hover:brightness-100")}
+                className={cn("w-[92px] @max-[520px]:w-auto", blocked && "cursor-not-allowed opacity-40 saturate-0 hover:brightness-100")}
                 aria-label="Render"
               >
                 <Play className="fill-current" />

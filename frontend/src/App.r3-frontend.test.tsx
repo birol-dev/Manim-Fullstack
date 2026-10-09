@@ -425,3 +425,53 @@ describe("typed scene names and browser storage", () => {
 
 // Keep the fake server type referenced for editors.
 export type { FakeServer };
+
+describe("R3 browser verification follow-ups", () => {
+  function previewRender() {
+    return within(screen.getByRole("region", { name: "Preview" })).getByRole("button", { name: "Render" });
+  }
+
+  it("C: the preview's Render is blocked too, with the same reason in plain sight (size and syntax)", async () => {
+    const server = installFakeServer();
+    server.diagnostics.max_code_bytes = 200;
+    render(<App />);
+    const editor = await screen.findByLabelText("Code editor");
+    await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+    fireEvent.change(editor, { target: { value: `from manim import *\nclass A(Scene):\n    def construct(self):\n        pass\n# ${"x".repeat(300)}\n` } });
+    await waitFor(() => expect(previewRender()).toHaveAttribute("aria-disabled", "true"));
+    const reason = document.getElementById(previewRender().getAttribute("aria-describedby")!);
+    expect(reason).toBeVisible();
+    expect(reason).toHaveTextContent(/over the 200 bytes limit/);
+    fireEvent.click(previewRender());
+    expect(await screen.findByText("Can't render this script")).toBeInTheDocument();
+    expect(starts()).toHaveLength(0);
+
+    fireEvent.change(editor, { target: { value: "from manim import *\n\nclass A(Scene):\n    def construct(self)\n        pass\n" } });
+    await waitFor(() =>
+      expect(document.getElementById(previewRender().getAttribute("aria-describedby")!)).toHaveTextContent("Fix the syntax error on line 4 first"),
+    );
+    expect(previewRender()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("D: another file's job doesn't turn this file's toolbar Render into Cancel", async () => {
+    const { user } = await renderApp({ scripts: { "same_a.py": SAME_A, "same_b.py": SAME_B } });
+    await openScript(user, "same_a.py");
+    await startRender(user);
+    const toolbar = () => screen.getByRole("region", { name: "Editor" });
+    expect(within(toolbar()).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    await openScript(user, "same_b.py");
+    expect(within(toolbar()).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    const render_ = within(toolbar()).getByRole("button", { name: "Render" });
+    expect(render_).toHaveAttribute("aria-disabled", "true");
+    expect(document.getElementById(render_.getAttribute("aria-describedby")!)).toHaveTextContent(
+      "Rendering Same from same_a.py. Wait for it or cancel it, then render this file.",
+    );
+    // Ctrl+Enter says why instead of doing nothing; nothing else is started.
+    fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
+    expect(await screen.findByText("Can't render this script")).toBeInTheDocument();
+    expect(starts()).toHaveLength(1);
+    // The other job is still cancellable from the banner.
+    expect(within(screen.getByTestId("other-render")).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+});
