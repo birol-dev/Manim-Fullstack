@@ -151,3 +151,38 @@ export function groupConsoleRows<T extends ConsoleLine>(logs: readonly T[], link
   }
   return rows;
 }
+
+// ---- Copying ----------------------------------------------------------------
+const BOX_EDGE = /[│┃║]/;
+const BOX_RULE_LINE = /^\s*[╭╰┏┗╔╚┌└]?[─━═\s]*(.*?)[─━═\s]*[╮╯┓┛╗╝┐┘]?\s*$/;
+const BOX_CHARS = /[\u2500-\u257F]/g;
+
+/**
+ * Plain text for a copied console selection: Rich's traceback box (│ ╭ ╮ ╰ ╯ ─
+ * and friends) is removed, so pasting a traceback into an issue or a chat gives
+ * readable lines. Top/bottom rules keep their title ("Traceback (most recent
+ * call last)"); code rows keep their indentation and the ❱ marker.
+ */
+export function stripBoxDrawing(text: string): string {
+  if (!/[\u2500-\u257F]/.test(text)) return text;
+  const out: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const isRule = /^\s*[╭╰┏┗╔╚┌└─━═]/.test(raw) && !/^\s*[│┃║]/.test(raw);
+    if (isRule) {
+      const title = (BOX_RULE_LINE.exec(raw)?.[1] ?? "").replace(BOX_CHARS, "").trim();
+      if (title) out.push(title);
+      continue;
+    }
+    let line = raw;
+    // Outer border: "│ " at the start and " │" at the end of a boxed row.
+    line = line.replace(new RegExp(`^(\\s*)${BOX_EDGE.source} ?`), "$1");
+    line = line.replace(new RegExp(` ?${BOX_EDGE.source}\\s*$`), "");
+    // Inner separators and indent guides become spaces, so indentation survives.
+    line = line.replace(BOX_CHARS, " ").replace(/\s+$/, "");
+    out.push(line);
+  }
+  // Rows that were only border (e.g. "│      │") are empty now; drop runs of them at the ends.
+  while (out.length && !out[0].trim()) out.shift();
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return out.join("\n");
+}

@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CornerDownRight, FileCode2, Terminal } from "lucide-react";
+import { ChevronRight, CornerDownRight, Terminal } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/panel";
 import type { LogEntry, LogLevel } from "@/hooks/useLogs";
 import { findLineReferenceMatch, type LineReference } from "@/lib/logs";
-import { groupConsoleRows } from "@/lib/traceback";
+import { groupConsoleRows, stripBoxDrawing } from "@/lib/traceback";
 import { cn } from "@/lib/utils";
 
 const LEVEL_STYLES: Record<LogLevel, string> = {
@@ -24,9 +24,6 @@ interface ConsoleViewProps {
   logs: LogEntry[];
   /** Files whose line references become clickable. */
   linkFiles: string[];
-  /** The script this output came from, when it isn't the open file. */
-  otherFile?: string | null;
-  onOpenFile?: (name: string) => void;
   onJumpToLine: (line: number) => void;
 }
 
@@ -127,7 +124,7 @@ function LogLine({
   );
 }
 
-export function ConsoleView({ logs, linkFiles, otherFile = null, onOpenFile, onJumpToLine }: ConsoleViewProps) {
+export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
@@ -163,26 +160,17 @@ export function ConsoleView({ logs, linkFiles, otherFile = null, onOpenFile, onJ
         const element = event.currentTarget;
         stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
       }}
+      onCopy={(event) => {
+        // Copy the traceback without Rich's box border characters.
+        const selected = window.getSelection()?.toString() ?? "";
+        const plain = stripBoxDrawing(selected);
+        if (!selected || plain === selected) return;
+        event.preventDefault();
+        event.clipboardData.setData("text/plain", plain);
+      }}
       tabIndex={0}
       className="h-full min-h-0 flex-1 overflow-auto overscroll-contain px-3 py-2 font-mono text-[12px] leading-[1.45] select-text outline-none"
     >
-      {otherFile && (
-        <div className="sticky -top-2 left-0 z-10 -mx-3 -mt-2 mb-1 flex items-center gap-2 border-b border-line bg-surface px-3 py-1 font-sans text-2xs text-fg-subtle">
-          <FileCode2 className="size-3 shrink-0" />
-          <span className="min-w-0 truncate">
-            Output from <span className="font-mono text-fg-muted">{otherFile}</span>, not the open file
-          </span>
-          {onOpenFile && (
-            <button
-              type="button"
-              onClick={() => onOpenFile(otherFile)}
-              className="shrink-0 rounded border border-line-strong bg-raised px-1.5 text-fg-muted transition-colors hover:border-accent hover:text-accent"
-            >
-              Open {otherFile}
-            </button>
-          )}
-        </div>
-      )}
       {rows.map((row) => {
         if (row.kind === "line") {
           return (

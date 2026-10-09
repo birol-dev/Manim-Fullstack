@@ -31,17 +31,31 @@ export interface TimelineTotal {
   unknownLoops: boolean;
 }
 
+/**
+ * Runs of a step that the parser can vouch for: the product of the *known* loop
+ * counts around it, counting a loop of unknown length as one pass. So a ×3 loop
+ * inside a ×? loop gives 3 (per outer pass), where stepRuns() gives 1. Display
+ * only (the timeline total); progress keeps using stepRuns / executionOrder.
+ */
+export function knownRuns(step: AnimationStep): number {
+  if (!step.loops?.length) return stepRuns(step);
+  return step.loops.reduce((product, [, , count]) => product * (typeof count === "number" && count >= 0 ? count : 1), 1);
+}
+
 export function timelineTotal(steps: readonly AnimationStep[]): TimelineTotal {
   let seconds = 0;
   let runs = 0;
   let estimated = false;
   let unknownLoops = false;
   for (const step of steps) {
-    const count = stepRuns(step);
+    // An unknown outer loop still multiplies by its known inner loops (per outer pass); the "+" says it's open-ended.
+    const count = knownRuns(step);
     seconds += stepSeconds(step) * count;
     runs += count;
     if (typeof step.duration !== "number" || step.estimated) estimated = true;
-    if (isLooped(step) && typeof step.repeat !== "number") unknownLoops = true;
+    if ((isLooped(step) && typeof step.repeat !== "number") || step.loops?.some(([, , loopCount]) => typeof loopCount !== "number")) {
+      unknownLoops = true;
+    }
   }
   return { seconds: Math.round(seconds * 10) / 10, estimated: estimated || unknownLoops, runs, unknownLoops };
 }

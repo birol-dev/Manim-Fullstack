@@ -79,13 +79,13 @@ describe("ActivityBar", () => {
         <ActivityBar view="templates" open onSelect={() => {}} />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("accent-templates")).not.toHaveClass("opacity-50");
+    expect(screen.getByTestId("accent-templates")).not.toHaveClass("opacity-80");
     rerender(
       <TooltipProvider>
         <ActivityBar view="templates" open={false} onSelect={() => {}} />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("accent-templates")).toHaveClass("opacity-50");
+    expect(screen.getByTestId("accent-templates")).toHaveClass("opacity-80");
     expect(screen.getByRole("button", { name: "Templates" })).toHaveAttribute("aria-pressed", "false");
   });
 });

@@ -38,6 +38,9 @@ interface TooltipProps {
 function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }: TooltipProps) {
   const [open, setOpen] = React.useState(false);
   const hovered = React.useRef(false);
+  // A click dismisses the hint until the pointer leaves; otherwise the next pointer
+  // move reopens it (the "lingering Download tooltip" after a click).
+  const clicked = React.useRef(false);
   const close = React.useCallback(() => setOpen(false), []);
 
   React.useEffect(() => {
@@ -56,6 +59,7 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
   const onOpenChange = (next: boolean) => {
     // Opening without the pointer over the trigger means focus did it; allow that only right after Tab.
     if (next && !hovered.current && !focusFromTab) return;
+    if (next && clicked.current) return;
     setOpen(next);
   };
 
@@ -66,16 +70,28 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
   );
 
   return (
-    <TooltipPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    // disableHoverableContent: the hint is pointer-events-none, so Radix's "pointer in transit to
+    // the content" grace area only blocked the neighbouring button's tooltip (Rename -> Delete).
+    <TooltipPrimitive.Root open={open} onOpenChange={onOpenChange} disableHoverableContent>
       <TooltipPrimitive.Trigger
         asChild
         onPointerEnter={() => (hovered.current = true)}
+        // A trigger mounted under a resting pointer (Render turning into Cancel) gets no
+        // pointerenter until it leaves; the first move counts as hovering.
+        onPointerMove={() => (hovered.current = true)}
         onPointerLeave={() => {
           hovered.current = false;
+          clicked.current = false;
           close();
         }}
-        onPointerDown={close}
-        onBlur={close}
+        onPointerDown={() => {
+          clicked.current = true;
+          close();
+        }}
+        onBlur={() => {
+          clicked.current = false;
+          close();
+        }}
       >
         {trigger}
       </TooltipPrimitive.Trigger>
