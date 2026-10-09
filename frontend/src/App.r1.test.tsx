@@ -2,7 +2,7 @@
 // toasts, console links, and keyboard navigation.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 
 vi.mock("@/components/editor/CodeEditor", async () => {
@@ -15,6 +15,7 @@ import { editorCalls } from "@/test/fakeEditor";
 import { EXAMPLE_CODE, installFakeServer, media, type FakeServer } from "@/test/fakeServer";
 import { FakeWebSocket } from "@/test/fakeSocket";
 import { validateScriptName } from "@/lib/format";
+import { QUEUED_CANCEL_FALLBACK_MS } from "@/hooks/useRenderSession";
 
 type Overrides = Parameters<typeof installFakeServer>[0];
 
@@ -39,11 +40,27 @@ function calls(server: FakeServer, method: string, path: string) {
   return server.calls.filter((call) => call.method === method && call.path === path);
 }
 
+/**
+ * Console lines are batched and rendered on the next animation frame (useLogs),
+ * a frame after the state that ends a render. Wait for the line, then let one
+ * more frame flush so a duplicate queued behind it would be caught too.
+ */
+async function expectLogLineOnce(text: string) {
+  await waitFor(() => expect(within(screen.getByRole("log")).getAllByText(text)).toHaveLength(1));
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(within(screen.getByRole("log")).getAllByText(text)).toHaveLength(1);
+}
+
 function previewVideo() {
   return document.querySelector("section[aria-label='Preview'] video");
 }
 
 const notesRender = media("Notes", { script: "notes", path: "videos/notes/720p30/Notes.mp4", url: "/media/videos/notes/720p30/Notes.mp4" });
+
+afterEach(() => {
+  // A test that fails while timers are faked must not leak them into the next one.
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   editorCalls.length = 0;
@@ -253,7 +270,7 @@ describe("cancel and queue states", () => {
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(within(screen.getByRole("log")).getAllByText("Cancelled before it started.")).toHaveLength(1);
+    await expectLogLineOnce("Cancelled before it started.");
     expect(screen.getAllByRole("button", { name: "Render" })[0]).toBeEnabled();
   });
 
@@ -278,14 +295,20 @@ describe("cancel and queue states", () => {
     act(() => socket.emit({ type: "info", render_id: id, message: "Waiting for another render to finish…" }));
     expect(within(screen.getByRole("status")).getByText("Queued Intro")).toBeInTheDocument();
 
-    await user.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
+    // Drive the fallback timer explicitly instead of waiting 3 real seconds.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
     expect(socket.lastSent().type).toBe("cancel");
-    expect(await screen.findByText("Render cancelled", undefined, { timeout: 5000 })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(QUEUED_CANCEL_FALLBACK_MS - 1));
+    expect(within(screen.getByRole("status")).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    act(() => vi.advanceTimersByTime(1));
+    vi.useRealTimers();
+    expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
 
     // A late result for it is ignored: no second log line or toast.
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    expect(within(screen.getByRole("log")).getAllByText("Cancelled before it started.")).toHaveLength(1);
+    await expectLogLineOnce("Cancelled before it started.");
   });
 
   it("leaves the queue when Manim starts, and toolbar and overlay agree while stopping", async () => {
