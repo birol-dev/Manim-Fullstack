@@ -15,7 +15,7 @@ import { editorCalls } from "@/test/fakeEditor";
 import { installFakeServer, type FakeServer } from "@/test/fakeServer";
 import { FakeWebSocket } from "@/test/fakeSocket";
 import { QUEUED_CANCEL_FALLBACK_MS } from "@/hooks/useRenderSession";
-import { STORAGE_KEYS } from "@/lib/storage";
+import { browserFileKey, deleteBrowserFile, loadBrowserFiles, STORAGE_KEYS, writeBrowserFile } from "@/lib/storage";
 import { MAX_CODE_BYTES, setMaxCodeBytes } from "@/lib/constants";
 
 type Overrides = Parameters<typeof installFakeServer>[0];
@@ -76,7 +76,7 @@ describe("render state belongs to its job (file + scene + render id)", () => {
     act(() => socket.emit({ type: "progress", render_id: id, percent: 50, animation: 1 }));
 
     // Own file: overlay with the right total (3 steps from same_a.py), highlight on step 2.
-    const overlay = screen.getByRole("status");
+    const overlay = screen.getByRole("group", { name: "Render in progress" });
     expect(within(overlay).getByText("Rendering Same")).toBeInTheDocument();
     expect(within(overlay).getByText(/Animation 2 of 3/)).toBeInTheDocument();
     fireEvent.mouseDown(screen.getByRole("tab", { name: /Timeline/ }), { button: 0 });
@@ -115,7 +115,7 @@ describe("render state belongs to its job (file + scene + render id)", () => {
     expect(within(screen.getByRole("tabpanel")).getAllByRole("option").filter((button) => button.getAttribute("aria-current"))).toHaveLength(0);
     // The overlay still counts the steps of the code being rendered.
     act(() => socket.emit({ type: "progress", render_id: id, percent: 10, animation: 1 }));
-    expect(within(screen.getByRole("status")).getByText(/Animation 2 of 3/)).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText(/Animation 2 of 3/)).toBeInTheDocument();
   });
 });
 
@@ -225,18 +225,18 @@ describe("focus", () => {
     fireEvent.change(editor, { target: { value: "# mine" } });
     server.scripts["example.py"] = "# theirs\n";
     act(() => void window.dispatchEvent(new Event("focus")));
-    expect(await screen.findByText("example.py changed in another tab")).toBeInTheDocument();
+    expect(await screen.findByText("example.py changed outside this tab")).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     const dialog = await screen.findByRole("dialog");
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus());
     // The toast with its competing "Reload theirs" action is gone, and focus checks wait.
-    await waitFor(() => expect(screen.queryAllByText("example.py changed in another tab")).toHaveLength(1));
-    expect(within(dialog).getByText("example.py changed in another tab")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryAllByText("example.py changed outside this tab")).toHaveLength(1));
+    expect(within(dialog).getByText("example.py changed outside this tab")).toBeInTheDocument();
     server.scripts["example.py"] = "# theirs again\n";
     act(() => void window.dispatchEvent(new Event("focus")));
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(screen.queryAllByText("example.py changed in another tab")).toHaveLength(1);
+    expect(screen.queryAllByText("example.py changed outside this tab")).toHaveLength(1);
   });
 });
 
@@ -256,17 +256,17 @@ describe("status bar and queue", () => {
     const { user } = await renderApp();
     const { socket, id } = await startRender(user);
     act(() => socket.emit({ type: "queued", render_id: id, position: 3, message: "Waiting… (position 3 in queue)" }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 3")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro · position 3")).toBeInTheDocument();
     expect(screen.getByText("· position 3")).toBeInTheDocument(); // status bar
     act(() => socket.emit({ type: "queued", render_id: id, position: 2, message: "Waiting… (position 2 in queue)" }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 2")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro · position 2")).toBeInTheDocument();
     act(() => socket.emit({ type: "queue_position", render_id: id, position: 1 }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 1")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro · position 1")).toBeInTheDocument();
     act(() => socket.emit({ type: "started", render_id: id, waited: true }));
-    expect(within(screen.getByRole("status")).getByText("Rendering Intro")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Rendering Intro")).toBeInTheDocument();
     // A late position update can't put a started render back in the queue.
     act(() => socket.emit({ type: "queued", render_id: id, position: 1 }));
-    expect(within(screen.getByRole("status")).getByText("Rendering Intro")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Rendering Intro")).toBeInTheDocument();
   });
 
   it("says 'Cancelled before it started.' only for a render that never started", async () => {
@@ -274,12 +274,12 @@ describe("status bar and queue", () => {
     const { socket, id } = await startRender(user);
     act(() => socket.emit({ type: "queued", render_id: id, position: 1 }));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    fireEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Cancel" }));
     // The cancel raced the start: Manim did start and is being stopped.
     act(() => socket.emit({ type: "started", render_id: id, waited: true }));
     act(() => vi.advanceTimersByTime(QUEUED_CANCEL_FALLBACK_MS + 10));
     vi.useRealTimers();
-    expect(within(screen.getByRole("status")).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Stopping…" })).toBeDisabled();
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
     await nextFrame();
@@ -380,10 +380,22 @@ describe("typed scene names and browser storage", () => {
     return renderApp();
   }
 
+  /** Another tab's writes: one key per script, one "storage" event per changed key (like a browser). */
   function writeFromOtherTab(files: Record<string, string>) {
-    const value = JSON.stringify(files);
-    localStorage.setItem(STORAGE_KEYS.browserFiles, value);
-    act(() => void window.dispatchEvent(new StorageEvent("storage", { key: STORAGE_KEYS.browserFiles, newValue: value })));
+    const before = loadBrowserFiles();
+    const changed: [string, string | null][] = [];
+    for (const name of Object.keys(before)) {
+      if (!(name in files)) {
+        deleteBrowserFile(name);
+        changed.push([browserFileKey(name), null]);
+      }
+    }
+    for (const [name, content] of Object.entries(files)) {
+      if (before[name] === content) continue;
+      writeBrowserFile(name, content);
+      changed.push([browserFileKey(name), content]);
+    }
+    for (const [key, newValue] of changed) act(() => void window.dispatchEvent(new StorageEvent("storage", { key, newValue })));
   }
 
   it("asks before overwriting a script another tab saved in browser storage", async () => {
@@ -395,13 +407,13 @@ describe("typed scene names and browser storage", () => {
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("a.py changed in another tab")).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)["a.py"]).toBe("# theirs\n");
+    expect(loadBrowserFiles()["a.py"]).toBe("# theirs\n");
     await user.click(within(dialog).getByRole("button", { name: "Reload theirs" }));
     await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveValue("# theirs\n"));
 
     fireEvent.change(screen.getByLabelText("Code editor"), { target: { value: "# mine again\n" } });
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)["a.py"]).toBe("# mine again\n"));
+    await waitFor(() => expect(loadBrowserFiles()["a.py"]).toBe("# mine again\n"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -417,9 +429,9 @@ describe("typed scene names and browser storage", () => {
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("a.py no longer exists")).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)).not.toHaveProperty("a.py");
+    expect(loadBrowserFiles()).not.toHaveProperty("a.py");
     await user.click(within(dialog).getByRole("button", { name: "Recreate file" }));
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)["a.py"]).toBe("# keep\n"));
+    await waitFor(() => expect(loadBrowserFiles()["a.py"]).toBe("# keep\n"));
   });
 });
 
@@ -501,7 +513,7 @@ describe("412 current_version (#15)", () => {
     const dialog = await screen.findByRole("dialog");
     server.scripts["example.py"] = "# theirs, again\n";
     await user.click(within(dialog).getByRole("button", { name: "Overwrite" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("example.py changed in another tab");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("example.py changed outside this tab");
     expect(server.scripts["example.py"]).toBe("# theirs, again\n");
   });
 });

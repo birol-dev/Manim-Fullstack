@@ -75,7 +75,7 @@ describe("save conflicts between tabs", () => {
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("example.py changed in another tab")).toBeInTheDocument();
+    expect(within(dialog).getByText("example.py changed outside this tab")).toBeInTheDocument();
     expect(server.scripts["example.py"]).toBe("# saved in another tab\n");
     expect(calls(server, "POST", "/api/save")[0].body).toMatchObject({ base_version: expect.any(String) });
 
@@ -127,7 +127,7 @@ describe("save conflicts between tabs", () => {
     server.scripts["example.py"] = "# theirs\n";
     fireEvent.change(editor, { target: { value: `${EXAMPLE_CODE}# mine\n` } });
     await user.click(screen.getAllByRole("button", { name: "Render" })[0]);
-    expect(await screen.findByText("example.py changed in another tab")).toBeInTheDocument();
+    expect(await screen.findByText("example.py changed outside this tab")).toBeInTheDocument();
     expect(FakeWebSocket.latest().sent.some((message) => message.type === "start")).toBe(false);
   });
 
@@ -141,7 +141,7 @@ describe("save conflicts between tabs", () => {
     fireEvent.change(editor, { target: { value: "# my edit" } });
     server.scripts["example.py"] = "# changed again\n";
     act(() => void window.dispatchEvent(new Event("focus")));
-    expect(await screen.findByText("example.py changed in another tab")).toBeInTheDocument();
+    expect(await screen.findByText("example.py changed outside this tab")).toBeInTheDocument();
     expect(screen.getByLabelText("Code editor")).toHaveValue("# my edit");
 
     delete server.scripts["example.py"];
@@ -253,7 +253,7 @@ describe("cancel and queue states", () => {
       socket.emit({ type: "info", render_id: id, message });
     });
 
-    const overlay = screen.getByRole("status");
+    const overlay = screen.getByRole("group", { name: "Render in progress" });
     expect(within(overlay).getByText("Queued Intro · position 2")).toBeInTheDocument();
     expect(within(overlay).getByText("Waiting for another render to finish…")).toBeInTheDocument();
     expect(screen.getByText("Intro · queued")).toBeInTheDocument();
@@ -266,12 +266,12 @@ describe("cancel and queue states", () => {
     expect(within(overlay).getByRole("button", { name: "Stopping…" })).toBeDisabled();
     expect(within(overlay).getByText("Leaving the queue…")).toBeInTheDocument();
     act(() => socket.emit({ type: "info", render_id: id, message: "Stopping render..." }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 1")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro · position 1")).toBeInTheDocument();
 
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
     // "Leaving the queue…" stays up for at least STOPPING_MIN_DISPLAY_MS (display only), then goes.
-    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Render in progress" })).not.toBeInTheDocument());
     await expectLogLineOnce("Cancelled before it started.");
     expect(screen.getAllByRole("button", { name: "Render" })[0]).toBeEnabled();
   });
@@ -282,27 +282,27 @@ describe("cancel and queue states", () => {
     act(() => socket.emit({ type: "queued", render_id: id, position: 1, message: "Waiting for another render to finish… (position 1 in queue)" }));
     // With typed events, other lines don't end the wait.
     act(() => socket.emit({ type: "info", render_id: id, message: "Some notice" }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 1")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro · position 1")).toBeInTheDocument();
 
     act(() => socket.emit({ type: "started", render_id: id, waited: true }));
-    expect(within(screen.getByRole("status")).getByText("Rendering Intro")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Rendering Intro")).toBeInTheDocument();
     expect(screen.getByText("Intro · rendering")).toBeInTheDocument();
     act(() => socket.emit({ type: "progress", render_id: id, percent: 40, animation: 0 }));
-    expect(within(screen.getByRole("status")).getByText(/Animation 1 of/)).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText(/Animation 1 of/)).toBeInTheDocument();
   });
 
   it("falls back to finishing a queued cancel locally when an older server never answers", async () => {
     const { user } = await renderApp();
     const { socket, id } = await startRender(user);
     act(() => socket.emit({ type: "info", render_id: id, message: "Waiting for another render to finish…" }));
-    expect(within(screen.getByRole("status")).getByText("Queued Intro")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Queued Intro")).toBeInTheDocument();
 
     // Drive the fallback timer explicitly instead of waiting 3 real seconds.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    fireEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Cancel" }));
     expect(socket.lastSent().type).toBe("cancel");
     act(() => vi.advanceTimersByTime(QUEUED_CANCEL_FALLBACK_MS - 1));
-    expect(within(screen.getByRole("status")).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Stopping…" })).toBeDisabled();
     act(() => vi.advanceTimersByTime(1));
     // The overlay's minimum "Leaving the queue…" display (r3) runs on the faked clock too.
     act(() => vi.advanceTimersByTime(STOPPING_MIN_DISPLAY_MS));
@@ -311,7 +311,7 @@ describe("cancel and queue states", () => {
 
     // A late result for it is ignored: no second log line or toast.
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
-    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Render in progress" })).not.toBeInTheDocument());
     await expectLogLineOnce("Cancelled before it started.");
   });
 
@@ -320,13 +320,13 @@ describe("cancel and queue states", () => {
     const { socket, id } = await startRender(user);
     act(() => socket.emit({ type: "info", render_id: id, message: "Waiting for another render to finish…" }));
     act(() => socket.emit({ type: "info", render_id: id, message: "$ manim example.py Intro -qm" }));
-    expect(within(screen.getByRole("status")).getByText("Rendering Intro")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Rendering Intro")).toBeInTheDocument();
 
-    await user.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
+    await user.click(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Cancel" }));
     expect(socket.lastSent().type).toBe("cancel");
-    expect(within(screen.getByRole("status")).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByRole("button", { name: "Stopping…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Stopping" })).toBeDisabled();
-    expect(within(screen.getByRole("status")).getByText("Stopping Manim…")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("Stopping Manim…")).toBeInTheDocument();
 
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();

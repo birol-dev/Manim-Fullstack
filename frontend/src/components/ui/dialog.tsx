@@ -50,11 +50,26 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
     // Dialogs here are opened from state, not a Radix Trigger, so Radix has no
     // trigger to return focus to. Remember what had focus and go back to it.
     const opener = React.useRef<HTMLElement | null>(null);
+    // Called when the content mounts (each time the dialog opens). A field with autoFocus
+    // (New script's name) takes focus before Radix's open event, and Radix then skips
+    // that event altogether, so the opener is remembered here as well.
+    const contentRef = React.useCallback(
+      (node: HTMLDivElement | null) => {
+        if (node && !opener.current) {
+          const active = document.activeElement;
+          const outside = active instanceof HTMLElement && active !== document.body && !node.contains(active);
+          opener.current = outside ? active : lastFocusOutside?.isConnected ? lastFocusOutside : null;
+        }
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref],
+    );
     return (
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content
-          ref={ref}
+          ref={contentRef}
           onOpenAutoFocus={(event) => {
             const active = document.activeElement;
             const content = event.currentTarget as HTMLElement | null;

@@ -26,6 +26,8 @@ interface FilesPanelProps {
   onPreviewMedia: (item: MediaFile) => void;
   onDeleteMedia: (item: MediaFile) => void;
   onCompare: () => void;
+  /** False while the list is still loading (no "empty" message yet). */
+  filesReady?: boolean;
 }
 
 /**
@@ -48,13 +50,18 @@ function RenameInput({
   const [serverError, setServerError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const name = toScriptName(value);
-  const unchanged = name === initial || !value.trim();
+  // Untouched counts as unchanged even when the name isn't in normal form: a legacy name
+  // (leading NBSP, NFD accents, odd spaces) must not be renamed just by opening the box.
+  const unchanged = value === initial || name === initial || !value.trim();
   const problem = unchanged ? null : validateScriptName(name, existing.filter((other) => other !== initial));
   const error = serverError ?? problem;
 
   const commit = async (keyboard: boolean) => {
     if (busy) return;
     if (unchanged) return onCancel(keyboard);
+    // Clicking away never commits a rename that only normalizes the old name, or retries
+    // one the server just refused; Enter does.
+    if (!keyboard && (name === toScriptName(initial) || serverError)) return onCancel(false);
     if (problem) return;
     setBusy(true);
     try {
@@ -200,6 +207,9 @@ export function FilesPanel(props: FilesPanelProps) {
         <Section title="Scripts">
           {props.filesError ? (
             <EmptyState title="Couldn't load scripts" description="The server isn't reachable. Retrying automatically." />
+          ) : files.scripts.length === 0 && storageMode === "browser" && props.filesReady !== false ? (
+            // Browser storage seeds a starter script once; after deleting everything the list stays empty.
+            <EmptyState title="No scripts in this browser" description="Create one with New script." />
           ) : (
             <ul ref={scriptListRef} aria-label="Scripts" className="flex flex-col gap-px" onKeyDown={scriptRoving.onKeyDown}>
               {files.scripts.map((script) => {

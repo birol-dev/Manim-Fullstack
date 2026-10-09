@@ -17,7 +17,7 @@ import {
 import { findErrorLocation, findLineReference, findLineReferenceMatch } from "./logs";
 import { overallPercent, risingPercent, stepSeconds } from "./progress";
 import { buildShapeCode, DEFAULT_SHAPE_OPTIONS, defaultVariableName, isFillable, toIdentifier } from "./shapeBuilder";
-import { BROWSER_STARTER, BROWSER_STARTER_NAME, loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "./storage";
+import { BROWSER_STARTER, BROWSER_STARTER_NAME, deleteBrowserFile, loadBrowserFiles, readStored, STORAGE_KEYS, writeBrowserFile, writeStored } from "./storage";
 import { newSceneCode, SCENE_TEMPLATES } from "./templates";
 import type { ActiveRender } from "@/hooks/useRenderSession";
 
@@ -263,11 +263,12 @@ describe("storage", () => {
 
   it("seeds and saves browser scripts", () => {
     expect(loadBrowserFiles()).toEqual({ [BROWSER_STARTER_NAME]: BROWSER_STARTER });
-    expect(saveBrowserFiles({ "a.py": "x" })).toBe(true);
+    expect(writeBrowserFile("a.py", "x")).toBe(true);
+    deleteBrowserFile(BROWSER_STARTER_NAME);
     expect(loadBrowserFiles()).toEqual({ "a.py": "x" });
 
+    localStorage.clear();
     localStorage.setItem("manim_composer_browser_files", JSON.stringify({ "legacy.py": "y" }));
-    localStorage.removeItem(STORAGE_KEYS.browserFiles);
     expect(loadBrowserFiles()).toEqual({ "legacy.py": "y" });
   });
 
@@ -276,7 +277,7 @@ describe("storage", () => {
       throw new DOMException("full", "QuotaExceededError");
     });
     expect(() => writeStored("k", 1)).not.toThrow();
-    expect(saveBrowserFiles({ "a.py": "x" })).toBe(false);
+    expect(writeBrowserFile("a.py", "x")).toBe(false);
   });
 });
 
