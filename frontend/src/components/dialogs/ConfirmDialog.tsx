@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/api";
+import { focusWithRing } from "@/lib/focus";
 
 export interface ConfirmRequest {
   title: string;
@@ -66,7 +67,7 @@ export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
           const target = { cancel: cancelRef, secondary: secondaryRef, confirm: confirmRef }[focusTarget].current ?? cancelRef.current;
           if (!target) return;
           event.preventDefault();
-          target.focus();
+          focusWithRing(target);
         }}
         onFocusFallback={() => lastRequest.current?.fallbackFocus?.()}
       >

@@ -55,10 +55,14 @@ describe("link entries in the file list", () => {
         name: new RegExp(`^${name.replace(".", "\\.")}`),
       });
       expect(row).toHaveAttribute("aria-disabled", "true");
-      expect(row).toHaveAttribute(
-        "title",
-        `${name} · ${note} (can only be deleted)`,
-      );
+      // R4 visual: the reason is a real tooltip (shown on hover and focus) instead of a native title.
+      expect(row).not.toHaveAttribute("title");
+      expect(row.textContent).toBe(`${name} (${note}, can only be deleted)`);
+      await user.hover(row);
+      expect(
+        (await screen.findAllByText(new RegExp(`^${note}: it can't be opened, only deleted\\.$`, "i")))[0],
+      ).toBeInTheDocument();
+      await user.unhover(row);
       await user.click(row);
       expect(props.onOpen).not.toHaveBeenCalled();
       expect(

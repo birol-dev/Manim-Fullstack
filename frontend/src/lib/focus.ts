@@ -32,3 +32,14 @@ export function focusNextAfter(container: Element, isVisible: (element: HTMLElem
   next.focus();
   return true;
 }
+
+/**
+ * Focus a dialog's default button with a visible ring. A dialog opened by a mouse click
+ * gets no :focus-visible in Chrome/Safari, so Enter's target was invisible; the ring stays
+ * until focus leaves the button (index.css: [data-autofocus-ring]).
+ */
+export function focusWithRing(target: HTMLElement) {
+  target.setAttribute("data-autofocus-ring", "");
+  target.addEventListener("blur", () => target.removeAttribute("data-autofocus-ring"), { once: true });
+  target.focus();
+}

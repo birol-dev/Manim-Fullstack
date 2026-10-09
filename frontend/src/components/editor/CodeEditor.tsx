@@ -212,7 +212,8 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
         <div
           aria-hidden="true"
           data-testid="editor-focus-hint"
-          className="pointer-events-none absolute bottom-1.5 right-4 z-10 rounded border border-line bg-raised/90 px-1.5 py-0.5 font-sans text-2xs text-fg-subtle"
+          // fg-muted on opaque raised: 7.4:1 (was fg-subtle on raised/90 over the editor, ~4.2:1).
+          className="pointer-events-none absolute bottom-1.5 right-4 z-10 rounded border border-line-strong bg-raised px-1.5 py-0.5 font-sans text-2xs text-fg-muted"
         >
           {tabFocusMode ? `Tab moves focus · ${TAB_FOCUS_KEY} to indent` : `Esc leaves the editor · ${TAB_FOCUS_KEY}: Tab moves focus`}
         </div>

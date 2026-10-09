@@ -26,17 +26,24 @@ interface TooltipProps {
   /** Keyboard shortcut shown after the label, e.g. "Ctrl+S". */
   shortcut?: string;
   side?: "top" | "right" | "bottom" | "left";
+  align?: "start" | "center" | "end";
+  /** Gap between the trigger and the hint, in px (default 6). */
+  sideOffset?: number;
   /**
    * Wrap the trigger in a span. Needed when the child can be disabled: a
    * disabled button gets no pointer events, so the hint would never show.
    */
   wrap?: boolean;
+  /** Extra classes for the `wrap` span (e.g. "flex w-full" for a full-width button). */
+  wrapClassName?: string;
   children: React.ReactElement;
 }
 
 /** Hover / Tab-focus hint for icon buttons. Renders the child as the trigger. */
-function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }: TooltipProps) {
+function Tooltip({ content, shortcut, side = "bottom", align = "center", sideOffset = 6, wrap = false, wrapClassName, children }: TooltipProps) {
   const [open, setOpen] = React.useState(false);
+  // Typed as Radix wants; with `wrap` it is really the span.
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const hovered = React.useRef(false);
   // A click dismisses the hint until the pointer leaves; otherwise the next pointer
   // move reopens it (the "lingering Download tooltip" after a click).
@@ -47,11 +54,27 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
     if (!open) return;
     if (closeOpenTooltip && closeOpenTooltip !== close) closeOpenTooltip();
     closeOpenTooltip = close;
+    // A missed pointerleave (the trigger re-rendered, turned disabled, or moved under a resting
+    // pointer) left the blocked-Render hint up after the pointer had gone: any pointer move or
+    // press outside the trigger closes a hover-opened hint.
+    const outside = (event: PointerEvent) => {
+      const trigger = triggerRef.current;
+      if (!hovered.current || !trigger) return;
+      if (event.target instanceof Node && trigger.contains(event.target)) return;
+      const box = trigger.getBoundingClientRect();
+      if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) return;
+      hovered.current = false;
+      close();
+    };
     window.addEventListener("blur", close);
     window.addEventListener("scroll", close, true);
+    document.addEventListener("pointermove", outside, true);
+    document.addEventListener("pointerdown", outside, true);
     return () => {
       window.removeEventListener("blur", close);
       window.removeEventListener("scroll", close, true);
+      document.removeEventListener("pointermove", outside, true);
+      document.removeEventListener("pointerdown", outside, true);
       if (closeOpenTooltip === close) closeOpenTooltip = null;
     };
   }, [open, close]);
@@ -64,7 +87,7 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
   };
 
   const trigger = wrap ? (
-    <span className="inline-flex shrink-0 [&>button:disabled]:pointer-events-none">{children}</span>
+    <span className={cn("inline-flex shrink-0 [&>button:disabled]:pointer-events-none", wrapClassName)}>{children}</span>
   ) : (
     children
   );
@@ -75,6 +98,7 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
     <TooltipPrimitive.Root open={open} onOpenChange={onOpenChange} disableHoverableContent>
       <TooltipPrimitive.Trigger
         asChild
+        ref={triggerRef}
         onPointerEnter={() => (hovered.current = true)}
         // A trigger mounted under a resting pointer (Render turning into Cancel) gets no
         // pointerenter until it leaves; the first move counts as hovering.
@@ -98,7 +122,8 @@ function Tooltip({ content, shortcut, side = "bottom", wrap = false, children }:
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
           side={side}
-          sideOffset={6}
+          align={align}
+          sideOffset={sideOffset}
           collisionPadding={8}
           className={cn(
             "pointer-events-none z-50 flex max-w-72 items-center gap-2 rounded-md border border-line-strong bg-overlay px-2 py-1 text-2xs font-medium text-fg shadow-popover",

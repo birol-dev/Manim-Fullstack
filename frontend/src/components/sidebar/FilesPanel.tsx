@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Link2, Pencil, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FileNameText } from "@/components/ui/code-text";
 import { Callout, EmptyState, Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { apiUrl, errorMessage } from "@/lib/api";
@@ -210,6 +211,37 @@ export function FilesPanel(props: FilesPanelProps) {
                   : script.broken
                     ? "broken link"
                     : null;
+                const nameButton = (
+                  <button
+                    type="button"
+                    data-roving-item
+                    data-name={script.name}
+                    tabIndex={tabIndex}
+                    aria-current={active ? "true" : undefined}
+                    onClick={() => {
+                      if (!linkNote) props.onOpen(script.name);
+                    }}
+                    onDoubleClick={() => {
+                      if (!linkNote) startRename(script.name);
+                    }}
+                    aria-disabled={linkNote ? "true" : undefined}
+                    onKeyDown={(event) => {
+                      if (event.key === "F2" && !linkNote) startRename(script.name);
+                      else if (event.key === "Delete") props.onDelete(script.name);
+                      else return;
+                      event.preventDefault();
+                    }}
+                    aria-keyshortcuts="F2 Delete ArrowRight"
+                    aria-describedby="script-row-keys"
+                    // Link rows explain themselves in a tooltip (below); plain rows keep the native title.
+                    title={linkNote ? undefined : `${script.name} · ${formatBytes(script.size)}`}
+                    // fg-muted (>= 6.6:1 on every row background; fg-subtle was ~4.4:1) and not-allowed, but the same box as other rows.
+                    className={cn("h-7 min-w-0 flex-1 truncate text-left text-xs", linkNote && "cursor-not-allowed italic text-fg-muted")}
+                  >
+                    {script.name}
+                    {linkNote && <span className="sr-only"> ({linkNote}, can only be deleted)</span>}
+                  </button>
+                );
                 return (
                   <li
                     key={script.name}
@@ -220,7 +252,14 @@ export function FilesPanel(props: FilesPanelProps) {
                     )}
                   >
                     {active && <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />}
-                    <FileCode2 className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
+                    {/* Link rows: a link icon says what they are (same size and slot, so names stay aligned). */}
+                    {script.outside ? (
+                      <Link2 aria-hidden className="size-3.5 shrink-0 text-fg-subtle" />
+                    ) : script.broken ? (
+                      <Unlink aria-hidden className="size-3.5 shrink-0 text-warning/80" />
+                    ) : (
+                      <FileCode2 className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
+                    )}
                     {renaming === script.name ? (
                       <RenameInput
                         initial={script.name}
@@ -237,33 +276,13 @@ export function FilesPanel(props: FilesPanelProps) {
                       />
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          data-roving-item
-                          data-name={script.name}
-                          tabIndex={tabIndex}
-                          aria-current={active ? "true" : undefined}
-                          onClick={() => {
-                            if (!linkNote) props.onOpen(script.name);
-                          }}
-                          onDoubleClick={() => {
-                            if (!linkNote) startRename(script.name);
-                          }}
-                          aria-disabled={linkNote ? "true" : undefined}
-                          onKeyDown={(event) => {
-                            if (event.key === "F2" && !linkNote) startRename(script.name);
-                            else if (event.key === "Delete") props.onDelete(script.name);
-                            else return;
-                            event.preventDefault();
-                          }}
-                          aria-keyshortcuts="F2 Delete ArrowRight"
-                          aria-describedby="script-row-keys"
-                          title={linkNote ? `${script.name} · ${linkNote} (can only be deleted)` : `${script.name} · ${formatBytes(script.size)}`}
-                          className={cn("h-7 min-w-0 flex-1 truncate text-left text-xs", linkNote && "italic text-fg-subtle")}
-                        >
-                          {script.name}
-                          {linkNote && <span className="sr-only"> ({linkNote}, can only be deleted)</span>}
-                        </button>
+                        {linkNote ? (
+                          <Tooltip content={`${linkNote[0].toUpperCase()}${linkNote.slice(1)}: it can't be opened, only deleted.`} side="right">
+                            {nameButton}
+                          </Tooltip>
+                        ) : (
+                          nameButton
+                        )}
                         {dirtyFiles.includes(script.name) && (
                           <span className="size-1.5 shrink-0 rounded-full bg-fg-muted group-hover:hidden" aria-label="Unsaved changes" />
                         )}
@@ -324,9 +343,9 @@ export function FilesPanel(props: FilesPanelProps) {
                 const active = item.path === previewPath;
                 const tabIndex = item.path === mediaRoving.focusKey ? 0 : -1;
                 const Icon = item.type === "image" ? ImageIcon : Film;
-                const meta = [item.quality, item.script && `${item.script}.py`, formatRelativeTime(item.modified)]
-                  .filter(Boolean)
-                  .join(" · ");
+                // "720p30 · just now" stays together; the script name follows, or wraps to its own line.
+                const when = [item.quality, formatRelativeTime(item.modified)].filter(Boolean).join(" · ");
+                const script = item.script ? `${item.script}.py` : null;
                 return (
                   <li
                     key={item.path}
@@ -355,9 +374,20 @@ export function FilesPanel(props: FilesPanelProps) {
                     >
                       <Icon className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
                       <span className="min-w-0">
-                        <span className={cn("block truncate text-xs text-fg", active && "font-medium")}>{item.scene}</span>
-                        {/* 12px fg-muted: >= 6.5:1 on every row background (fg-subtle 11px was 4.1:1 on the selected row). */}
-                        <span className="block truncate text-xs text-fg-muted">{meta}</span>
+                        {/* Wraps at camelCase / "_" steps instead of "CircleToSqu…" in a narrow sidebar. */}
+                        <span className={cn("code-wrap block text-xs text-fg", active && "font-medium")}>
+                          <FileNameText name={item.scene} />
+                        </span>
+                        {/* 12px fg-muted: >= 6.5:1 on every row background (fg-subtle 11px was 4.1:1 on the selected row).
+                            The script name wraps under the quality instead of being cut ("720p30 · qa_…"). */}
+                        <span className="flex flex-wrap gap-x-2 text-xs text-fg-muted">
+                          <span className="whitespace-nowrap">{when}</span>
+                          {script && (
+                            <span className="code-wrap min-w-0">
+                              <FileNameText name={script} />
+                            </span>
+                          )}
+                        </span>
                       </span>
                     </button>
                     <RowActions>

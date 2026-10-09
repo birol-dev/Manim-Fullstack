@@ -67,7 +67,8 @@ describe("TimelineView", () => {
     expect(screen.getByLabelText("Repeats 3 times")).toHaveTextContent("×3");
     // Line breaks are offered between tokens via <wbr>, never inside "title".
     const label = screen.getByText((_, element) => element?.textContent === "Write(title), Create(circle)" && element.tagName === "SPAN");
-    expect(label.querySelectorAll("wbr").length).toBe(3);
+    // Round 4: short comma-free calls stay whole, so the only break is after ", ".
+    expect(label.querySelectorAll("wbr").length).toBe(1);
     expect(label).toHaveClass("code-wrap");
   });
 });
@@ -79,13 +80,15 @@ describe("ActivityBar", () => {
         <ActivityBar view="templates" open onSelect={() => {}} />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("accent-templates")).not.toHaveClass("opacity-80");
+    // Round 4: the collapsed accent is 3 px and full strength (it was a faint 2 px bar at 80%).
+    expect(screen.getByTestId("accent-templates")).toHaveClass("w-0.5");
     rerender(
       <TooltipProvider>
         <ActivityBar view="templates" open={false} onSelect={() => {}} />
       </TooltipProvider>,
     );
-    expect(screen.getByTestId("accent-templates")).toHaveClass("opacity-80");
+    expect(screen.getByTestId("accent-templates")).toHaveClass("w-[3px]");
+    expect(screen.getByTestId("accent-templates")).not.toHaveClass("opacity-80");
     expect(screen.getByRole("button", { name: "Templates" })).toHaveAttribute("aria-pressed", "false");
   });
 });

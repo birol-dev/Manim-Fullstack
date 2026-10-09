@@ -10,6 +10,31 @@ function describeToken(token: string): string {
   return `'${bare}'`;
 }
 
+/** True when every unescaped "{" in *formula* has its "}". */
+function bracesBalanced(formula: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < formula.length; index += 1) {
+    const char = formula[index];
+    if (char === "\\") index += 1;
+    else if (char === "{") depth += 1;
+    else if (char === "}") depth -= 1;
+  }
+  return depth === 0;
+}
+
+const TWO_ARGUMENTS = new Set(["\\frac", "\\dfrac", "\\tfrac", "\\cfrac", "\\binom", "\\dbinom", "\\tbinom", "\\overset", "\\underset", "\\stackrel"]);
+
+/** Hint for a formula that ends while its last command still wants an argument. */
+function missingArgument(formula: string): string {
+  const commands = formula.match(/\\[A-Za-z]+/g) ?? [];
+  const command = commands[commands.length - 1];
+  if (!command) return "The formula ends while a command still needs an argument in braces.";
+  if (TWO_ARGUMENTS.has(command)) {
+    return clip(`${command} needs two arguments in braces, e.g. ${command}{a}{b}: one is missing.`);
+  }
+  return clip(`${command} is missing an argument in braces, e.g. ${command}{x}.`);
+}
+
 /**
  * Turn a KaTeX ParseError message into a short, readable hint.
  *
@@ -35,6 +60,10 @@ export function friendlyKatex(message: string): string {
   }
   if (/Unexpected end of input/i.test(cleaned)) {
     const want = cleaned.match(/expected ('[^']*'|"[^"]*")/i);
+    // KaTeX says "expected '}'" both for an unclosed { and for a command missing an argument
+    // (\frac{a} has balanced braces: it lacks the denominator). Tell them apart from the formula.
+    const formula = message.match(/at end of input:\s?([\s\S]*)$/i)?.[1];
+    if (want && want[1].slice(1, -1) === "}" && formula !== undefined && bracesBalanced(formula)) return missingArgument(formula);
     if (want && want[1].slice(1, -1) === "}") return MISSING_BRACE;
     return clip(`The formula ends too early${want ? `: expected ${describeToken(want[1])}` : ""}. Check for a missing brace or argument.`);
   }

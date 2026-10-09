@@ -18,10 +18,10 @@ interface SystemPanelProps {
 
 const PROFILE_LABELS: Record<string, string> = { eco: "Eco", balanced: "Balanced", workstation: "Workstation" };
 
-/** Label + value. Long values (CPU / GPU model, platform) truncate; the full text is in a tooltip and title. */
+/** Label + value. Long values (CPU / GPU model, platform) wrap onto more lines (they were cut at 1024x640); the tooltip stays. */
 function Row({ label, value, full }: { label: string; value: string; full?: boolean }) {
   const text = (
-    <span className="min-w-0 truncate text-right text-fg" title={full ? value : undefined}>
+    <span className="min-w-0 text-right text-fg [overflow-wrap:anywhere]" title={full ? value : undefined}>
       {value}
     </span>
   );
