@@ -82,11 +82,41 @@ function RenameInput({
   );
 }
 
+/**
+ * One Tab stop per list (roving tabindex): Tab reaches the current row and its
+ * actions, and the arrow keys, Home, and End move between rows.
+ */
+function useRovingList(keys: string[], preferred: string | null) {
+  const [current, setCurrent] = useState<string | null>(null);
+  const focusKey = [current, preferred, keys[0]].find((key) => key != null && keys.includes(key)) ?? null;
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const target = event.target as HTMLElement;
+    if (target.tagName === "INPUT") return;
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-roving-item]"));
+    if (items.length === 0) return;
+    const row = target.closest("li")?.querySelector<HTMLElement>("[data-roving-item]");
+    const index = row ? items.indexOf(row) : -1;
+    const next =
+      event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : event.key === "ArrowDown" ? index + 1 : index - 1;
+    event.preventDefault();
+    items[Math.max(0, Math.min(items.length - 1, next))].focus();
+  };
+
+  return { focusKey, setCurrent, onKeyDown };
+}
+
 export function FilesPanel(props: FilesPanelProps) {
   const { files, storageMode, activeFile, dirtyFiles, previewPath } = props;
   const [renaming, setRenaming] = useState<string | null>(null);
   const scriptNames = files.scripts.map((script) => script.name);
   const videos = files.media.filter((item) => item.type === "video");
+  const scriptRoving = useRovingList(scriptNames, activeFile);
+  const mediaRoving = useRovingList(
+    files.media.map((item) => item.path),
+    previewPath,
+  );
 
   return (
     <SidebarPanel
@@ -115,12 +145,14 @@ export function FilesPanel(props: FilesPanelProps) {
           {props.filesError ? (
             <EmptyState title="Couldn't load scripts" description="The server isn't reachable. Retrying automatically." />
           ) : (
-            <ul className="flex flex-col gap-px">
+            <ul aria-label="Scripts" className="flex flex-col gap-px" onKeyDown={scriptRoving.onKeyDown}>
               {files.scripts.map((script) => {
                 const active = script.name === activeFile;
+                const tabIndex = script.name === scriptRoving.focusKey ? 0 : -1;
                 return (
                   <li
                     key={script.name}
+                    onFocus={() => scriptRoving.setCurrent(script.name)}
                     className={cn(
                       "group relative flex min-h-7 items-center gap-1 rounded-md pl-2 pr-1 transition-colors",
                       active ? "bg-overlay text-fg" : "text-fg-muted hover:bg-raised hover:text-fg",
@@ -142,6 +174,9 @@ export function FilesPanel(props: FilesPanelProps) {
                       <>
                         <button
                           type="button"
+                          data-roving-item
+                          tabIndex={tabIndex}
+                          aria-current={active ? "true" : undefined}
                           onClick={() => props.onOpen(script.name)}
                           onDoubleClick={() => setRenaming(script.name)}
                           title={`${script.name} · ${formatBytes(script.size)}`}
@@ -154,12 +189,24 @@ export function FilesPanel(props: FilesPanelProps) {
                         )}
                         <RowActions>
                           <Tooltip content="Rename">
-                            <Button variant="ghost" size="icon-xs" aria-label={`Rename ${script.name}`} onClick={() => setRenaming(script.name)}>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              tabIndex={tabIndex}
+                              aria-label={`Rename ${script.name}`}
+                              onClick={() => setRenaming(script.name)}
+                            >
                               <Pencil />
                             </Button>
                           </Tooltip>
                           <Tooltip content="Delete">
-                            <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete ${script.name}`} onClick={() => props.onDelete(script.name)}>
+                            <Button
+                              variant="danger-ghost"
+                              size="icon-xs"
+                              tabIndex={tabIndex}
+                              aria-label={`Delete ${script.name}`}
+                              onClick={() => props.onDelete(script.name)}
+                            >
                               <Trash2 />
                             </Button>
                           </Tooltip>
@@ -188,9 +235,10 @@ export function FilesPanel(props: FilesPanelProps) {
           {files.media.length === 0 ? (
             <p className="px-1 text-xs text-fg-subtle">Rendered videos and images show up here.</p>
           ) : (
-            <ul className="flex flex-col gap-px">
+            <ul aria-label="Renders" className="flex flex-col gap-px" onKeyDown={mediaRoving.onKeyDown}>
               {files.media.map((item) => {
                 const active = item.path === previewPath;
+                const tabIndex = item.path === mediaRoving.focusKey ? 0 : -1;
                 const Icon = item.type === "image" ? ImageIcon : Film;
                 const meta = [item.quality, item.script && `${item.script}.py`, formatRelativeTime(item.modified)]
                   .filter(Boolean)
@@ -198,6 +246,7 @@ export function FilesPanel(props: FilesPanelProps) {
                 return (
                   <li
                     key={item.path}
+                    onFocus={() => mediaRoving.setCurrent(item.path)}
                     className={cn(
                       "group relative flex items-center gap-1 rounded-md pl-2 pr-1 transition-colors",
                       active ? "bg-overlay" : "hover:bg-raised",
@@ -206,6 +255,9 @@ export function FilesPanel(props: FilesPanelProps) {
                     {active && <span className="absolute inset-y-2 left-0 w-0.5 rounded-full bg-accent" />}
                     <button
                       type="button"
+                      data-roving-item
+                      tabIndex={tabIndex}
+                      aria-current={active ? "true" : undefined}
                       onClick={() => props.onPreviewMedia(item)}
                       title={`${item.path} · ${formatBytes(item.size)}`}
                       className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
@@ -219,13 +271,19 @@ export function FilesPanel(props: FilesPanelProps) {
                     <RowActions>
                       <Tooltip content="Download">
                         <Button asChild variant="ghost" size="icon-xs">
-                          <a href={apiUrl(item.url)} download={item.name} aria-label={`Download ${item.name}`}>
+                          <a href={apiUrl(item.url)} download={item.name} tabIndex={tabIndex} aria-label={`Download ${item.name}`}>
                             <Download />
                           </a>
                         </Button>
                       </Tooltip>
                       <Tooltip content="Delete">
-                        <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete render ${item.name}`} onClick={() => props.onDeleteMedia(item)}>
+                        <Button
+                          variant="danger-ghost"
+                          size="icon-xs"
+                          tabIndex={tabIndex}
+                          aria-label={`Delete render ${item.name}`}
+                          onClick={() => props.onDeleteMedia(item)}
+                        >
                           <Trash2 />
                         </Button>
                       </Tooltip>
