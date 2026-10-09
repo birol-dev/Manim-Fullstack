@@ -132,7 +132,16 @@ def main() -> None:
 
     print(f"Manim Composer is running at {url}  (Ctrl+C to stop)", flush=True)
     try:
-        uvicorn.run("backend.main:app", host=args.host, port=args.port, reload=False, log_level="warning")
+        from backend.main import ws_max_message_bytes
+
+        uvicorn.run(
+            "backend.main:app",
+            host=args.host,
+            port=args.port,
+            reload=False,
+            log_level="warning",
+            ws_max_size=ws_max_message_bytes(),
+        )
     except KeyboardInterrupt:
         pass
     print("\nManim Composer stopped.", flush=True)
