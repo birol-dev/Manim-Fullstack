@@ -49,4 +49,41 @@ describe("shared filename rule (tests/fixtures/filename_rules.json)", () => {
       expect(toScriptName(once)).toBe(once);
     }
   });
+
+  describe("round 4: Unicode spaces and line separators", () => {
+    const spaces = (rules as { whitespace_chars: string[] }).whitespace_chars.map((code) =>
+      String.fromCodePoint(parseInt(code.slice(2), 16)),
+    );
+
+    it("lists 29 characters, NBSP and U+3000 included", () => {
+      expect(spaces).toHaveLength(29);
+      expect(spaces).toContain("\u00a0");
+      expect(spaces).toContain("\u3000");
+      expect(spaces).toContain("\u2028");
+    });
+
+    it.each(spaces.map((ch) => [`U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`, ch] as const))(
+      "%s counts as a space",
+      (_label, ch) => {
+        expect(validateScriptName(`${ch}x.py`)).not.toBeNull();
+        expect(validateScriptName(`x${ch}.py`)).not.toBeNull();
+        expect(validateScriptName(`x.py${ch}`)).not.toBeNull();
+      },
+    );
+
+    it("rejects U+2028/U+2029 as invisible, like the server", () => {
+      expect(validateScriptName("CON\u2028.x.py")).toBe("Filename cannot contain control or invisible characters.");
+      expect(validateScriptName("a\u2029b.py")).toBe("Filename cannot contain control or invisible characters.");
+    });
+
+    it("still allows a space inside the name", () => {
+      expect(validateScriptName("a\u00a0b.py")).toBeNull();
+      expect(validateScriptName("a\u3000b.py")).toBeNull();
+    });
+
+    it("characters outside the list are not spaces", () => {
+      expect(validateScriptName("x\u200b.py")).toBe("Filename cannot contain control or invisible characters.");
+      expect(validateScriptName("x\ufeff.py")).toBe("Filename cannot contain control or invisible characters.");
+    });
+  });
 });
