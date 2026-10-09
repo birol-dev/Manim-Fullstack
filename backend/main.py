@@ -1467,22 +1467,81 @@ else:
         return read_status()
 
 
+# Same wording as run.py (tests/test_cli_r3.py keeps the two in sync).
+LAN_WARNING = (
+    "\n[warn] This process runs the Python you send it, with no login.\n"
+    "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
+    "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n"
+)
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _parse_port(value) -> int:
+    """An integer TCP port 1-65535, or ValueError."""
+    text = str(value).strip()
+    if not text.isdigit() or not text.isascii():
+        raise ValueError(value)
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise ValueError(value)
+    return port
+
+
 def _cli_address(argv=None) -> tuple:
     """Host and port for ``python backend/main.py`` / ``npm run backend``.
 
     ``--host``/``--port`` win, then MANIM_HOST/MANIM_PORT, then 127.0.0.1:8000.
+    A port that isn't an integer 1-65535 exits with status 2 and a one-line error.
     """
     import argparse
 
+    def port_type(value):
+        try:
+            return _parse_port(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{value!r} is not a valid port (use an integer from 1 to 65535)")
+
     parser = argparse.ArgumentParser(description="Run the Manim Composer API (no frontend build).")
     parser.add_argument("--host", default=os.environ.get("MANIM_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("MANIM_PORT", "8000")))
+    parser.add_argument("--port", type=port_type, default=None)
     args = parser.parse_args(argv)
-    return args.host, args.port
+    port = args.port
+    if port is None:
+        raw = os.environ.get("MANIM_PORT", "8000")
+        try:
+            port = _parse_port(raw)
+        except ValueError:
+            parser.error(f"MANIM_PORT={raw!r} is not a valid port (use an integer from 1 to 65535)")
+    return args.host, port
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """Something already accepts connections on *port* (same check as run.py)."""
+    import socket
+
+    probe = {"0.0.0.0": "127.0.0.1", "::": "::1", "": "127.0.0.1"}.get(host, host)
+    try:
+        with socket.create_connection((probe, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _cli_main(argv=None) -> None:
+    host, port = _cli_address(argv)
+    # Checked before uvicorn starts the app: a second copy that can't bind must not
+    # run the startup temp sweep and delete a running server's render files.
+    if _port_in_use(host, port):
+        print(f"\n[error] Port {port} is already in use.", file=sys.stderr)
+        print(f"Stop the other process or pick another port:\n    python backend/main.py --port {port + 1 if port < 65535 else port - 1}\n", file=sys.stderr)
+        sys.exit(1)
+    if host not in LOOPBACK_HOSTS:
+        print(LAN_WARNING, file=sys.stderr, flush=True)
+
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    _host, _port = _cli_address()
-    uvicorn.run(app, host=_host, port=_port)
+    _cli_main()
