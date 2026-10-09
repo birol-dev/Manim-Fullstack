@@ -25,11 +25,17 @@ export function wsUrl(path: string): string {
 
 export class ApiError extends Error {
   readonly status: number;
+  /** The parsed JSON error body, when there was one (e.g. a 412's current_version). */
+  readonly body: unknown;
+  /** The response's ETag header, when there was one. */
+  readonly etag: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, body: unknown = null, etag: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
+    this.etag = etag;
   }
 }
 
@@ -55,6 +61,8 @@ export async function requestJson<T>(path: string, init?: RequestInit): Promise<
     throw new ApiError(
       typeof detail === "string" && detail ? detail : `Request failed (HTTP ${response.status}).`,
       response.status,
+      body,
+      response.headers?.get?.("ETag") ?? null,
     );
   }
   return body as T;

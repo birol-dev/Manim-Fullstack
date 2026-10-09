@@ -10,16 +10,38 @@ import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } 
  * The file changed on disk since this tab loaded it ("changed"), or it was
  * renamed or deleted elsewhere ("missing"). Nothing was written.
  */
+/** current_version from a 412 body, else its ETag (quotes and a weak W/ prefix removed). */
+export function conflictVersion(err: ApiError): string | null {
+  const fromBody = (err.body as { current_version?: unknown } | null)?.current_version;
+  if (typeof fromBody === "string" && fromBody) return fromBody;
+  const tag = err.etag?.replace(/^W\//, "").replace(/^"|"$/g, "");
+  return tag || null;
+}
+
 export class SaveConflictError extends ApiError {
   readonly reason: "changed" | "missing";
   readonly filename: string;
 
-  constructor(message: string, status: number, filename: string) {
+  /** The version on disk now (a 412's current_version / ETag), so Overwrite needs no extra fetch. */
+  readonly currentVersion: string | null;
+
+  constructor(message: string, status: number, filename: string, currentVersion: string | null = null) {
     super(message, status);
     this.name = "SaveConflictError";
     this.reason = status === 404 ? "missing" : "changed";
     this.filename = filename;
+    this.currentVersion = currentVersion;
   }
+}
+
+export interface SaveOptions {
+  /** Write without any version check (Recreate a deleted file). */
+  force?: boolean;
+  /**
+   * Overwrite exactly this version (the one a conflict reported): the save still
+   * conflicts if the file changed yet again in the meantime.
+   */
+  overwriteVersion?: string;
 }
 
 const EMPTY_FILES: WorkspaceFiles = { scripts: [], assets: [], media: [] };
@@ -118,12 +140,23 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   // "mode:file" -> version of the file on disk that the buffer (or draft) is based on.
   const versionsRef = useRef<Record<string, string>>({});
   const savesInFlight = useRef(0);
-  // "mode:file" -> a scene name typed with "Other scene…" that the parser can't see.
-  const typedScenesRef = useRef<Record<string, string>>({});
+  // "mode:file" -> a scene name typed with "Other scene…" that the parser can't see (kept across reloads).
+  const typedScenesRef = useRef<Record<string, string>>(readStored<Record<string, string>>(STORAGE_KEYS.typedSceneByFile, {}));
+  // Browser storage: file -> the content this tab's buffer is based on (what it loaded or
+  // last saved). Another tab writing something else in between is a conflict.
+  const browserBaseRef = useRef<Record<string, string>>({});
+  // While a save-conflict dialog is open, notices about outside changes wait.
+  const noticesHeldRef = useRef(false);
 
   useEffect(() => {
     codeRef.current = code;
   }, [code]);
+  // Typing updates the ref at once: Ctrl+S (or another tab's storage event) right after
+  // a keystroke must see that keystroke, not the last committed render.
+  const editCode = useCallback((next: string) => {
+    codeRef.current = next;
+    setCode(next);
+  }, []);
 
   const updateDrafts = useCallback((change: (drafts: Record<string, string>) => Record<string, string>) => {
     draftsRef.current = change(draftsRef.current);
@@ -149,8 +182,11 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     setSelectedSceneState(scene);
     const file = activeFileRef.current;
     if (!file) return;
-    // A name the parser didn't find was typed in: keep it selected while the code changes.
-    if (scene && !parsedRef.current.scenes.includes(scene)) typedScenesRef.current[fileKey(modeRef.current, file)] = scene;
+    // A name the parser didn't find was typed in: keep it selected while the code changes, and after a reload.
+    if (scene && !parsedRef.current.scenes.includes(scene)) {
+      typedScenesRef.current = { ...typedScenesRef.current, [fileKey(modeRef.current, file)]: scene };
+      writeStored(STORAGE_KEYS.typedSceneByFile, typedScenesRef.current);
+    }
     const memory = readStored<Record<string, string>>(STORAGE_KEYS.sceneByFile, {});
     writeStored(STORAGE_KEYS.sceneByFile, { ...memory, [fileKey(modeRef.current, file)]: scene });
   }, []);
@@ -206,7 +242,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     async (name: string): Promise<boolean> => {
       const seq = ++loadSeq.current;
       if (modeRef.current === "browser") {
-        showBuffer(name, loadBrowserFiles()[name] ?? "");
+        const stored = loadBrowserFiles()[name] ?? "";
+        // A restored draft stays based on what it was edited from.
+        if (!(fileKey("browser", name) in draftsRef.current && name in browserBaseRef.current)) browserBaseRef.current[name] = stored;
+        showBuffer(name, stored);
         parsedCodeRef.current = null; // parsed by the debounced effect
         return true;
       }
@@ -286,7 +325,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
    * a SaveConflictError when the file changed or disappeared on disk. *force*
    * writes anyway (the user chose "Overwrite" or "Recreate").
    */
-  const save = useCallback(async (options?: { force?: boolean }): Promise<ParseResult> => {
+  const save = useCallback(async (options?: SaveOptions): Promise<ParseResult> => {
     const name = activeFileRef.current;
     if (!name) throw new Error("No file is open.");
     const mode = modeRef.current;
@@ -308,8 +347,17 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
 
     if (mode === "browser") {
       const all = loadBrowserFiles();
+      // Same rules as the server's base_version check: another tab saved or removed the file.
+      const base = browserBaseRef.current[name];
+      if (!options?.force && !options?.overwriteVersion && base !== undefined) {
+        if (!(name in all)) throw new SaveConflictError("This file was renamed or deleted in another tab.", 404, name);
+        if (all[name] !== base && all[name] !== content) {
+          throw new SaveConflictError("This file was changed in another tab since you opened it.", 412, name);
+        }
+      }
       all[name] = content;
       if (!saveBrowserFiles(all)) throw new Error("Browser storage is full. Delete some scripts and try again.");
+      browserBaseRef.current[name] = content;
       markSaved();
       setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
       try {
@@ -321,14 +369,14 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     }
 
     const key = fileKey(mode, name);
-    const baseVersion = options?.force ? undefined : versionsRef.current[key];
+    const baseVersion = options?.overwriteVersion ?? (options?.force ? undefined : versionsRef.current[key]);
     let data: SaveResponse;
     savesInFlight.current += 1;
     try {
       data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, base_version: baseVersion });
     } catch (err) {
       if (err instanceof ApiError && (err.status === 412 || (err.status === 404 && baseVersion !== undefined))) {
-        throw new SaveConflictError(err.message, err.status, name);
+        throw new SaveConflictError(err.message, err.status, name, err.status === 412 ? conflictVersion(err) : null);
       }
       throw err;
     } finally {
@@ -350,6 +398,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         if (name in all) throw new Error(`${name} already exists.`);
         all[name] = content;
         if (!saveBrowserFiles(all)) throw new Error("Browser storage is full.");
+        browserBaseRef.current[name] = content;
       } else {
         const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, create_only: true });
         if (data.version) versionsRef.current[fileKey("disk", data.filename)] = data.version;
@@ -371,6 +420,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         all[newName] = all[oldName] ?? "";
         delete all[oldName];
         if (!saveBrowserFiles(all)) throw new Error("Browser storage is full.");
+        if (oldName in browserBaseRef.current) {
+          browserBaseRef.current[newName] = browserBaseRef.current[oldName];
+          delete browserBaseRef.current[oldName];
+        }
       } else {
         await postJson("/api/rename", { old_name: oldName, new_name: newName });
       }
@@ -378,6 +431,18 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (oldKey in versionsRef.current) {
         versionsRef.current[fileKey(modeRef.current, newName)] = versionsRef.current[oldKey];
         delete versionsRef.current[oldKey];
+      }
+      // The scene picked or typed for the file follows it.
+      const newKey = fileKey(modeRef.current, newName);
+      if (oldKey in typedScenesRef.current) {
+        const { [oldKey]: typed, ...rest } = typedScenesRef.current;
+        typedScenesRef.current = { ...rest, [newKey]: typed };
+        writeStored(STORAGE_KEYS.typedSceneByFile, typedScenesRef.current);
+      }
+      const sceneMemory = readStored<Record<string, string>>(STORAGE_KEYS.sceneByFile, {});
+      if (oldKey in sceneMemory) {
+        const { [oldKey]: scene, ...rest } = sceneMemory;
+        writeStored(STORAGE_KEYS.sceneByFile, { ...rest, [newKey]: scene });
       }
       if (oldKey in draftsRef.current) {
         const draft = draftsRef.current[oldKey];
@@ -400,6 +465,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         const all = loadBrowserFiles();
         delete all[name];
         saveBrowserFiles(all);
+        delete browserBaseRef.current[name];
       } else {
         await deleteRequest("/api/scripts", { filename: name });
       }
@@ -421,7 +487,18 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   /** Replace the open buffer with the file on disk ("Reload theirs"); unsaved edits are dropped. */
   const reloadFromDisk = useCallback(async () => {
     const name = activeFileRef.current;
-    if (!name || modeRef.current !== "disk") return;
+    if (!name) return;
+    if (modeRef.current === "browser") {
+      const stored = loadBrowserFiles()[name];
+      if (stored === undefined) return;
+      browserBaseRef.current[name] = stored;
+      codeRef.current = stored;
+      savedCodeRef.current = stored;
+      setCode(stored);
+      setSavedCode(stored);
+      parsedCodeRef.current = null; // parsed by the debounced effect
+      return;
+    }
     const seq = ++loadSeq.current;
     const data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
     if (seq !== loadSeq.current || activeFileRef.current !== name) return;
@@ -440,7 +517,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
    */
   const checkOpenFile = useCallback(async () => {
     const name = activeFileRef.current;
-    if (!name || modeRef.current !== "disk" || savesInFlight.current > 0) return;
+    if (!name || modeRef.current !== "disk" || savesInFlight.current > 0 || noticesHeldRef.current) return;
     const key = fileKey("disk", name);
     const known = versionsRef.current[key];
     const seq = loadSeq.current;
@@ -448,7 +525,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     try {
       data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404 && activeFileRef.current === name) {
+      if (err instanceof ApiError && err.status === 404 && activeFileRef.current === name && !noticesHeldRef.current) {
         toast.warning(`${name} was renamed or deleted elsewhere`, {
           id: "external-change",
           description: "Your text is still here. Saving asks before recreating the file.",
@@ -466,7 +543,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       return;
     }
     const unchanged = !data.version || data.version === known;
-    if (unchanged || seq !== loadSeq.current || activeFileRef.current !== name || savesInFlight.current > 0) return;
+    if (unchanged || seq !== loadSeq.current || activeFileRef.current !== name || savesInFlight.current > 0 || noticesHeldRef.current) return;
     if (data.code === codeRef.current || codeRef.current === savedCodeRef.current) {
       // Same text, or nothing unsaved here: take the file as it is on disk now.
       const reloaded = data.code !== codeRef.current;
@@ -504,6 +581,51 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       document.removeEventListener("visibilitychange", onFocus);
     };
   }, [mode, checkOpenFile]);
+
+  // Browser storage: another tab saved, renamed, or deleted scripts (the "storage" event
+  // only fires in the other tabs). Same handling as a file changed on disk.
+  useEffect(() => {
+    if (mode !== "browser") return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEYS.browserFiles && event.key !== null) return;
+      setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
+      const name = activeFileRef.current;
+      if (!name || noticesHeldRef.current || modeRef.current !== "browser") return;
+      const stored = loadBrowserFiles()[name];
+      const base = browserBaseRef.current[name];
+      if (stored === base) return;
+      if (stored === undefined) {
+        toast.warning(`${name} was renamed or deleted in another tab`, {
+          id: "external-change",
+          description: "Your text is still here. Saving asks before recreating the file.",
+        });
+        return;
+      }
+      if (stored === codeRef.current || codeRef.current === savedCodeRef.current) {
+        const reloaded = stored !== codeRef.current;
+        browserBaseRef.current[name] = stored;
+        codeRef.current = stored;
+        savedCodeRef.current = stored;
+        setCode(stored);
+        setSavedCode(stored);
+        parsedCodeRef.current = null;
+        if (reloaded) toast.info(`Reloaded ${name}`, { id: "external-change", description: "It was changed in another tab." });
+        return;
+      }
+      toast.warning(`${name} changed in another tab`, {
+        id: "external-change",
+        description: "You have unsaved edits here. Saving will ask which version to keep.",
+        action: { label: "Reload theirs", onClick: () => void reloadFromDisk() },
+      });
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [mode, reloadFromDisk]);
+
+  /** Hold (true) or release notices about outside changes, e.g. while a save-conflict dialog is open. */
+  const holdExternalNotices = useCallback((hold: boolean) => {
+    noticesHeldRef.current = hold;
+  }, []);
 
   const uploadAsset = useCallback(
     async (file: File, options?: { overwrite?: boolean }) => {
@@ -551,7 +673,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     filesStatus,
     activeFile,
     code,
-    setCode,
+    setCode: editCode,
     isDirty,
     dirtyFiles,
     hasUnsavedWork: isDirty || Object.keys(drafts).length > 0,
@@ -569,6 +691,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     parseNow,
     save,
     reloadFromDisk,
+    holdExternalNotices,
     createFile,
     renameFile,
     deleteFile,

@@ -4,7 +4,7 @@
  * editor worker are needed.
  */
 import { loader } from "@monaco-editor/react";
-import { monaco } from "./monacoCore";
+import { monaco, TabFocus } from "./monacoCore";
 import EditorWorker from "./monaco.worker?worker";
 
 self.MonacoEnvironment = {
@@ -68,4 +68,4 @@ if (typeof document !== "undefined" && document.fonts) {
   void document.fonts.ready.then(() => monaco.editor.remeasureFonts());
 }
 
-export { monaco };
+export { monaco, TabFocus };

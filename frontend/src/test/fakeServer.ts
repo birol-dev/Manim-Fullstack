@@ -98,10 +98,11 @@ export function versionOf(code: string): string {
   return (hash >>> 0).toString(16);
 }
 
-function response(status: number, body: unknown) {
+function response(status: number, body: unknown, headers: Record<string, string> = {}) {
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(headers),
     json: async () => body,
     blob: async () => new Blob(["video-bytes"], { type: "video/mp4" }),
   } as unknown as Response;
@@ -182,7 +183,9 @@ export function installFakeServer(overrides: Partial<Pick<FakeServer, "scripts" 
         if (base !== undefined) {
           if (!(name in server.scripts)) return response(404, { detail: "This file was renamed or deleted outside this tab." });
           if (versionOf(server.scripts[name]) !== base) {
-            return response(412, { detail: "This file was changed outside this tab since you opened it." });
+            // Like the server since #15: the version on disk now, in the body and as an ETag.
+            const current = versionOf(server.scripts[name]);
+            return response(412, { detail: "This file was changed outside this tab since you opened it.", current_version: current }, { ETag: `"${current}"` });
           }
         }
         server.scripts[name] = json!.code;

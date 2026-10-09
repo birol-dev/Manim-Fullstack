@@ -14,6 +14,8 @@ export const STORAGE_KEYS = {
   sidebarView: "mc.sidebarView",
   activeFile: "mc.activeFile",
   sceneByFile: "mc.sceneByFile",
+  /** "mode:file" -> scene name typed with "Other scene…" (the parser can't see it). */
+  typedSceneByFile: "mc.typedSceneByFile",
   browserFiles: "mc.browserFiles",
 } as const;
 
