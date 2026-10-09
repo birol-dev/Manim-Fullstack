@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ApiError, deleteRequest, postJson, requestJson } from "@/lib/api";
-import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, MAX_CODE_BYTES } from "@/lib/constants";
+import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMaxCodeBytes } from "@/lib/constants";
 import { loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "@/lib/storage";
 import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } from "@/lib/types";
 
@@ -24,8 +24,9 @@ function asParseResult(data: ServerParse | null | undefined): ParseResult {
 }
 
 function assertCodeSize(code: string) {
-  if (new TextEncoder().encode(code).length > MAX_CODE_BYTES) {
-    throw new ApiError("This script is larger than 2 MB, so it can't be saved or rendered.", 413);
+  const limit = getMaxCodeBytes();
+  if (new TextEncoder().encode(code).length > limit) {
+    throw new ApiError(`This script is larger than ${formatByteLimit(limit)}, so it can't be saved or rendered.`, 413);
   }
 }
 const PARSE_DEBOUNCE_MS = 400;

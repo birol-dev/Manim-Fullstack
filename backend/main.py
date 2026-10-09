@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -19,8 +20,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
 from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
-from scene_parser import get_scene_animations, get_scenes_from_code, get_syntax_error
-from workspace_paths import UnsafePathError, safe_basename, safe_join
+from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
+from workspace_paths import (
+    UnsafePathError,
+    find_case_insensitive_match,
+    safe_basename,
+    safe_join,
+    validate_new_filename,
+)
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -50,6 +57,17 @@ MEDIA_SUBDIRS = ("videos", "images")
 
 # Max size for code sent to /api/save, /api/parse-code, and the render socket.
 MAX_CODE_BYTES = int(os.environ.get("MANIM_MAX_CODE_BYTES", str(2 * 1024 * 1024)))
+# Raw request / WebSocket message cap. The code limit above is checked on the decoded
+# code itself; JSON escaping can grow it up to 6x (control chars become \u00XX).
+MAX_REQUEST_BODY_BYTES = int(
+    os.environ.get("MANIM_MAX_REQUEST_BYTES", str(6 * MAX_CODE_BYTES + 64 * 1024))
+)
+
+
+def _body_too_large() -> str:
+    return f"Request body exceeds maximum size ({MAX_REQUEST_BODY_BYTES} bytes)."
+
+
 ALLOWED_QUALITIES = frozenset({"l", "m", "h", "k"})
 
 ALLOWED_ASSET_EXTENSIONS = {
@@ -69,6 +87,10 @@ ALLOWED_ASSET_EXTENSIONS = {
 MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
 DEFAULT_SCRIPT_NAME = "example.py"
+# Written once the starter script has been offered, so deleting example.py sticks.
+SEED_MARKER_NAME = ".composer-initialized"
+# A download-only render that nobody fetched is removed after this many seconds.
+TEMP_DOWNLOAD_TTL_SECONDS = int(os.environ.get("MANIM_TEMP_DOWNLOAD_TTL", "3600"))
 DEFAULT_SCRIPT = '''from manim import *
 
 
@@ -170,7 +192,8 @@ async def reject_untrusted_requests(request: Request, call_next):
 class LimitCodeBodyMiddleware:
     """Reject oversized script uploads from Content-Length, before the body is parsed.
 
-    The JSON envelope around the code is allowed a few extra kilobytes.
+    The code itself is checked against MANIM_MAX_CODE_BYTES by the endpoint; this is
+    only a raw-size backstop (MAX_REQUEST_BODY_BYTES) sized for JSON escaping.
     """
 
     PATHS = {"/api/save", "/api/parse-code"}
@@ -182,7 +205,7 @@ class LimitCodeBodyMiddleware:
         if scope["type"] != "http" or scope.get("path") not in self.PATHS or scope.get("method") not in {"POST", "PUT", "PATCH"}:
             await self.app(scope, receive, send)
             return
-        limit = MAX_CODE_BYTES + 8192
+        limit = MAX_REQUEST_BODY_BYTES
         headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers", [])}
         declared = headers.get("content-length")
         if declared is not None:
@@ -192,7 +215,7 @@ class LimitCodeBodyMiddleware:
                 too_big = True
             if too_big:
                 response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    {"detail": _body_too_large()},
                     status_code=413,
                 )
                 await response(scope, receive, send)
@@ -210,7 +233,7 @@ class LimitCodeBodyMiddleware:
             total += len(message.get("body", b""))
             if total > limit:
                 response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    {"detail": _body_too_large()},
                     status_code=413,
                 )
                 await response(scope, receive, send)
@@ -319,12 +342,29 @@ def _render_block_reason(code: str, scene_name: str) -> Optional[str]:
     error = get_syntax_error(code)
     if error:
         return f"Syntax error on line {error['line']}: {error['message']}"
+    # Only reject what the AST can prove. Anything else (aliased or factory-made
+    # bases, Slide, classes under if/try) goes to Manim, and a run that writes
+    # nothing is still reported as failed afterwards.
     scenes = get_scenes_from_code(code)
-    if not scenes:
+    if scene_name in scenes:
+        return None
+    info = get_render_names(code)
+    if not info["has_class"] and not info["open_namespace"]:
         return "No Scene class found. Add one, for example: class Intro(Scene):"
-    if scene_name not in scenes:
-        return f"Scene '{scene_name}' is not in this file. Found: {', '.join(scenes)}."
-    return None
+    if scene_name in info["names"] or info["open_namespace"]:
+        return None
+    found = ", ".join(scenes) if scenes else "no Scene classes"
+    return f"Scene '{scene_name}' is not in this file. Found: {found}."
+
+
+def _render_scene_warning(code: str, scene_name: str) -> Optional[str]:
+    """A note for scenes the AST could not confirm; the render still runs."""
+    if get_syntax_error(code) or scene_name in get_scenes_from_code(code):
+        return None
+    return (
+        f"Couldn't confirm that '{scene_name}' is a Scene subclass from the code alone; "
+        "letting Manim decide."
+    )
 
 
 def _ensure_code_within_limit(code: str) -> None:
@@ -360,6 +400,7 @@ def get_diagnostics():
     """
     profile = get_cached_profile()
     profile["dependencies"] = get_binary_paths()
+    profile["max_code_bytes"] = MAX_CODE_BYTES
     return profile
 
 
@@ -449,21 +490,52 @@ def _list_media() -> list:
 @app.get("/api/files")
 def get_files():
     """List workspace scripts, uploaded assets, and rendered media (newest first)."""
-    scripts = _list_scripts()
-    if not scripts:
-        # Never leave the editor empty: seed the workspace with a starter script.
-        with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
-            f.write(DEFAULT_SCRIPT)
-        scripts = _list_scripts()
-    return {"scripts": scripts, "assets": _list_assets(), "media": _list_media()}
+    _seed_starter_script_once()
+    _sweep_stale_temp_downloads()
+    return {"scripts": _list_scripts(), "assets": _list_assets(), "media": _list_media()}
 
 
-def _script_path(filename: str) -> tuple:
+def _seed_starter_script_once() -> None:
+    """Write example.py into an empty workspace on first setup only, not after a delete."""
+    marker = os.path.join(WORKSPACE_DIR, SEED_MARKER_NAME)
+    if os.path.exists(marker):
+        return
     try:
-        name = safe_basename(filename, required_suffix=".py")
+        if not _list_scripts():
+            with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
+                f.write(DEFAULT_SCRIPT)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("The starter script has been created; delete this file to get it back.\n")
+    except OSError:
+        pass
+
+
+def _script_path(filename: str, *, new: bool = False) -> tuple:
+    """Validate a script name. ``new=True`` applies the rules for names being created."""
+    try:
+        if new:
+            name = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+        else:
+            name = safe_basename(filename, required_suffix=".py")
         return name, safe_join(WORKSPACE_DIR, name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid script filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid script filename: {exc}")
+
+
+def _reject_case_collision(directory: str, name: str) -> None:
+    """409 when another file differs from *name* only by letter case."""
+    clash = find_case_insensitive_match(directory, name)
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{clash}' already exists. File names that differ only by case are not allowed.",
+        )
+
+
+def _os_error_detail(exc: OSError, action: str) -> str:
+    """A 500 message without the host path that ``str(OSError)`` would include."""
+    reason = exc.strerror or exc.__class__.__name__
+    return f"Could not {action}: {reason}."
 
 
 @app.get("/api/file-content")
@@ -475,8 +547,8 @@ def get_file_content(filename: str):
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
     return {"filename": filename, "code": content, **_parsed(content)}
 
 
@@ -501,12 +573,13 @@ def save_file(req: SaveRequest):
     """Write a script and return its parsed scenes."""
     _ensure_code_within_limit(req.code)
     filename = req.filename if req.filename.endswith(".py") else f"{req.filename}.py"
-    filename, filepath = _script_path(filename)
+    filename, filepath = _script_path(filename, new=True)
+    _reject_case_collision(WORKSPACE_DIR, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(req.code)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "save the script"))
     return {"success": True, "filename": filename, "message": "File saved.", **_parsed(req.code)}
 
 
@@ -518,13 +591,8 @@ class RenameRequest(BaseModel):
 @app.post("/api/rename")
 def rename_file(req: RenameRequest):
     """Rename a workspace script."""
-    try:
-        old_name = safe_basename(req.old_name, required_suffix=".py")
-        new_name = safe_basename(req.new_name, required_suffix=".py")
-        old_path = safe_join(WORKSPACE_DIR, old_name)
-        new_path = safe_join(WORKSPACE_DIR, new_name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Only python (.py) scripts in the workspace can be renamed.")
+    old_name, old_path = _script_path(req.old_name)
+    new_name, new_path = _script_path(req.new_name, new=True)
 
     if not os.path.exists(old_path):
         raise HTTPException(status_code=404, detail="Source file not found.")
@@ -532,6 +600,9 @@ def rename_file(req: RenameRequest):
     is_case_only = os.path.normcase(old_path) == os.path.normcase(new_path)
     if os.path.exists(new_path) and not is_case_only:
         raise HTTPException(status_code=400, detail="A file with the target name already exists.")
+    clash = find_case_insensitive_match(WORKSPACE_DIR, new_name)
+    if clash and clash != old_name:
+        _reject_case_collision(WORKSPACE_DIR, new_name)
 
     try:
         if is_case_only and old_name != new_name:
@@ -541,8 +612,8 @@ def rename_file(req: RenameRequest):
             os.rename(temp_path, new_path)
         else:
             os.rename(old_path, new_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "rename the script"))
 
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
@@ -556,7 +627,7 @@ def delete_script(filename: str):
     try:
         os.remove(filepath)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the script"))
     return {"success": True, "filename": filename}
 
 
@@ -569,10 +640,10 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
     so a rejected upload cannot delete the file it was replacing.
     """
     try:
-        filename = safe_basename(file.filename)
+        filename = validate_new_filename(file.filename)
         dest_path = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Uploaded file must include a valid filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
 
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_ASSET_EXTENSIONS:
@@ -581,10 +652,15 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
             detail=f"Unsupported asset type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_ASSET_EXTENSIONS))}",
         )
 
-    if os.path.exists(dest_path) and not overwrite:
+    _reject_case_collision(ASSETS_DIR, filename)
+    existed = os.path.exists(dest_path)
+    if existed and not overwrite:
         raise HTTPException(
             status_code=409,
-            detail=f"An asset named '{filename}' already exists. Upload again to replace it.",
+            detail=(
+                f"An asset named '{filename}' already exists. "
+                "Confirm to replace it (send the upload again with overwrite=true)."
+            ),
         )
 
     partial_path = f"{dest_path}.uploading-{uuid.uuid4().hex}"
@@ -610,11 +686,14 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
         os.replace(partial_path, dest_path)
     except HTTPException:
         raise
-    except Exception as e:
+    except OSError as e:
         discard_partial()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "store the upload"))
+    except Exception:
+        discard_partial()
+        raise HTTPException(status_code=500, detail="Could not store the upload.")
 
-    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": overwrite}
+    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": existed}
 
 
 @app.delete("/api/assets")
@@ -623,14 +702,14 @@ def delete_asset(filename: str):
     try:
         filename = safe_basename(filename)
         filepath = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid asset filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Asset not found.")
     try:
         os.remove(filepath)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the asset"))
     return {"success": True, "filename": filename}
 
 
@@ -695,6 +774,9 @@ def delete_media(path: str):
     """Delete a rendered video or image (path relative to workspace/media)."""
     rel_path = _media_request_path(path)
     top = rel_path.split("/", 1)[0]
+    if ".." in rel_path.split("/"):
+        # Check the folder after resolving, not before: videos/../texts/x.png must not pass.
+        raise HTTPException(status_code=400, detail="Invalid media path.")
     if top not in MEDIA_SUBDIRS or not rel_path.lower().endswith(OUTPUT_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only rendered videos and images can be deleted.")
     try:
@@ -707,7 +789,7 @@ def delete_media(path: str):
     try:
         os.remove(abs_path)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the render"))
 
     parent = os.path.dirname(abs_path)
     if top == "videos":
@@ -877,6 +959,45 @@ def _relocate_temp_output(abs_path: str, temp_stem: str, target_stem: str) -> Op
         return None
 
 
+# Temp stems of renders still running; the stale-download sweep never touches these.
+_active_temp_stems: set = set()
+
+
+def _newest_mtime(path: str) -> float:
+    newest = os.path.getmtime(path)
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+            except OSError:
+                pass
+    return newest
+
+
+def _sweep_stale_temp_downloads(ttl: Optional[float] = None) -> None:
+    """Remove download-only outputs whose one-time link was never fetched.
+
+    Only ``media/*/_temp_run_*`` directories untouched for *ttl* seconds are removed,
+    and never one that belongs to a render that is still running.
+    """
+    ttl = TEMP_DOWNLOAD_TTL_SECONDS if ttl is None else ttl
+    cutoff = time.time() - ttl
+    for sub in MEDIA_SUBDIRS:
+        root = os.path.join(MEDIA_DIR, sub)
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(TEMP_PREFIX) or entry.name in _active_temp_stems:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False) and _newest_mtime(entry.path) < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                pass
+
+
 def _remove_temp_media(temp_stem: str) -> None:
     for sub in MEDIA_SUBDIRS:
         shutil.rmtree(os.path.join(MEDIA_DIR, sub, temp_stem), ignore_errors=True)
@@ -910,9 +1031,9 @@ def _validate_start_message(message: dict) -> dict:
     if not isinstance(quality, str) or quality not in ALLOWED_QUALITIES:
         raise _RenderRequestError("Quality must be one of: l, m, h, k.")
     try:
-        filename = safe_basename(filename, required_suffix=".py")
-    except UnsafePathError:
-        raise _RenderRequestError("Invalid script filename.")
+        filename = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+    except UnsafePathError as exc:
+        raise _RenderRequestError(f"Invalid script filename: {exc}")
     if code_content is not None:
         if not isinstance(code_content, str):
             raise _RenderRequestError("Code payload must be a string.")
@@ -1022,6 +1143,7 @@ async def websocket_render(websocket: WebSocket):
                         code_content = f.read()
                 script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
                 temp_stem = os.path.splitext(script_name)[0]
+                _active_temp_stems.add(temp_stem)
                 relocate = not download_only
                 temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
                 with open(temp_filepath, "w", encoding="utf-8") as f:
@@ -1041,6 +1163,9 @@ async def websocket_render(websocket: WebSocket):
                 await send({"type": "error", "render_id": render_id, "message": blocked})
                 result = {"success": False, "status": "rejected"}
                 return
+            warning = _render_scene_warning(checked, request["scene"])
+            if warning:
+                await send({"type": "info", "render_id": render_id, "message": warning})
 
             phase["value"] = "rendering"
             slots = _render_semaphore()
@@ -1084,6 +1209,7 @@ async def websocket_render(websocket: WebSocket):
                     pass
             if relocate and temp_stem:
                 _remove_temp_media(temp_stem)
+            _active_temp_stems.discard(temp_stem)
             await send(
                 {
                     "type": "result",
@@ -1097,10 +1223,10 @@ async def websocket_render(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            if len(data.encode("utf-8")) > MAX_CODE_BYTES + 8192:
+            if len(data.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
                 await send({
                     "type": "error",
-                    "message": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
+                    "message": _body_too_large(),
                 })
                 continue
             try:
@@ -1163,7 +1289,22 @@ else:
         return read_status()
 
 
+def _cli_address(argv=None) -> tuple:
+    """Host and port for ``python backend/main.py`` / ``npm run backend``.
+
+    ``--host``/``--port`` win, then MANIM_HOST/MANIM_PORT, then 127.0.0.1:8000.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the Manim Composer API (no frontend build).")
+    parser.add_argument("--host", default=os.environ.get("MANIM_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.environ.get("MANIM_PORT", "8000")))
+    args = parser.parse_args(argv)
+    return args.host, args.port
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    _host, _port = _cli_address()
+    uvicorn.run(app, host=_host, port=_port)
