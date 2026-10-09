@@ -104,6 +104,19 @@ function RenderingOverlay({
   );
 }
 
+/** Save *url* under *name* without leaving the page (the hidden link never takes focus). */
+function downloadFile(url: string, name?: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  if (name) link.download = name;
+  else link.setAttribute("download", "");
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 export function PreviewPane(props: PreviewPaneProps) {
   const { preview, active, lastOutcome } = props;
   const failed = lastOutcome && !lastOutcome.success && lastOutcome.status !== "cancelled";
@@ -134,18 +147,20 @@ export function PreviewPane(props: PreviewPaneProps) {
           )}
           {preview && !active && (
             <>
+              {/* Real buttons (not links): Safari and macOS skip links on Tab by default. */}
               <Tooltip content="Open in new tab">
-                <Button asChild variant="ghost" size="icon-sm">
-                  <a href={preview.url} target="_blank" rel="noreferrer" aria-label="Open in new tab">
-                    <ExternalLink />
-                  </a>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Open in new tab"
+                  onClick={() => window.open(preview.url, "_blank", "noopener,noreferrer")}
+                >
+                  <ExternalLink />
                 </Button>
               </Tooltip>
               <Tooltip content="Download">
-                <Button asChild variant="ghost" size="icon-sm">
-                  <a href={preview.url} download={preview.downloadName} aria-label="Download">
-                    <Download />
-                  </a>
+                <Button variant="ghost" size="icon-sm" aria-label="Download" onClick={() => downloadFile(preview.url, preview.downloadName)}>
+                  <Download />
                 </Button>
               </Tooltip>
             </>
@@ -165,6 +180,11 @@ export function PreviewPane(props: PreviewPaneProps) {
               autoPlay
               muted
               playsInline
+              // Fewer unlabeled Tab stops in the native controls: no overflow menu (download,
+              // speed, cast) and no picture-in-picture button. Playback and looping are unchanged.
+              controlsList="nodownload noplaybackrate noremoteplayback"
+              disablePictureInPicture
+              aria-label={`Video preview: ${preview.title}`}
               loop={props.loop && !preview.stale}
               className="max-h-full max-w-full"
             />
@@ -225,7 +245,7 @@ export function PreviewPane(props: PreviewPaneProps) {
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line px-3">
           {preview.stale && <span className="shrink-0 text-2xs font-medium text-warning">Out of date</span>}
           {still && <span className="shrink-0 text-2xs font-medium text-accent">Still image</span>}
-          <span className="truncate font-mono text-2xs text-fg-subtle select-text" title={preview.location}>
+          <span className="truncate font-mono text-xs text-fg-muted select-text" title={preview.location}>
             {preview.location}
           </span>
         </div>

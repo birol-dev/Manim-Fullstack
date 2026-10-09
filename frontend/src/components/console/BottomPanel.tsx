@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Eraser } from "lucide-react";
+import { ChevronDown, ChevronUp, Eraser, FileCode2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -45,6 +45,34 @@ function CountBadge({ count, tone = "neutral" }: { count: number; tone?: "neutra
   );
 }
 
+/**
+ * "Output from X, not the open file", as a chip in the panel header instead of
+ * a full row above the log (that row cost the preview ~30 px at 1024x700).
+ */
+function OtherFileChip({ file, onOpen }: { file: string; onOpen: (name: string) => void }) {
+  return (
+    <div
+      role="note"
+      title={`Output from ${file}, not the open file`}
+      className="flex h-6 min-w-0 items-center gap-1.5 self-center rounded-md border border-line-strong bg-raised pl-1.5 pr-0.5 text-2xs text-fg-muted"
+    >
+      <FileCode2 className="size-3 shrink-0" />
+      <span className="min-w-0 truncate">
+        Output from <span className="font-mono text-fg">{file}</span>
+        <span className="@max-[640px]/bottom:sr-only">, not the open file</span>
+      </span>
+      <button
+        type="button"
+        onClick={() => onOpen(file)}
+        aria-label={`Open ${file}`}
+        className="shrink-0 rounded px-1 font-medium text-accent transition-colors hover:bg-overlay focus-visible:outline-1 focus-visible:outline-accent"
+      >
+        Open
+      </button>
+    </div>
+  );
+}
+
 export function BottomPanel(props: BottomPanelProps) {
   const errorCount = props.logs.filter((entry) => entry.level === "error").length;
 
@@ -52,10 +80,10 @@ export function BottomPanel(props: BottomPanelProps) {
     <Tabs
       value={props.tab}
       onValueChange={(value) => props.onTabChange(value as BottomTab)}
-      className="flex h-full min-h-0 flex-col bg-surface"
+      className="@container/bottom flex h-full min-h-0 flex-col bg-surface"
     >
-      <div className="flex h-9 shrink-0 items-stretch justify-between border-b border-line pl-1 pr-1.5">
-        <TabsList>
+      <div className="flex h-9 shrink-0 items-stretch justify-between gap-2 border-b border-line pl-1 pr-1.5">
+        <TabsList className="shrink-0">
           <TabsTrigger value="console">
             Console <CountBadge count={errorCount} tone="danger" />
           </TabsTrigger>
@@ -64,7 +92,8 @@ export function BottomPanel(props: BottomPanelProps) {
           </TabsTrigger>
         </TabsList>
 
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1">
+          {props.logsFile && props.tab === "console" && <OtherFileChip file={props.logsFile} onOpen={props.onOpenLogsFile} />}
           {props.renderPercent !== null && (
             <div className="mr-2 flex items-center gap-2" aria-label="Render progress">
               <Progress value={props.renderPercent} striped className="w-28" />
@@ -95,8 +124,6 @@ export function BottomPanel(props: BottomPanelProps) {
         <ConsoleView
           logs={props.logs}
           linkFiles={props.linkFiles}
-          otherFile={props.logsFile}
-          onOpenFile={props.onOpenLogsFile}
           onJumpToLine={props.onJumpToLine}
         />
       </TabsContent>

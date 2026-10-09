@@ -16,6 +16,7 @@ import { EXAMPLE_CODE, installFakeServer, media, type FakeServer } from "@/test/
 import { FakeWebSocket } from "@/test/fakeSocket";
 import { validateScriptName } from "@/lib/format";
 import { QUEUED_CANCEL_FALLBACK_MS } from "@/hooks/useRenderSession";
+import { STOPPING_MIN_DISPLAY_MS } from "@/hooks/useMinimumStopping";
 
 type Overrides = Parameters<typeof installFakeServer>[0];
 
@@ -164,15 +165,15 @@ describe("preview follows the open file and job", () => {
     const { user } = await renderApp({ media: [media("Intro")] });
     await waitFor(() => expect(previewVideo()).not.toBeNull());
     const header = () => within(screen.getByRole("region", { name: "Preview" }));
-    expect(header().getByRole("link", { name: "Download" })).toBeInTheDocument();
+    expect(header().getByRole("button", { name: "Download" })).toBeInTheDocument();
 
     const { socket, id } = await startRender(user);
     expect(header().getByText("Intro · rendering")).toBeInTheDocument();
-    expect(header().queryByRole("link", { name: "Download" })).not.toBeInTheDocument();
-    expect(header().queryByRole("link", { name: "Open in new tab" })).not.toBeInTheDocument();
+    expect(header().queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+    expect(header().queryByRole("button", { name: "Open in new tab" })).not.toBeInTheDocument();
 
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
-    await waitFor(() => expect(header().getByRole("link", { name: "Download" })).toBeInTheDocument());
+    await waitFor(() => expect(header().getByRole("button", { name: "Download" })).toBeInTheDocument());
   });
 
   it("falls back to the rendered scene's last good clip after a cancel, not an unrelated one", async () => {
@@ -269,7 +270,8 @@ describe("cancel and queue states", () => {
 
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    // "Leaving the queue…" stays up for at least STOPPING_MIN_DISPLAY_MS (display only), then goes.
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     await expectLogLineOnce("Cancelled before it started.");
     expect(screen.getAllByRole("button", { name: "Render" })[0]).toBeEnabled();
   });
@@ -302,12 +304,14 @@ describe("cancel and queue states", () => {
     act(() => vi.advanceTimersByTime(QUEUED_CANCEL_FALLBACK_MS - 1));
     expect(within(screen.getByRole("status")).getByRole("button", { name: "Stopping…" })).toBeDisabled();
     act(() => vi.advanceTimersByTime(1));
+    // The overlay's minimum "Leaving the queue…" display (r3) runs on the faked clock too.
+    act(() => vi.advanceTimersByTime(STOPPING_MIN_DISPLAY_MS));
     vi.useRealTimers();
     expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
 
     // A late result for it is ignored: no second log line or toast.
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
     await expectLogLineOnce("Cancelled before it started.");
   });
 
@@ -620,12 +624,13 @@ describe("browser verification follow-ups", () => {
     // F: switching files labels the output instead of linking it into the wrong file.
     act(() => socket.emit({ type: "result", render_id: id, success: false, status: "error" }));
     await user.click(screen.getByRole("button", { name: "notes.py" }));
-    expect(await within(log).findByText(/not the open file/)).toBeInTheDocument();
+    // The notice is a chip in the console header (r3), not a row inside the log.
+    expect(await screen.findByText(/not the open file/)).toBeInTheDocument();
     expect(log.querySelector("[data-line-link]")).toBeNull();
     expect(within(log).queryByRole("button", { name: "Go to line 7" })).not.toBeInTheDocument();
 
-    await user.click(within(log).getByRole("button", { name: "Open example.py" }));
+    await user.click(screen.getByRole("button", { name: "Open example.py" }));
     await waitFor(() => expect(log.querySelector("[data-line-link]")).not.toBeNull());
-    expect(within(log).queryByText(/not the open file/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not the open file/)).not.toBeInTheDocument();
   });
 });
