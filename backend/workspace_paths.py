@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unicodedata
 from pathlib import Path
 from typing import Optional
@@ -52,6 +53,51 @@ MAX_FILENAME_STEM_CHARS = 100
 # same prefix would be hidden from the file list and swept at startup.
 TEMP_SCRIPT_PREFIX = "_temp_run_"
 
+SCRIPT_SUFFIX = ".py"
+
+# COM1 / LPT1 written with any Unicode digit (COM¹, LPT², ＣＯＭ１, COM١) after NFKC.
+_DEVICE_WITH_DIGIT = re.compile(r"(?:COM|LPT)\d")
+
+
+def _is_reserved_device_name(name: str, *, nfkc: bool = False) -> bool:
+    """Windows reserves device names with any extension (CON.py, con.tar.py, COM1.mp4).
+
+    With *nfkc* the check runs on the NFKC form, so superscript and fullwidth
+    digits/letters count too (COM¹.py, ＣＯＭ１.py, COM١.py). That stricter form is
+    only applied to new names, so existing files named like that stay reachable.
+    """
+    if nfkc:
+        name = unicodedata.normalize("NFKC", name)
+    base = name.split(".", 1)[0].rstrip(" ").upper()
+    return base in WINDOWS_RESERVED_NAMES or bool(_DEVICE_WITH_DIGIT.fullmatch(base))
+
+
+def fold_filename(name: str) -> str:
+    """Key for "same name" checks: NFC, then lower case. Mirrored by foldFilename() in
+    frontend/src/lib/format.ts, so both sides agree which names collide."""
+    return unicodedata.normalize("NFC", name).lower()
+
+
+def nfc_filename(name: Optional[str]) -> Optional[str]:
+    """*name* in Unicode NFC (None stays None). New names are stored in this form."""
+    return None if name is None else unicodedata.normalize("NFC", str(name))
+
+
+def to_script_name(raw: str) -> str:
+    """The script name the user meant: NFC, with exactly one lowercase ``.py``.
+
+    ``Foo.PY`` -> ``Foo.py``; ``intro`` -> ``intro.py``. Nothing is trimmed, and a
+    name ending with a dot or space ("x.py.", "x.py ") is returned unchanged so that
+    :func:`validate_new_filename` refuses it instead of it turning into "x.py..py".
+    Mirrors toScriptName() in the frontend (which additionally trims what was typed).
+    """
+    name = unicodedata.normalize("NFC", str(raw))
+    if name.endswith((".", " ")):
+        return name
+    if name.lower().endswith(SCRIPT_SUFFIX):
+        return name[: -len(SCRIPT_SUFFIX)] + SCRIPT_SUFFIX
+    return name + SCRIPT_SUFFIX
+
 
 def _has_control_or_format_char(name: str) -> bool:
     """Control characters (newline, tab, DEL, ...) and invisible format characters
@@ -100,8 +146,7 @@ def safe_basename(
     if not stem.strip("."):
         raise UnsafePathError("Filename needs a name before the extension.")
 
-    # Windows reserves device names with any extension (CON.py, con.tar.py, COM1.mp4).
-    if name.split(".", 1)[0].rstrip(" ").upper() in WINDOWS_RESERVED_NAMES:
+    if _is_reserved_device_name(name):
         raise UnsafePathError(f"Filename '{name}' is a reserved device name.")
 
     if required_suffix and not name.endswith(required_suffix):
@@ -119,6 +164,13 @@ def validate_new_filename(
     upload, render). Adds rules that only matter for new names, so files that
     already exist with a legacy name can still be opened, renamed, or deleted."""
     name = safe_basename(filename, required_suffix=required_suffix)
+    if name != unicodedata.normalize("NFC", name):
+        raise UnsafePathError("Filename must use the standard Unicode form (NFC).")
+    if _is_reserved_device_name(name, nfkc=True):
+        raise UnsafePathError(f"Filename '{name}' is a reserved device name.")
+    stem = name[: -len(required_suffix)] if required_suffix else os.path.splitext(name)[0]
+    if stem != stem.rstrip(". "):
+        raise UnsafePathError("Filename cannot end with a dot or space before the extension.")
     if name.startswith("-"):
         raise UnsafePathError("Filename cannot start with a dash.")
     if name.startswith("."):
@@ -129,14 +181,15 @@ def validate_new_filename(
 
 
 def find_case_insensitive_match(directory: str, name: str) -> Optional[str]:
-    """Name of an existing entry in *directory* that equals *name* ignoring case
-    but is spelled differently, or None. Prevents Example.py next to example.py,
-    which collide on Windows and macOS."""
-    folded = name.casefold()
+    """Name of an existing entry in *directory* that equals *name* ignoring case and
+    Unicode normalization (NFC vs NFD) but is spelled differently, or None. Prevents
+    Example.py next to example.py, or two lookalike "café.py" files, which collide on
+    Windows and macOS."""
+    folded = fold_filename(name)
     try:
         with os.scandir(directory) as entries:
             for entry in entries:
-                if entry.name != name and entry.name.casefold() == folded:
+                if entry.name != name and fold_filename(entry.name) == folded:
                     return entry.name
     except OSError:
         return None
