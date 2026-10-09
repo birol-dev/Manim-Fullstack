@@ -168,7 +168,6 @@ async def test_execute_success_and_fallback_render_finder(tmp_path):
     videos_dir = tmp_path / "media" / "videos" / "script"
     videos_dir.mkdir(parents=True)
     render_file = videos_dir / "Scene.mp4"
-    render_file.write_text("mp4", encoding="utf-8")
 
     mock_process = MagicMock()
     mock_process.pid = 1010
@@ -180,7 +179,12 @@ async def test_execute_success_and_fallback_render_finder(tmp_path):
     mock_process.stderr.feed_eof()
     mock_process.wait = AsyncMock(return_value=0)
 
-    with patch("asyncio.create_subprocess_exec", return_value=mock_process):
+    async def spawn(*args, **kwargs):
+        # The render writes its video while it runs, so the fallback may pick it up.
+        render_file.write_text("mp4", encoding="utf-8")
+        return mock_process
+
+    with patch("asyncio.create_subprocess_exec", side_effect=spawn):
         with patch("asyncio.sleep", new_callable=AsyncMock):
             res = await executor.execute(
                 manim_path="/usr/bin/manim",
@@ -489,3 +493,18 @@ async def test_cancel_during_spawn_is_not_lost(tmp_path):
     # Outside a render, cancel() is a no-op and leaves no pending state behind.
     await executor.cancel()
     assert executor._cancel_pending is False
+
+
+@pytest.mark.asyncio
+async def test_redacted_paths_are_relative_and_keep_rich_borders(tmp_path):
+    """The workspace prefix (and its slash) is hidden; a boxed traceback line keeps its width."""
+    executor = ManimExecutor(str(tmp_path))
+    root = os.path.abspath(str(tmp_path))
+    boxed = f"│ {root}/scene.py:6 in construct" + " " * 10 + "│"
+    data = (boxed + "\n" + f"         File ready at '{root}/media/images/scene/Still.png'\n").encode()
+    events = await _read(executor, data, stream_name="stderr")
+    messages = [e["message"] for e in events if e["type"] == "log"]
+    assert messages[0].startswith("│ scene.py:6 in construct")
+    assert len(messages[0]) == len(boxed) and messages[0].endswith("│")
+    assert root not in messages[0] and "/scene.py" not in messages[0]
+    assert any("File ready at 'media/images/scene/Still.png'" in m for m in messages)
