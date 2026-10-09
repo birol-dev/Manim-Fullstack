@@ -37,8 +37,9 @@ function Formula({ math, display = false, className }: { math: string; display?:
   return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** Create the formula and show it, so an insert renders something. */
 function mathTexSnippet(latex: string): string {
-  return `MathTex(${pythonString(latex.trim(), { raw: true })})`;
+  return `tex = MathTex(${pythonString(latex.trim(), { raw: true })})\nself.play(Write(tex))`;
 }
 
 interface LatexPanelProps {

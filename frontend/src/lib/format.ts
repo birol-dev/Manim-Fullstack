@@ -1,25 +1,54 @@
+// Mirrors backend/workspace_paths.py (safe_basename + validate_new_filename) so the
+// New script and rename forms show the server's rule before a round trip.
 const RESERVED_NAMES = new Set([
-  "CON", "PRN", "AUX", "NUL",
-  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+  "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+  ...Array.from({ length: 10 }, (_, index) => `COM${index}`),
+  ...Array.from({ length: 10 }, (_, index) => `LPT${index}`),
 ]);
+const RESERVED_CHARS = '<>:"|?*';
+export const MAX_FILENAME_BYTES = 255;
+export const MAX_FILENAME_STEM_CHARS = 100;
+export const TEMP_SCRIPT_PREFIX = "_temp_run_";
 
 /** "My Scene" -> "My Scene.py"; leaves an existing .py suffix alone. */
+/**
+ * Collapse a doubled extension ("intro.py.py" -> "intro.py"). The name inputs
+ * select only the stem on focus, so pasting "intro.py" over it keeps the old ".py".
+ */
+export function dedupeExtension(input: string): string {
+  return input.replace(/(\.py)(?:\.py)+(\s*)$/i, "$1$2");
+}
+
+/** The file name for *input*: trimmed, with exactly one ".py". Idempotent. */
 export function toScriptName(input: string): string {
-  const name = input.trim();
+  const name = dedupeExtension(input.trim());
   return name.toLowerCase().endsWith(".py") ? name : `${name}.py`;
 }
 
-/** Returns an error message, or null when *name* is a usable script filename. */
+/** Returns an error message, or null when *name* is a usable name for a new script. */
 export function validateScriptName(name: string, existing: readonly string[] = []): string | null {
   const stem = name.replace(/\.py$/i, "");
   if (!stem.trim()) return "Enter a file name.";
-  if (/[<>:"/\\|?*]/.test(name) || [...name].some((char) => char.charCodeAt(0) < 32)) {
-    return 'Names can\'t contain < > : " / \\ | ? or *.';
+  if (name !== name.trim()) return "Filename cannot start or end with a dot or space.";
+  if (/[/\\]/.test(name)) return "Filename cannot contain folders or path separators.";
+  if (/[\p{Cc}\p{Cf}]/u.test(name)) return "Filename cannot contain control or invisible characters.";
+  const bad = [...new Set([...name].filter((char) => RESERVED_CHARS.includes(char)))].sort();
+  if (bad.length) return `Filename cannot contain ${bad.join(" ")}.`;
+  if (new TextEncoder().encode(name).length > MAX_FILENAME_BYTES) return `Filename is too long (max ${MAX_FILENAME_BYTES} bytes).`;
+  if ([...stem].length > MAX_FILENAME_STEM_CHARS) {
+    return `Filename is too long (max ${MAX_FILENAME_STEM_CHARS} characters before the extension).`;
   }
-  if (/^[\s.]|[\s.]$/.test(stem)) return "Names can't start or end with a space or dot.";
-  if (RESERVED_NAMES.has(stem.toUpperCase())) return `"${stem}" is a reserved name on Windows.`;
-  if (existing.some((other) => other.toLowerCase() === name.toLowerCase())) return `${name} already exists.`;
+  if (!stem.replace(/^\.+|\.+$/g, "")) return "Filename needs a name before the extension.";
+  if (RESERVED_NAMES.has(name.split(".")[0].trimEnd().toUpperCase())) return `Filename '${name}' is a reserved device name.`;
+  if (name.startsWith("-")) return "Filename cannot start with a dash.";
+  if (name.startsWith(".")) return "Filename cannot start with a dot.";
+  if (name.toLowerCase().startsWith(TEMP_SCRIPT_PREFIX)) {
+    return `Filenames starting with '${TEMP_SCRIPT_PREFIX}' are reserved for scratch renders.`;
+  }
+  if (existing.includes(name)) return `${name} already exists.`;
+  const folded = name.toLowerCase();
+  const clash = existing.find((other) => other.toLowerCase() === folded);
+  if (clash) return `'${clash}' already exists. File names that differ only by case are not allowed.`;
   return null;
 }
 
@@ -96,14 +125,31 @@ export function assetKind(name: string): AssetKind {
   return "other";
 }
 
-/** Code that uses an uploaded asset from a scene's construct(). */
+const PYTHON_KEYWORDS = new Set(
+  "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "),
+);
+
+/** A Python variable name for an asset, from its file name ("My Logo.svg" -> "my_logo"). */
+export function assetVariable(name: string, fallback: string): string {
+  const stem = name.replace(/\.[^.]*$/, "").toLowerCase();
+  const cleaned = stem.replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!cleaned) return fallback;
+  const identifier = /^\d/.test(cleaned) ? `_${cleaned}` : cleaned;
+  return PYTHON_KEYWORDS.has(identifier) ? `${identifier}_` : identifier;
+}
+
+/** Statements that use an uploaded asset in a scene's construct(). */
 export function assetUsageSnippet(name: string): string {
   const path = pythonString(`assets/${name}`);
   switch (assetKind(name)) {
-    case "vector":
-      return `SVGMobject(${path})`;
-    case "image":
-      return `ImageMobject(${path})`;
+    case "vector": {
+      const variable = assetVariable(name, "graphic");
+      return `${variable} = SVGMobject(${path})\nself.play(FadeIn(${variable}))`;
+    }
+    case "image": {
+      const variable = assetVariable(name, "picture");
+      return `${variable} = ImageMobject(${path})\nself.play(FadeIn(${variable}))`;
+    }
     case "audio":
       return `self.add_sound(${path})`;
     default:

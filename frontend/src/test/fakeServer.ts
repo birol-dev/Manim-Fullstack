@@ -67,6 +67,16 @@ export function parseScenes(code: string): ParseResult {
   return { scenes, animations };
 }
 
+/** Like the backend: a missing ":" after a def is a syntax error. */
+function syntaxErrorOf(code: string) {
+  const index = code.split("\n").findIndex((text) => /^\s*def \w+\(.*\)\s*$/.test(text));
+  return index === -1 ? null : { message: "expected ':'", line: index + 1, column: 1 };
+}
+
+function parsedResponse(code: string) {
+  return { ...parseScenes(code), syntax_error: syntaxErrorOf(code) };
+}
+
 export interface FakeServer {
   scripts: Record<string, string>;
   assets: AssetFile[];
@@ -79,6 +89,13 @@ export interface FakeServer {
   gates: Partial<Record<string, Promise<void>>>;
   calls: Array<{ method: string; path: string; body: unknown }>;
   fetch: ReturnType<typeof vi.fn>;
+}
+
+/** Stand-in for the backend's content hash used for save-conflict checks. */
+export function versionOf(code: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < code.length; index += 1) hash = Math.imul(hash ^ code.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16);
 }
 
 function response(status: number, body: unknown) {
@@ -149,15 +166,34 @@ export function installFakeServer(overrides: Partial<Pick<FakeServer, "scripts" 
       case "GET /api/file-content": {
         const name = param("filename");
         if (!(name in server.scripts)) return response(404, { detail: "Python script not found." });
-        return response(200, { filename: name, code: server.scripts[name], ...parseScenes(server.scripts[name]) });
+        const code = server.scripts[name];
+        return response(200, { filename: name, code, version: versionOf(code), ...parsedResponse(code) });
       }
       case "POST /api/parse-code":
-        return response(200, { success: true, ...parseScenes(json!.code) });
-      case "POST /api/save":
-        server.scripts[json!.filename] = json!.code;
-        return response(200, { success: true, filename: json!.filename, ...parseScenes(json!.code) });
+        return response(200, { success: true, ...parsedResponse(json!.code) });
+      case "POST /api/save": {
+        const name = json!.filename;
+        const base = (json as { base_version?: string }).base_version;
+        if ((json as { create_only?: boolean }).create_only) {
+          const clash = Object.keys(server.scripts).find((other) => other.toLowerCase() === name.toLowerCase());
+          if (clash === name) return response(409, { detail: `${name} already exists.` });
+          if (clash) return response(409, { detail: `'${clash}' already exists. File names that differ only by case are not allowed.` });
+        }
+        if (base !== undefined) {
+          if (!(name in server.scripts)) return response(404, { detail: "This file was renamed or deleted outside this tab." });
+          if (versionOf(server.scripts[name]) !== base) {
+            return response(412, { detail: "This file was changed outside this tab since you opened it." });
+          }
+        }
+        server.scripts[name] = json!.code;
+        return response(200, { success: true, filename: name, version: versionOf(json!.code), ...parsedResponse(json!.code) });
+      }
       case "POST /api/rename": {
         if (json!.new_name in server.scripts) return response(400, { detail: "A file with the target name already exists." });
+        const clash = Object.keys(server.scripts).find(
+          (other) => other !== json!.old_name && other.toLowerCase() === json!.new_name.toLowerCase(),
+        );
+        if (clash) return response(409, { detail: `'${clash}' already exists. File names that differ only by case are not allowed.` });
         server.scripts[json!.new_name] = server.scripts[json!.old_name];
         delete server.scripts[json!.old_name];
         return response(200, { success: true });

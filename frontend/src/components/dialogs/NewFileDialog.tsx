@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Field, Input } from "@/components/ui/input";
 import { errorMessage } from "@/lib/api";
-import { toScriptName, validateScriptName } from "@/lib/format";
+import { dedupeExtension, toScriptName, validateScriptName } from "@/lib/format";
 
 export interface NewFileRequest {
   /** Suggested name (without forcing .py). */
@@ -62,7 +62,7 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
           placeholder="my_scene.py"
           onFocus={(event) => event.currentTarget.setSelectionRange(0, value.replace(/\.py$/i, "").length)}
           onChange={(event) => {
-            setValue(event.target.value);
+            setValue(dedupeExtension(event.target.value));
             setError(null);
           }}
           className="h-8 font-mono"

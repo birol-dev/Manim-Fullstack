@@ -108,13 +108,16 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
   const finished = (video: HTMLVideoElement | null) =>
     !video || video.ended || (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.05);
 
-  const syncFromA = () => {
+  // Runs on either clip's timeupdate. The readout follows whichever clip is further
+  // along, so it keeps counting when the shorter clip (A or B) has ended.
+  const sync = () => {
     const a = videoA.current;
     const b = videoB.current;
-    if (!a) return;
-    setTime(a.currentTime);
+    const playing = both();
+    if (playing.length === 0) return;
+    setTime(Math.max(...playing.map((video) => video.currentTime)));
     // Once the shorter clip ends, leave it on its last frame and let the longer one continue.
-    if (!b || a.ended || b.ended || !Number.isFinite(b.duration) || a.currentTime > b.duration) return;
+    if (!a || !b || a.ended || b.ended || !Number.isFinite(b.duration) || a.currentTime > b.duration) return;
     if (Math.abs(b.currentTime - a.currentTime) > DRIFT_TOLERANCE_S) b.currentTime = a.currentTime;
   };
 
@@ -149,7 +152,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
           videoRef={videoA}
           onChange={chooseA}
           onLoadedMetadata={updateDuration}
-          onTimeUpdate={syncFromA}
+          onTimeUpdate={sync}
           onEnded={noteEnded}
         />
         <ComparePane
@@ -159,6 +162,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
           videoRef={videoB}
           onChange={chooseB}
           onLoadedMetadata={updateDuration}
+          onTimeUpdate={sync}
           onEnded={noteEnded}
         />
       </div>

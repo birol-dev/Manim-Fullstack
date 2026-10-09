@@ -1,11 +1,12 @@
-import { forwardRef, lazy, Suspense } from "react";
+import { forwardRef, lazy, Suspense, useState } from "react";
 import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
 import type { SyntaxErrorInfo } from "@/lib/types";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/panel";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender } from "@/hooks/useRenderSession";
 import { MOD_KEY, QUALITY_OPTIONS } from "@/lib/constants";
@@ -18,6 +19,94 @@ const CodeEditor = lazy(() => import("./CodeEditor"));
 // Mobjects that are typeset with LaTeX under the hood.
 const USES_LATEX =
   /\b(MathTex|Tex|SingleStringMathTex|BulletedList|Title|DecimalNumber|Integer|Variable|Matrix|MathTable)\s*\(|\badd_coordinates\s*\(|\binclude_numbers\s*=\s*True/;
+
+// Select value for "Other scene…" (can't clash with a Python class name).
+const OTHER_SCENE = " other";
+const CLASS_NAME = /^[A-Za-z_]\w*$/;
+
+/**
+ * Scene picker. The list holds the scenes the parser can prove; "Other scene…"
+ * lets you type any class name (aliased or factory-made bases, imported scenes).
+ */
+function ScenePicker({
+  scenes,
+  selectedScene,
+  placeholder,
+  disabled,
+  onSceneChange,
+}: {
+  scenes: string[];
+  selectedScene: string;
+  placeholder: string;
+  disabled: boolean;
+  onSceneChange: (scene: string) => void;
+}) {
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState("");
+  const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
+  const valid = CLASS_NAME.test(draft.trim());
+  const className = "w-36 min-w-0 @max-[720px]:w-28 @max-[420px]:w-24";
+
+  if (typing) {
+    const commit = () => {
+      if (valid) onSceneChange(draft.trim());
+      setTyping(false);
+    };
+    return (
+      <Input
+        autoFocus
+        aria-label="Scene class name"
+        aria-invalid={draft.trim() !== "" && !valid ? true : undefined}
+        title="Type the Scene class to render, then press Enter"
+        placeholder="ClassName"
+        value={draft}
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            setTyping(false);
+          }
+        }}
+        onBlur={commit}
+        className={cn("h-7 font-mono text-xs", className)}
+      />
+    );
+  }
+
+  return (
+    <Select
+      value={selectedScene}
+      onValueChange={(value) => {
+        if (value === OTHER_SCENE) {
+          setDraft(typed ?? "");
+          setTyping(true);
+        } else {
+          onSceneChange(value);
+        }
+      }}
+      disabled={disabled}
+    >
+      <SelectTrigger aria-label="Scene" className={className}>
+        <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {scenes.map((scene) => (
+          <SelectItem key={scene} value={scene}>
+            {scene}
+          </SelectItem>
+        ))}
+        {typed && <SelectItem value={typed}>{typed}</SelectItem>}
+        {(scenes.length > 0 || typed) && <SelectSeparator />}
+        <SelectItem value={OTHER_SCENE}>Other scene…</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
 
 interface EditorPaneProps {
   storageKey: string;
@@ -91,22 +180,14 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
             </Button>
           </Tooltip>
 
-          <Select value={selectedScene} onValueChange={props.onSceneChange} disabled={scenes.length === 0}>
-            <SelectTrigger aria-label="Scene" className="w-36 min-w-0 @max-[720px]:w-28 @max-[420px]:w-24">
-              <SelectValue
-                placeholder={
-                  props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"
-                }
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {scenes.map((scene) => (
-                <SelectItem key={scene} value={scene}>
-                  {scene}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ScenePicker
+            key={activeFile ?? ""}
+            scenes={scenes}
+            selectedScene={selectedScene}
+            disabled={!activeFile}
+            placeholder={props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"}
+            onSceneChange={props.onSceneChange}
+          />
 
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
             <SelectTrigger aria-label="Quality" className="w-[88px] @max-[420px]:w-16">

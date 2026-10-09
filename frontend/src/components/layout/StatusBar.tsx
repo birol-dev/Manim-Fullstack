@@ -59,7 +59,7 @@ function RenderIndicator({
     return (
       <Item className="text-fg">
         <Loader2 className="animate-spin text-accent" />
-        Rendering {active.request.scene}
+        {active.queued ? "Queued" : "Rendering"} {active.request.scene}
         {percent !== null && <span className="tabular-nums text-fg-muted">{percent}%</span>}
       </Item>
     );

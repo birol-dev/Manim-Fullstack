@@ -2,24 +2,39 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export interface LineReference {
+  line: number;
+  /** Character range of the reference (e.g. `scene.py", line 12`) in the message. */
+  start: number;
+  end: number;
+}
+
 /**
- * Find a line number in *message* that points into one of *filenames*.
+ * Find a line reference in *message* that points into one of *filenames*.
  *
  * Handles Python tracebacks (`File ".../scene.py", line 12`) and Rich's
  * compact form (`/path/scene.py:12 in construct`). References to other files
  * (Manim's own sources, for example) are ignored on purpose.
  */
-export function findLineReference(message: string, filenames: readonly string[]): number | null {
+export function findLineReferenceMatch(message: string, filenames: readonly string[]): LineReference | null {
   for (const filename of filenames) {
     if (!filename) continue;
     const name = escapeRegExp(filename);
     const boundary = `(?:^|[\\s"'/\\\\(])`;
-    const traceback = new RegExp(`${boundary}${name}"?,\\s+line\\s+(\\d+)`);
-    const compact = new RegExp(`${boundary}${name}:(\\d+)\\b`);
+    const traceback = new RegExp(`${boundary}(${name}"?,\\s+line\\s+(\\d+))`);
+    const compact = new RegExp(`${boundary}(${name}:(\\d+))\\b`);
     const match = traceback.exec(message) ?? compact.exec(message);
-    if (match) return Number(match[1]);
+    if (match) {
+      const start = match.index + match[0].length - match[1].length;
+      return { line: Number(match[2]), start, end: start + match[1].length };
+    }
   }
   return null;
+}
+
+/** Line number of the first reference into one of *filenames* in *message*. */
+export function findLineReference(message: string, filenames: readonly string[]): number | null {
+  return findLineReferenceMatch(message, filenames)?.line ?? null;
 }
 
 const EXCEPTION_LINE = /^\s*(?:[│|]\s*)?([A-Z]\w*(?:Error|Exception|Exit|Interrupt)(?::.*)?)\s*(?:[│|]\s*)?$/;

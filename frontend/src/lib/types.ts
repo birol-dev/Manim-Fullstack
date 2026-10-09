@@ -99,4 +99,7 @@ export interface PreviewItem {
   downloadName: string;
   /** The clip is from an earlier render that has since failed or produced nothing. */
   stale?: boolean;
+  /** Script and scene the render came from, when known. The preview follows the open file. */
+  file?: string;
+  scene?: string;
 }
