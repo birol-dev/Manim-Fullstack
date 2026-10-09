@@ -20,6 +20,8 @@ export const ALLOWED_ASSET_EXTENSIONS = [
 ] as const;
 
 export const MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024;
+/** Matches the backend's MANIM_MAX_CODE_BYTES default. */
+export const MAX_CODE_BYTES = 2 * 1024 * 1024;
 
 /** Manim's named colors with their hex values (manim.utils.color.manim_colors). */
 export const MANIM_COLORS = [

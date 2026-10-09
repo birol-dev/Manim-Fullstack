@@ -6,6 +6,13 @@ import type { AnimationStep } from "./types";
  * the number of play()/wait() calls parsed from the scene. Returns null before
  * Manim reports anything.
  */
+/** Keep the higher of two percents so a looping scene cannot walk the meter backwards. */
+export function risingPercent(previous: number | null, next: number | null): number | null {
+  if (next === null) return previous;
+  if (previous === null) return next;
+  return Math.max(previous, next);
+}
+
 export function overallPercent(active: ActiveRender, stepCount: number): number | null {
   const progress = active.progress;
   if (!progress) return null;

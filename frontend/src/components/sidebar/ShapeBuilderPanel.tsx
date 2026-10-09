@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, CornerDownLeft } from "lucide-react";
 import { toast } from "sonner";
 
@@ -65,10 +65,17 @@ function OptionSelect<T extends string>({
   );
 }
 
+let rememberedShape = DEFAULT_SHAPE_OPTIONS;
+let rememberedNumbers: Record<NumberField, string> = { scale: "1", rotation: "0", shiftX: "0", shiftY: "0" };
+
 export function ShapeBuilderPanel({ canInsert, onInsert }: ShapeBuilderPanelProps) {
-  const [options, setOptions] = useState<ShapeOptions>(DEFAULT_SHAPE_OPTIONS);
+  const [options, setOptions] = useState<ShapeOptions>(rememberedShape);
   // Keep raw text for number inputs so "-" or "1." can be typed.
-  const [numbers, setNumbers] = useState<Record<NumberField, string>>({ scale: "1", rotation: "0", shiftX: "0", shiftY: "0" });
+  const [numbers, setNumbers] = useState<Record<NumberField, string>>(rememberedNumbers);
+  useEffect(() => {
+    rememberedShape = options;
+    rememberedNumbers = numbers;
+  }, [options, numbers]);
   const [copied, setCopied] = useState(false);
 
   const update = <K extends keyof ShapeOptions>(key: K, value: ShapeOptions[K]) =>
@@ -225,7 +232,7 @@ export function ShapeBuilderPanel({ canInsert, onInsert }: ShapeBuilderPanelProp
         >
           <pre
             aria-label="Generated code"
-            className="overflow-x-auto rounded-lg border border-line bg-canvas p-2.5 font-mono text-[11.5px] leading-relaxed text-fg-muted select-text"
+            className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-canvas p-2.5 font-mono text-[11.5px] leading-relaxed text-fg-muted select-text"
           >
             {code}
           </pre>

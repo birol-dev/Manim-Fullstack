@@ -88,7 +88,10 @@ def _animation_step(call: ast.Call) -> Optional[dict]:
 
 
 def _parse_code_ast(code_content: str) -> tuple:
-    """Find scene classes and their play/wait timeline in one AST pass (cached)."""
+    """Find scene classes and their play/wait timeline in one AST pass (cached).
+
+    The third item is a syntax error dict (``message``, ``line``, ``column``) or None.
+    """
     key = hashlib.sha1(code_content.encode("utf-8", "surrogatepass")).hexdigest()
     with _cache_lock:
         cached = _cache.get(key)
@@ -103,12 +106,22 @@ def _parse_code_ast(code_content: str) -> tuple:
     return result
 
 
+def _syntax_error_info(exc: SyntaxError) -> dict:
+    return {
+        "message": (exc.msg or "Invalid syntax").strip(),
+        "line": exc.lineno or 1,
+        "column": exc.offset or 1,
+    }
+
+
 def _analyze(code_content: str) -> tuple:
     try:
         tree = ast.parse(code_content)
-    except (SyntaxError, ValueError, RecursionError, MemoryError):
+    except SyntaxError as exc:
+        return ((), (), _syntax_error_info(exc))
+    except (ValueError, RecursionError, MemoryError):
         # RecursionError/MemoryError: pathologically nested code.
-        return ((), ())
+        return ((), (), {"message": "Could not parse this file.", "line": 1, "column": 1})
 
     # Manim only renders module-level classes.
     classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
@@ -150,16 +163,22 @@ def _analyze(code_content: str) -> tuple:
             steps.sort(key=lambda step: step["line"])
             scene_anims[node.name] = tuple(tuple(step.items()) for step in steps)
 
-    return (tuple(ordered_scenes), tuple(scene_anims.items()))
+    return (tuple(ordered_scenes), tuple(scene_anims.items()), None)
 
 
 def get_scenes_from_code(code_content: str) -> List[str]:
     """Return renderable Scene class names in source order."""
-    scenes, _ = _parse_code_ast(code_content)
+    scenes, _, _ = _parse_code_ast(code_content)
     return list(scenes)
 
 
 def get_scene_animations(code_content: str) -> dict:
     """Return ``{scene: [step, ...]}`` for the play/wait calls in each construct()."""
-    _, anims = _parse_code_ast(code_content)
+    _, anims, _ = _parse_code_ast(code_content)
     return {scene: [dict(items) for items in steps] for scene, steps in anims}
+
+
+def get_syntax_error(code_content: str) -> Optional[dict]:
+    """Return ``{message, line, column}`` when *code_content* is not valid Python."""
+    _, _, error = _parse_code_ast(code_content)
+    return error

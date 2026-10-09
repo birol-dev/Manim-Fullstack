@@ -7,6 +7,26 @@ import type { CodeEditorHandle, CodeEditorProps } from "./types";
 type StandaloneEditor = Parameters<OnMount>[0];
 
 const MARKER_OWNER = "manim-render";
+const SYNTAX_OWNER = "manim-syntax";
+
+function applySyntaxMarker(editor: StandaloneEditor | null, marker: { line: number; message: string } | null) {
+  const model = editor?.getModel();
+  if (!model) return;
+  if (!marker || marker.line < 1 || marker.line > model.getLineCount()) {
+    monaco.editor.setModelMarkers(model, SYNTAX_OWNER, []);
+    return;
+  }
+  monaco.editor.setModelMarkers(model, SYNTAX_OWNER, [
+    {
+      severity: monaco.MarkerSeverity.Error,
+      message: marker.message,
+      startLineNumber: marker.line,
+      endLineNumber: marker.line,
+      startColumn: model.getLineFirstNonWhitespaceColumn(marker.line) || 1,
+      endColumn: model.getLineMaxColumn(marker.line),
+    },
+  ]);
+}
 
 function leadingWhitespace(line: string): string {
   return line.match(/^\s*/)?.[0] ?? "";
@@ -31,7 +51,7 @@ function indentBlock(block: string, indent: string): string {
 }
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
-  { path, value, onChange, onCursorChange, onSave, onRender, fontSize = 13 },
+  { path, value, onChange, onCursorChange, onSave, onRender, fontSize = 13, syntaxError = null },
   ref,
 ) {
   const editorRef = useRef<StandaloneEditor | null>(null);
@@ -39,11 +59,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   const saveRef = useRef(onSave);
   const renderRef = useRef(onRender);
   const cursorRef = useRef(onCursorChange);
+  const syntaxRef = useRef(syntaxError);
   useEffect(() => {
     saveRef.current = onSave;
     renderRef.current = onRender;
     cursorRef.current = onCursorChange;
+    syntaxRef.current = syntaxError;
   });
+  useEffect(() => {
+    applySyntaxMarker(editorRef.current, syntaxError);
+  }, [syntaxError, path]);
 
   useImperativeHandle(ref, () => ({
     insertText(text, mode) {
@@ -106,6 +131,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
 
   const handleMount: OnMount = (editor) => {
     editorRef.current = editor;
+    applySyntaxMarker(editor, syntaxRef.current);
     editor.addAction({
       id: "manim.save",
       label: "Save File",

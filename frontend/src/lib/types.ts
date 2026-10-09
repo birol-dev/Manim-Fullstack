@@ -45,9 +45,16 @@ export interface AnimationStep {
 
 export type SceneAnimations = Record<string, AnimationStep[]>;
 
+export interface SyntaxErrorInfo {
+  message: string;
+  line: number;
+  column: number;
+}
+
 export interface ParseResult {
   scenes: string[];
   animations: SceneAnimations;
+  syntaxError?: SyntaxErrorInfo | null;
 }
 
 export interface Dependencies {
@@ -88,4 +95,6 @@ export interface PreviewItem {
   /** Media list entry, when the preview came from (or was saved to) the workspace. */
   mediaPath?: string;
   downloadName: string;
+  /** The clip is from an earlier render that has since failed or produced nothing. */
+  stale?: boolean;
 }

@@ -57,13 +57,24 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
         const element = event.currentTarget;
         stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 24;
       }}
-      className="h-full overflow-y-auto px-3 py-2 font-mono text-[12px] leading-[1.45] select-text"
+      tabIndex={0}
+      className="h-full min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 font-mono text-[12px] leading-[1.45] select-text outline-none"
     >
       {logs.map((entry) => {
         const line = entry.level === "command" ? null : findLineReference(entry.text, linkFiles);
         return (
           <div key={entry.id} className={cn("group flex items-start gap-2 whitespace-pre-wrap break-words", LEVEL_STYLES[entry.level])}>
-            <span className="min-w-0 flex-1">{entry.text}</span>
+            {line !== null ? (
+              <button
+                type="button"
+                onClick={() => onJumpToLine(line)}
+                className="min-w-0 flex-1 text-left underline decoration-dotted decoration-fg-subtle/50 underline-offset-2 hover:decoration-accent"
+              >
+                {entry.text}
+              </button>
+            ) : (
+              <span className="min-w-0 flex-1">{entry.text}</span>
+            )}
             {line !== null && (
               <button
                 type="button"

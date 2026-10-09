@@ -74,6 +74,9 @@ def test_get_scenes_handles_syntax_errors_gracefully():
     malformed_code = "class IncompleteScene(Scene:\n    def construct(self):"
     assert get_scenes_from_code(malformed_code) == []
     assert get_scene_animations(malformed_code) == {}
+    error = main.get_syntax_error(malformed_code)
+    assert error["line"] == 1
+    assert "invalid syntax" in error["message"].lower() or error["message"]
 
 
 
@@ -274,6 +277,24 @@ def test_upload_asset_endpoint(client, tmp_path):
         assert data["success"] is True
         assert data["filename"] == "icon.svg"
 
+        served = client.get("/assets/icon.svg")
+        assert served.status_code == 200
+        assert "sandbox" in served.headers.get("content-security-policy", "")
+
+        conflict = client.post(
+            "/api/upload-asset",
+            files={"file": ("icon.svg", b"<svg>new</svg>", "image/svg+xml")},
+        )
+        assert conflict.status_code == 409
+        assert (assets_dir / "icon.svg").read_bytes() == file_content
+
+        replaced = client.post(
+            "/api/upload-asset?overwrite=true",
+            files={"file": ("icon.svg", b"<svg>new</svg>", "image/svg+xml")},
+        )
+        assert replaced.status_code == 200
+        assert (assets_dir / "icon.svg").read_bytes() == b"<svg>new</svg>"
+
         res_bad_ext = client.post(
             "/api/upload-asset",
             files={"file": ("malicious.exe", b"binary", "application/octet-stream")},
@@ -281,11 +302,13 @@ def test_upload_asset_endpoint(client, tmp_path):
         assert res_bad_ext.status_code == 400
 
         oversized_data = b"x" * (MAX_ASSET_SIZE_BYTES + 1024)
+        (assets_dir / "keep.png").write_bytes(b"original")
         res_oversized = client.post(
-            "/api/upload-asset",
-            files={"file": ("huge.png", oversized_data, "image/png")},
+            "/api/upload-asset?overwrite=true",
+            files={"file": ("keep.png", oversized_data, "image/png")},
         )
         assert res_oversized.status_code == 413
+        assert (assets_dir / "keep.png").read_bytes() == b"original"
 
         with patch("builtins.open", side_effect=OSError("Disk upload error")):
             res_500 = client.post(
@@ -302,6 +325,13 @@ def test_parse_code_endpoint(client):
     data = res.json()
     assert "LiveScene" in data["scenes"]
     assert len(data["animations"]["LiveScene"]) == 1
+    assert "syntax_error" not in data
+
+    broken = client.post("/api/parse-code", json={"code": "class Intro(Scene:\n    pass\n"})
+    assert broken.status_code == 200
+    error = broken.json()["syntax_error"]
+    assert error["line"] == 1
+    assert error["message"]
 
 
 def test_parse_code_rejects_oversized_payload(client):
@@ -388,6 +418,18 @@ def test_download_temp_endpoint(client, tmp_path):
 
         res_unsafe = client.get("/api/download-temp?path=../secret.mp4")
         assert res_unsafe.status_code == 400
+
+        # .. that still resolves inside MEDIA_DIR must not delete a saved render.
+        escaped = client.get("/api/download-temp?path=_temp_run_12345/../videos/scene_a/render.mp4")
+        assert escaped.status_code == 400
+        assert permanent_clip.exists()
+        assert permanent_clip.read_text(encoding="utf-8") == "keepme"
+
+        crossed = client.get(
+            "/api/download-temp?path=_temp_run_12345/clip.mp4",
+            headers={"Sec-Fetch-Dest": "image", "Sec-Fetch-Site": "cross-site"},
+        )
+        assert crossed.status_code == 403
 
 
 def test_install_endpoints_success_and_failures(client):
@@ -603,6 +645,9 @@ def test_is_temp_media_relpath_helper():
     assert main._is_temp_media_relpath("videos/_temp_run_abc/1080p60/Scene.mp4") is True
     assert main._is_temp_media_relpath("videos/scene_a/render.mp4") is False
     assert main._is_temp_media_relpath("media/_temp_run_x/a.mp4") is True
+    # A temp-run segment must not launder a path that climbs out of it.
+    assert main._is_temp_media_relpath("_temp_run_x/../videos/scene_a/render.mp4") is False
+    assert main._is_temp_media_relpath("videos/scene_a/../../_temp_run_x/../../../secret.mp4") is False
 
 
 def test_installers_allowed_cloud_and_env(monkeypatch):
@@ -801,7 +846,14 @@ def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
     with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
         with _patch_conn_executor(mock_execute):
             with client.websocket_connect("/api/render") as ws:
-                ws.send_json({"type": "start", "id": 7, "filename": "demo.py", "scene": "Intro", "quality": "l", "code": "x"})
+                ws.send_json({
+                    "type": "start",
+                    "id": 7,
+                    "filename": "demo.py",
+                    "scene": "Intro",
+                    "quality": "l",
+                    "code": "class Intro(Scene):\n    pass\n",
+                })
                 received = _drain_until_result(ws)
 
     assert all(m.get("render_id") == 7 for m in received)
@@ -834,7 +886,7 @@ def _blocking_executor():
 
 def test_cancel_while_rendering_reports_cancelled(client, ws_dirs):
     root, _, _ = ws_dirs
-    _write(root / "s.py")
+    _write(root / "s.py", "class S(Scene):\n    pass\n")
     with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
         with patch.object(main, "ManimExecutor", return_value=_blocking_executor()):
             with client.websocket_connect("/api/render") as ws:
@@ -880,7 +932,7 @@ def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
     import time
 
     root, media, _ = ws_dirs
-    _write(root / "s.py")
+    _write(root / "s.py", "class S(Scene):\n    pass\n")
     real_relocate = main._relocate_temp_output
 
     async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
@@ -900,7 +952,13 @@ def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
         main, "ManimExecutor", return_value=instance
     ), patch.object(main, "_relocate_temp_output", side_effect=slow_relocate):
         with client.websocket_connect("/api/render") as ws:
-            ws.send_json({"type": "start", "id": "z", "filename": "s.py", "scene": "S", "code": "x"})
+            ws.send_json({
+                "type": "start",
+                "id": "z",
+                "filename": "s.py",
+                "scene": "S",
+                "code": "class S(Scene):\n    pass\n",
+            })
             time.sleep(0.1)
             ws.send_json({"type": "cancel"})
             received = _drain_until_result(ws)

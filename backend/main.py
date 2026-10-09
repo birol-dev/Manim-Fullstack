@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -17,8 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
 from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
-from origins import is_host_allowed, is_origin_allowed
-from scene_parser import get_scene_animations, get_scenes_from_code
+from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
+from scene_parser import get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import UnsafePathError, safe_basename, safe_join
 from fastapi import (
     BackgroundTasks,
@@ -119,19 +120,119 @@ class SineWave(Scene):
 '''
 
 
-app = FastAPI(title="Manim Composer API", version=APP_VERSION)
+# Importing this module must not touch render scratch files. Startup maintenance
+# runs from the lifespan hook; tests turn it off so a pytest import can't kill
+# a render that is already in progress.
+RUN_STARTUP_MAINTENANCE = True
+
+# One render at a time unless MANIM_MAX_CONCURRENT_RENDERS says otherwise.
+# Parallel renders share Manim's text cache and the same output path.
+MAX_CONCURRENT_RENDERS = max(1, int(os.environ.get("MANIM_MAX_CONCURRENT_RENDERS", "1")))
+_render_slots: Optional[asyncio.Semaphore] = None
 
 
-def _request_allowed(headers) -> bool:
+def _render_semaphore() -> asyncio.Semaphore:
+    global _render_slots
+    if _render_slots is None:
+        _render_slots = asyncio.Semaphore(MAX_CONCURRENT_RENDERS)
+    return _render_slots
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    if RUN_STARTUP_MAINTENANCE:
+        _sweep_temp_renders()
+        write_manim_config_file(WORKSPACE_DIR, get_cached_profile())
+    yield
+
+
+app = FastAPI(title="Manim Composer API", version=APP_VERSION, lifespan=_lifespan)
+
+
+def _request_allowed(headers, peer: Optional[str] = None) -> bool:
+    if not is_peer_allowed(peer):
+        return False
     host = headers.get("host")
     return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
 
 
+def _peer_host(client) -> Optional[str]:
+    return client.host if client is not None else None
+
+
 @app.middleware("http")
 async def reject_untrusted_requests(request: Request, call_next):
-    if not _request_allowed(request.headers):
+    if not _request_allowed(request.headers, _peer_host(request.client)):
         return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
     return await call_next(request)
+
+
+class LimitCodeBodyMiddleware:
+    """Reject oversized script uploads from Content-Length, before the body is parsed.
+
+    The JSON envelope around the code is allowed a few extra kilobytes.
+    """
+
+    PATHS = {"/api/save", "/api/parse-code"}
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") not in self.PATHS or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+            await self.app(scope, receive, send)
+            return
+        limit = MAX_CODE_BYTES + 8192
+        headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers", [])}
+        declared = headers.get("content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > limit
+            except ValueError:
+                too_big = True
+            if too_big:
+                response = JSONResponse(
+                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    status_code=413,
+                )
+                await response(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+            return
+
+        chunks = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                chunks.append(message)
+                continue
+            total += len(message.get("body", b""))
+            if total > limit:
+                response = JSONResponse(
+                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
+                    status_code=413,
+                )
+                await response(scope, receive, send)
+                return
+            chunks.append(message)
+            if not message.get("more_body", False):
+                break
+
+        index = 0
+
+        async def replay():
+            nonlocal index
+            if index < len(chunks):
+                item = chunks[index]
+                index += 1
+                return item
+            return {"type": "http.disconnect"}
+
+        await self.app(scope, replay, send)
+
+
+app.add_middleware(LimitCodeBodyMiddleware)
 
 
 class _PolicyCORSMiddleware(CORSMiddleware):
@@ -175,9 +276,6 @@ def _sweep_temp_renders() -> None:
                 shutil.rmtree(entry.path, ignore_errors=True)
 
 
-_sweep_temp_renders()
-write_manim_config_file(WORKSPACE_DIR, get_cached_profile())
-
 # Rendered videos are served from /media. User uploads are served by the /assets
 # route below, which prefers the Vite bundle (frontend/dist/assets) and falls
 # back to workspace/assets — mounting uploads at /assets would shadow the SPA.
@@ -200,11 +298,33 @@ def serve_asset(asset_path: str):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not os.path.isfile(user_file):
         raise HTTPException(status_code=404, detail="Asset not found")
-    return FileResponse(user_file)
+    # SVGs are same-origin documents. Without a sandbox policy, a script inside
+    # an uploaded SVG runs with the app's origin when the file is opened directly.
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if user_file.lower().endswith(".svg"):
+        headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    return FileResponse(user_file, headers=headers)
 
 
 def _parsed(code: str) -> dict:
-    return {"scenes": get_scenes_from_code(code), "animations": get_scene_animations(code)}
+    result = {"scenes": get_scenes_from_code(code), "animations": get_scene_animations(code)}
+    error = get_syntax_error(code)
+    if error:
+        result["syntax_error"] = error
+    return result
+
+
+def _render_block_reason(code: str, scene_name: str) -> Optional[str]:
+    """Why this code cannot be rendered, or None when Manim should be started."""
+    error = get_syntax_error(code)
+    if error:
+        return f"Syntax error on line {error['line']}: {error['message']}"
+    scenes = get_scenes_from_code(code)
+    if not scenes:
+        return "No Scene class found. Add one, for example: class Intro(Scene):"
+    if scene_name not in scenes:
+        return f"Scene '{scene_name}' is not in this file. Found: {', '.join(scenes)}."
+    return None
 
 
 def _ensure_code_within_limit(code: str) -> None:
@@ -441,8 +561,13 @@ def delete_script(filename: str):
 
 
 @app.post("/api/upload-asset")
-async def upload_asset(file: UploadFile = File(...)):
-    """Store an uploaded asset (image, audio, font) in workspace/assets/."""
+async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
+    """Store an uploaded asset (image, audio, font) in workspace/assets/.
+
+    An existing file is left untouched unless ``overwrite`` is true. The upload
+    is written to a temporary name and moved into place only after it succeeds,
+    so a rejected upload cannot delete the file it was replacing.
+    """
     try:
         filename = safe_basename(file.filename)
         dest_path = safe_join(ASSETS_DIR, filename)
@@ -456,16 +581,24 @@ async def upload_asset(file: UploadFile = File(...)):
             detail=f"Unsupported asset type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_ASSET_EXTENSIONS))}",
         )
 
+    if os.path.exists(dest_path) and not overwrite:
+        raise HTTPException(
+            status_code=409,
+            detail=f"An asset named '{filename}' already exists. Upload again to replace it.",
+        )
+
+    partial_path = f"{dest_path}.uploading-{uuid.uuid4().hex}"
+
     def discard_partial():
         try:
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
+            if os.path.exists(partial_path):
+                os.remove(partial_path)
         except OSError:
             pass
 
     try:
         size = 0
-        with open(dest_path, "wb") as buffer:
+        with open(partial_path, "wb") as buffer:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_ASSET_SIZE_BYTES:
@@ -474,13 +607,14 @@ async def upload_asset(file: UploadFile = File(...)):
         if size > MAX_ASSET_SIZE_BYTES:
             discard_partial()
             raise HTTPException(status_code=413, detail="File size exceeds maximum allowed size (50MB).")
+        os.replace(partial_path, dest_path)
     except HTTPException:
         raise
     except Exception as e:
         discard_partial()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}"}
+    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": overwrite}
 
 
 @app.delete("/api/assets")
@@ -507,9 +641,43 @@ def _media_request_path(path: str) -> str:
 
 
 def _is_temp_media_relpath(rel_path: str) -> bool:
-    """True if *rel_path* (relative to MEDIA_DIR) lies under a _temp_run_* directory."""
-    parts = [p for p in rel_path.replace("\\", "/").split("/") if p and p != "."]
-    return any(part.startswith(TEMP_PREFIX) for part in parts)
+    """True if *rel_path* (relative to MEDIA_DIR) lies under a _temp_run_* directory.
+
+    Parent segments (``..``) are rejected before they can be normalized away.
+    The temp-run name has to be a directory, not the file itself.
+    """
+    raw = rel_path.replace("\\", "/")
+    parts = [part for part in raw.split("/") if part and part != "."]
+    if not parts or any(part == ".." for part in parts):
+        return False
+    return any(part.startswith(TEMP_PREFIX) for part in parts[:-1])
+
+
+def _temp_run_directory(abs_path: str) -> Optional[str]:
+    """The ``_temp_run_*`` directory that actually contains *abs_path*, if any."""
+    media_root = os.path.normcase(os.path.abspath(MEDIA_DIR))
+    directory = os.path.dirname(os.path.abspath(abs_path))
+    while True:
+        normalized = os.path.normcase(os.path.abspath(directory))
+        if normalized == media_root:
+            return None
+        if not normalized.startswith(media_root + os.sep):
+            return None
+        if os.path.basename(directory).startswith(TEMP_PREFIX):
+            return directory
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return None
+        directory = parent
+
+
+def _cross_site_get(request: Request) -> bool:
+    """True for browser loads that are not this app's own fetch (an ``<img>`` tag, for example)."""
+    dest = (request.headers.get("sec-fetch-dest") or "").lower()
+    site = (request.headers.get("sec-fetch-site") or "").lower()
+    if dest in {"image", "script", "object", "embed", "style"}:
+        return True
+    return site in {"cross-site", "same-site"}
 
 
 def _prune_empty_dirs(start_dir: str, stop_dir: str) -> None:
@@ -552,12 +720,17 @@ def delete_media(path: str):
 
 
 @app.get("/api/download-temp")
-def download_temp(path: str, background_tasks: BackgroundTasks):
-    """Serve a download-only render once, then delete it.
+def download_temp(path: str, request: Request, background_tasks: BackgroundTasks):
+    """Serve a download-only render once, then delete that temp directory.
 
-    Only paths under a ``_temp_run_*`` directory are accepted, so permanent
-    renders can never be deleted through this endpoint.
+    The resolved file has to sit inside a real ``_temp_run_*`` directory.
+    A path that merely mentions that prefix, or climbs out of it with ``..``,
+    is refused. Cross-site GET loads (an ``<img>`` on another page) are refused
+    too, because this endpoint deletes the file it serves.
     """
+    if _cross_site_get(request):
+        raise HTTPException(status_code=403, detail="Cross-site downloads are not allowed.")
+
     clean_path = _media_request_path(path)
 
     if not _is_temp_media_relpath(clean_path):
@@ -571,24 +744,20 @@ def download_temp(path: str, background_tasks: BackgroundTasks):
     except UnsafePathError:
         raise HTTPException(status_code=400, detail="Access denied")
 
+    temp_dir = _temp_run_directory(abs_path)
+    if temp_dir is None:
+        raise HTTPException(status_code=400, detail="Access denied")
+
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="File not found")
 
     media_type = mimetypes.guess_type(abs_path)[0] or "video/mp4"
 
     def remove_temp_output():
-        # Remove the whole _temp_run_* tree, never a non-temp parent.
-        current = os.path.dirname(abs_path)
-        media_root = os.path.normcase(os.path.abspath(MEDIA_DIR))
-        while os.path.normcase(os.path.abspath(current)) != media_root:
-            if os.path.basename(current).startswith(TEMP_PREFIX):
-                shutil.rmtree(current, ignore_errors=True)
-                return
-            current = os.path.dirname(current)
-        try:
-            os.remove(abs_path)
-        except OSError:
-            pass
+        # Delete only the temp run that contains the file. Never the file on its own:
+        # a path that resolved outside a temp directory must not be removed.
+        if _temp_run_directory(abs_path) == temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     background_tasks.add_task(remove_temp_output)
     return FileResponse(abs_path, media_type=media_type, filename=os.path.basename(abs_path))
@@ -770,7 +939,7 @@ async def websocket_render(websocket: WebSocket):
     ``id`` so clients can ignore events from a render they already abandoned.
     Each connection gets its own executor so clients never interfere.
     """
-    if not _request_allowed(websocket.headers):
+    if not _request_allowed(websocket.headers, _peer_host(websocket.client)):
         await websocket.close(code=1008)
         return
 
@@ -858,15 +1027,41 @@ async def websocket_render(websocket: WebSocket):
                 with open(temp_filepath, "w", encoding="utf-8") as f:
                     f.write(code_content)
 
+            checked = code_content
+            if checked is None:
+                src_path = os.path.join(WORKSPACE_DIR, filename)
+                if not os.path.isfile(src_path):
+                    await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
+                    result = {"success": False, "status": "rejected"}
+                    return
+                with open(src_path, "r", encoding="utf-8", errors="replace") as f:
+                    checked = f.read()
+            blocked = _render_block_reason(checked, request["scene"])
+            if blocked:
+                await send({"type": "error", "render_id": render_id, "message": blocked})
+                result = {"success": False, "status": "rejected"}
+                return
+
             phase["value"] = "rendering"
-            result = await conn_executor.execute(
-                manim_path=manim_command,
-                script_name=script_name,
-                scene_name=request["scene"],
-                quality=request["quality"],
-                use_opengl=request["use_opengl"],
-                log_callback=log_callback,
-            )
+            slots = _render_semaphore()
+            if slots.locked():
+                await send({
+                    "type": "info",
+                    "render_id": render_id,
+                    "message": "Waiting for another render to finish…",
+                })
+            await slots.acquire()
+            try:
+                result = await conn_executor.execute(
+                    manim_path=manim_command,
+                    script_name=script_name,
+                    scene_name=request["scene"],
+                    quality=request["quality"],
+                    use_opengl=request["use_opengl"],
+                    log_callback=log_callback,
+                )
+            finally:
+                slots.release()
             phase["value"] = "finishing"
             if relocate and held_output and result.get("success"):
                 moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_stem)
@@ -902,6 +1097,12 @@ async def websocket_render(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
+            if len(data.encode("utf-8")) > MAX_CODE_BYTES + 8192:
+                await send({
+                    "type": "error",
+                    "message": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
+                })
+                continue
             try:
                 message = json.loads(data)
             except json.JSONDecodeError:

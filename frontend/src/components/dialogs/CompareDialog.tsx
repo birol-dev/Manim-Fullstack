@@ -105,12 +105,21 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
     });
   };
 
+  const finished = (video: HTMLVideoElement | null) =>
+    !video || video.ended || (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.05);
+
   const syncFromA = () => {
     const a = videoA.current;
     const b = videoB.current;
     if (!a) return;
     setTime(a.currentTime);
-    if (b && !b.ended && Math.abs(b.currentTime - a.currentTime) > DRIFT_TOLERANCE_S) b.currentTime = a.currentTime;
+    // Once the shorter clip ends, leave it on its last frame and let the longer one continue.
+    if (!b || a.ended || b.ended || !Number.isFinite(b.duration) || a.currentTime > b.duration) return;
+    if (Math.abs(b.currentTime - a.currentTime) > DRIFT_TOLERANCE_S) b.currentTime = a.currentTime;
+  };
+
+  const noteEnded = () => {
+    if (finished(videoA.current) && finished(videoB.current)) setPlaying(false);
   };
 
   const updateDuration = () => {
@@ -141,9 +150,17 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
           onChange={chooseA}
           onLoadedMetadata={updateDuration}
           onTimeUpdate={syncFromA}
-          onEnded={() => setPlaying(false)}
+          onEnded={noteEnded}
         />
-        <ComparePane side="B" path={pathB} videos={videos} videoRef={videoB} onChange={chooseB} onLoadedMetadata={updateDuration} />
+        <ComparePane
+          side="B"
+          path={pathB}
+          videos={videos}
+          videoRef={videoB}
+          onChange={chooseB}
+          onLoadedMetadata={updateDuration}
+          onEnded={noteEnded}
+        />
       </div>
       <div className="flex shrink-0 items-center gap-3">
         <Button variant="primary" size="icon" aria-label={playing ? "Pause" : "Play both"} onClick={togglePlay}>

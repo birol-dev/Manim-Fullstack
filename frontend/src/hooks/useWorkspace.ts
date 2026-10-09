@@ -1,22 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
-import { deleteRequest, postJson, requestJson } from "@/lib/api";
-import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES } from "@/lib/constants";
+import { ApiError, deleteRequest, postJson, requestJson } from "@/lib/api";
+import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, MAX_CODE_BYTES } from "@/lib/constants";
 import { loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "@/lib/storage";
 import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } from "@/lib/types";
 
 const EMPTY_FILES: WorkspaceFiles = { scripts: [], assets: [], media: [] };
-const EMPTY_PARSE: ParseResult = { scenes: [], animations: {} };
+const EMPTY_PARSE: ParseResult = { scenes: [], animations: {}, syntaxError: null };
+
+interface ServerParse {
+  scenes?: string[];
+  animations?: ParseResult["animations"];
+  syntax_error?: ParseResult["syntaxError"];
+}
+
+function asParseResult(data: ServerParse | null | undefined): ParseResult {
+  return {
+    scenes: data?.scenes ?? [],
+    animations: data?.animations ?? {},
+    syntaxError: data?.syntax_error ?? null,
+  };
+}
+
+function assertCodeSize(code: string) {
+  if (new TextEncoder().encode(code).length > MAX_CODE_BYTES) {
+    throw new ApiError("This script is larger than 2 MB, so it can't be saved or rendered.", 413);
+  }
+}
 const PARSE_DEBOUNCE_MS = 400;
 
 export type FilesStatus = "loading" | "ready" | "error";
 
-interface FileContentResponse extends ParseResult {
+interface FileContentResponse extends ServerParse {
   filename: string;
   code: string;
 }
 
-interface SaveResponse extends ParseResult {
+interface SaveResponse extends ServerParse {
   filename: string;
 }
 
@@ -27,8 +48,9 @@ function browserScriptList(): ScriptFile[] {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 }
 
-function parseCode(code: string): Promise<ParseResult | null> {
-  return postJson<ParseResult>("/api/parse-code", { code }).catch(() => null);
+function parseCode(code: string): Promise<ParseResult> {
+  assertCodeSize(code);
+  return postJson<ServerParse>("/api/parse-code", { code }).then(asParseResult);
 }
 
 function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -163,7 +185,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       const data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
       if (seq !== loadSeq.current) return false;
       showBuffer(data.filename, data.code);
-      applyParse({ scenes: data.scenes, animations: data.animations }, data.filename, data.code);
+      applyParse(asParseResult(data), data.filename, data.code);
       return true;
     },
     [applyParse, showBuffer],
@@ -206,7 +228,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     if (code === parsedCodeRef.current) return;
     const source = code;
     const timer = setTimeout(async () => {
-      const result = await parseCode(source);
+      const result = await parseCode(source).catch((err: unknown) => {
+        if (codeRef.current === source && err instanceof ApiError && err.status === 413) {
+          toast.error(err.message);
+        }
+        return null;
+      });
       if (result && codeRef.current === source) applyParse(result, activeFileRef.current, source);
     }, PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
@@ -227,6 +254,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     if (!name) throw new Error("No file is open.");
     const mode = modeRef.current;
     const content = codeRef.current;
+    assertCodeSize(content);
     // The user may open another file while the request is in flight.
     const stillOpen = () => modeRef.current === mode && activeFileRef.current === name;
 
@@ -247,12 +275,17 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (!saveBrowserFiles(all)) throw new Error("Browser storage is full. Delete some scripts and try again.");
       markSaved();
       setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
-      return (await parseNow()) ?? parsedRef.current;
+      try {
+        return (await parseNow()) ?? parsedRef.current;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 413) throw err;
+        return parsedRef.current;
+      }
     }
 
     const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content });
     markSaved();
-    const result = { scenes: data.scenes, animations: data.animations };
+    const result = asParseResult(data);
     if (stillOpen()) applyParse(result, name, content);
     void refreshFiles();
     return result;
@@ -326,7 +359,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   );
 
   const uploadAsset = useCallback(
-    async (file: File) => {
+    async (file: File, options?: { overwrite?: boolean }) => {
       const lower = file.name.toLowerCase();
       if (!ALLOWED_ASSET_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
         throw new Error(`${file.name}: unsupported type. Use ${ALLOWED_ASSET_EXTENSIONS.join(", ")}.`);
@@ -334,7 +367,8 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (file.size > MAX_ASSET_SIZE_BYTES) throw new Error(`${file.name} is larger than 50 MB.`);
       const body = new FormData();
       body.append("file", file);
-      await requestJson("/api/upload-asset", { method: "POST", body });
+      const path = options?.overwrite ? "/api/upload-asset?overwrite=true" : "/api/upload-asset";
+      await requestJson(path, { method: "POST", body });
       await refreshFiles();
     },
     [refreshFiles],
@@ -376,6 +410,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     hasUnsavedWork: isDirty || Object.keys(drafts).length > 0,
     discardChanges,
     scenes: parsed.scenes,
+    syntaxError: parsed.syntaxError ?? null,
     animations: parsed.animations,
     selectedScene,
     setSelectedScene,

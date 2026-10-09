@@ -1,4 +1,4 @@
-import { Columns2, Download, ExternalLink, Film, Play, Square, XCircle } from "lucide-react";
+import { Columns2, Download, ExternalLink, Film, History, Play, Square, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
@@ -135,7 +135,7 @@ export function PreviewPane(props: PreviewPaneProps) {
               autoPlay
               muted
               playsInline
-              loop={props.loop}
+              loop={props.loop && !preview.stale}
               className="max-h-full max-w-full"
             />
           )
@@ -169,11 +169,19 @@ export function PreviewPane(props: PreviewPaneProps) {
           />
         )}
 
+        {preview?.stale && !active && (
+          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2 bg-warning-soft px-3 py-1.5 text-xs font-medium text-warning">
+            <History className="size-3.5 shrink-0" />
+            Out of date — the last render didn't replace this preview
+          </div>
+        )}
+
         {active && <RenderingOverlay active={active} stepCount={props.stepCount} onCancel={props.onCancel} />}
       </div>
 
       {preview && (
-        <div className="flex h-7 shrink-0 items-center border-t border-line px-3">
+        <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line px-3">
+          {preview.stale && <span className="shrink-0 text-2xs font-medium text-warning">Out of date</span>}
           <span className="truncate font-mono text-2xs text-fg-subtle select-text" title={preview.location}>
             {preview.location}
           </span>

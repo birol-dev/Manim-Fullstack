@@ -25,14 +25,17 @@ them, and the result playing next to your code.
 
 ## Quick start
 
-You need **Python 3.9+** and **Node.js 18+**. On Linux, Manim also needs the Cairo and Pango headers
-(`sudo apt install build-essential pkg-config libcairo2-dev libpango1.0-dev`); on macOS, `brew install cairo pkg-config`.
+You need **Python 3.11+** and **Node.js 20.19+**. On Linux, Manim also needs the Cairo and Pango headers
+(`sudo apt install build-essential pkg-config libcairo2-dev libpango1.0-dev python3-dev`); on macOS, `brew install cairo pkg-config`.
+Debian and Ubuntu call the interpreter `python3`.
 
 ```bash
 git clone https://github.com/birol-dev/Manim-Fullstack.git
 cd Manim-Fullstack
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r backend/requirements.txt   # includes Manim CE
-python run.py
+python run.py                      # or: python3 run.py
 ```
 
 `run.py` builds the frontend the first time (and again whenever its sources change), starts the server on
@@ -56,8 +59,8 @@ Scripts live in `workspace/`, uploads in `workspace/assets/`, and renders in `wo
 Run the API with auto-reload and the Vite dev server side by side:
 
 ```bash
-uvicorn backend.main:app --reload --port 8000     # terminal 1
-cd frontend && npm install && npm run dev          # terminal 2 → http://localhost:5173
+uvicorn backend.main:app --reload --reload-dir backend --port 8000   # terminal 1
+cd frontend && npm install && npm run dev                             # terminal 2 → http://localhost:5173
 ```
 
 The dev server proxies `/api`, `/media`, and `/assets` to the backend (override with `MANIM_BACKEND_URL`), so the
@@ -77,16 +80,19 @@ The image bundles the backend, Manim, and the built frontend (LaTeX is left out 
 
 ```bash
 docker build -t manim-composer -f backend/Dockerfile .
-docker run -p 8000:8000 manim-composer
+docker run -p 127.0.0.1:8000:8000 manim-composer
 ```
 
-Containers use the low-resource *eco* profile and disable the installer endpoints.
+Publish on **127.0.0.1** only. `docker run -p 8000:8000` listens on every interface with no login, and anyone who can open that port can run Python. The process inside the container is not root. Containers use the low-resource *eco* profile and disable the installer endpoints. Set `MANIM_ALLOW_LAN=1` only when you mean to expose it on a trusted network.
 
 ## Configuration
 
 | Variable                | Default                 | Purpose                                                              |
 | ----------------------- | ----------------------- | -------------------------------------------------------------------- |
-| `MANIM_ALLOWED_ORIGINS` | —                       | Extra browser origins allowed to use the API, e.g. `https://manim.example.com` (comma separated, `*` for any). Needed when you open the app through a domain name rather than `localhost` or an IP address. |
+| `MANIM_ALLOWED_ORIGINS` | —                       | Extra browser origins allowed to use the API, e.g. `https://manim.example.com` (comma separated, `*` for any). Needed when you open the app through a domain name. |
+| `MANIM_DEV_ORIGIN_PORTS` | `5173,8000`          | Loopback ports that may call the API besides the server's own port. A page on any other localhost port is refused. |
+| `MANIM_ALLOW_LAN`       | off                     | Set to `1` to accept IP-address hosts and non-loopback clients. That is remote code execution for anyone who can reach the port. |
+| `MANIM_MAX_CONCURRENT_RENDERS` | `1`            | How many Manim processes may run at once. The default is one, so renders don't overwrite each other's files. |
 | `MANIM_RENDER_TIMEOUT`  | `600`                   | Seconds before a render is stopped                                   |
 | `MANIM_MAX_CODE_BYTES`  | `2097152`               | Largest script the API accepts                                       |
 | `MANIM_ALLOW_INSTALLS`  | enabled                 | Set to `0` to disable the installer endpoints                        |
@@ -95,10 +101,10 @@ Containers use the low-resource *eco* profile and disable the installer endpoint
 
 ## Security
 
-The server executes the Python you send it, so treat it like a terminal. It listens on `127.0.0.1` by default,
-refuses requests and WebSocket connections from other websites' origins, and only answers to `localhost`, IP
-addresses, and hosts you allow (which defeats DNS rebinding). That stops a malicious page from running code through
-your browser. Don't expose it on an untrusted network.
+The server executes the Python you send it, so treat it like a terminal. It listens on `127.0.0.1` by default.
+Browser pages on other sites are refused, and so is a page on some other localhost port (only the server's own
+port, Vite's 5173, and origins you list are trusted). IP-address hosts are refused unless `MANIM_ALLOW_LAN=1`.
+Requests with no Origin (curl, scripts) are allowed from the local machine. Don't expose the port on an untrusted network.
 
 ## Project layout
 

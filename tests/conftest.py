@@ -11,6 +11,9 @@ if str(BACKEND_DIR) not in sys.path:
 import main
 from executor import ManimExecutor
 
+# Importing the backend must not delete scratch renders or rewrite manim.cfg.
+main.RUN_STARTUP_MAINTENANCE = False
+
 
 class LocalClient(TestClient):
     """Talks to the app as http(s)/ws://localhost, like a browser on the same machine.

@@ -21,7 +21,12 @@ VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
 IMAGE_EXTENSIONS = (".png", ".gif")
 OUTPUT_EXTENSIONS = VIDEO_EXTENSIONS + IMAGE_EXTENSIONS
 
-ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# CSI color/cursor codes, plus OSC and other short escapes Rich sometimes emits.
+ANSI_PATTERN = re.compile(
+    r"\x1b\[[0-9;?]*[A-Za-z]"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b[@-_]"
+)
 LINE_SPLIT_PATTERN = re.compile(r"\r\n|\r|\n")
 # tqdm bar, e.g. "Animation 3: Create(Circle):  45%|████▌     | 27/60 [00:00<00:00]"
 TQDM_PATTERN = re.compile(r"^(?:(?P<label>.*?):\s*)?(?P<percent>\d{1,3})%\|")
@@ -79,6 +84,7 @@ class ManimExecutor:
         self._executing = False
         self._cancel_pending = False
         self._last_file_ready = None
+        self._pending_file_ready = None
         self._latex_warned = False
         self._last_progress = None
 
@@ -135,14 +141,18 @@ class ManimExecutor:
         """Manim CLI arguments (everything after the executable)."""
         args = [script_name, scene_name, f"-q{quality}" if quality in ("l", "m", "h", "k") else "-qm"]
         if use_opengl:
-            # Write to a file instead of opening an interactive preview window.
-            args += ["--renderer=opengl", "--write_to_movie"]
+            # File output is the default. --write_to_movie was removed in Manim 0.22
+            # and makes the OpenGL renderer fail on every current release.
+            args.append("--renderer=opengl")
         args.append("--progress_bar=display")
         return args
 
     def _subprocess_env(self):
         env = os.environ.copy()
         env["COLUMNS"] = SUBPROCESS_COLUMNS
+        # TERM=dumb (some terminals and CI) makes Rich ignore COLUMNS and wrap at
+        # 80, which splits "File ready at" paths and breaks output detection.
+        env["TERM"] = "xterm-256color"
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
         # Manim imports the scene file; don't litter the workspace with __pycache__.
@@ -174,6 +184,7 @@ class ManimExecutor:
         self._executing = True
         self._cancel_pending = False
         self._last_file_ready = None
+        self._pending_file_ready = None
         self._latex_warned = False
         self._last_progress = None
         self.current_process = None
@@ -186,6 +197,9 @@ class ManimExecutor:
         popen_kwargs = {
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
+            # Manim prompts on stdin when the scene name doesn't match. Inheriting
+            # the server's stdin makes that prompt wait until the render timeout.
+            "stdin": asyncio.subprocess.DEVNULL,
             "cwd": self.workspace_dir,
             "env": self._subprocess_env(),
         }
@@ -239,6 +253,21 @@ class ManimExecutor:
                 latest = self._find_latest_render(script_name, scene_name)
                 if latest:
                     await self._emit_file_ready(latest, log_callback)
+
+            if not self._last_file_ready:
+                await log_callback({
+                    "type": "error",
+                    "message": (
+                        "Manim finished without writing a video or image. "
+                        "Check that the scene name matches a Scene class in this file."
+                    ),
+                })
+                await log_callback({
+                    "type": "status",
+                    "status": "failed",
+                    "message": "Rendering produced no output.",
+                })
+                return {"success": False, "status": "failed", "exit_code": exit_code}
 
             await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
             return {"success": True, "status": "success"}
@@ -318,9 +347,27 @@ class ManimExecutor:
         if pending:
             await self._handle_line(pending, stream_name, log_callback)
 
+    def _redact_paths(self, line: str) -> str:
+        """Hide the workspace's absolute path in log lines sent to the browser."""
+        workspace = os.path.abspath(self.workspace_dir)
+        redacted = line.replace(workspace, "").replace(workspace.replace("\\", "/"), "")
+        return redacted.replace("\\", "/")
+
     async def _handle_line(self, raw_line: str, stream_name: str, log_callback):
         line = ANSI_PATTERN.sub("", raw_line).rstrip()
+        if self._pending_file_ready:
+            # A wrapped "File ready at" path continues on the next physical line.
+            pending = self._pending_file_ready
+            self._pending_file_ready = None
+            if pending[-1].isspace() or line[:1].isspace():
+                line = f"{pending.rstrip()} {line.lstrip()}"
+            else:
+                line = pending + line.lstrip()
         if not line.strip():
+            return
+
+        if "File ready at" in line and not line.lower().rstrip("'\"").endswith(OUTPUT_EXTENSIONS):
+            self._pending_file_ready = line
             return
 
         bar = TQDM_PATTERN.search(line.strip())
@@ -333,7 +380,7 @@ class ManimExecutor:
             # The first row of a multi-line message; the text follows on the next rows.
             return
 
-        await log_callback({"type": "log", "stream": stream_name, "message": line})
+        await log_callback({"type": "log", "stream": stream_name, "message": self._redact_paths(line)})
 
         bracket = BRACKET_PROGRESS_PATTERN.search(line)
         if bracket:

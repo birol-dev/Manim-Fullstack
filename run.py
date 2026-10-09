@@ -96,7 +96,7 @@ def main() -> None:
         build_frontend(force=args.build)
     except FileNotFoundError:
         print("\n[error] npm was not found on your PATH.", file=sys.stderr)
-        print("Install Node.js 18+ from https://nodejs.org, then run this again.\n", file=sys.stderr)
+        print("Install Node.js 20.19+ from https://nodejs.org, then run this again.\n", file=sys.stderr)
         sys.exit(1)
     except subprocess.CalledProcessError as exc:
         print(f"\n[error] Frontend build failed (exit code {exc.returncode}).", file=sys.stderr)
@@ -107,6 +107,14 @@ def main() -> None:
         print(f"\n[error] Port {args.port} is already in use.", file=sys.stderr)
         print(f"Stop the other process or pick another port:\n    python run.py --port {args.port + 1}\n", file=sys.stderr)
         sys.exit(1)
+
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "\n[warn] This process runs the Python you send it, with no login.\n"
+            "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
+            "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n",
+            file=sys.stderr,
+        )
 
     browser_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0", "::") else args.host
     url = f"http://{browser_host}:{args.port}"
