@@ -165,3 +165,23 @@ def test_missing_forbidden_name_render_is_still_invalid(client, root):
         ws.send_json({"type": "start", "filename": "-ghost.py", "scene": "A", "quality": "l"})
         error, _ = ws.receive_json(), ws.receive_json()
     assert error["message"].startswith("Invalid script filename:")
+
+
+def test_rename_status_codes_match_the_docs(client, root):
+    # PROJECT_REFERENCE.md: 400 for an exact existing name, 409 only for a case/Unicode-form clash.
+    (root / "a.py").write_text("x = 1\n")
+    (root / "b.py").write_text("x = 2\n")
+    (root / NFC_CAFE).write_text("x = 3\n")
+    assert client.post("/api/rename", json={"old_name": "a.py", "new_name": "b.py"}).status_code == 400
+    assert client.post("/api/rename", json={"old_name": "a.py", "new_name": "B.py"}).status_code == 409
+    assert client.post("/api/rename", json={"old_name": "a.py", "new_name": "CAF\u00c9.py"}).status_code == 409
+    assert client.post("/api/rename", json={"old_name": "missing.py", "new_name": "c.py"}).status_code == 404
+    assert _names(root) == ["a.py", "b.py", NFC_CAFE]
+
+
+def test_rename_fixes_an_nfd_legacy_name(client, root):
+    (root / NFD_CAFE).write_text("x = 1\n")
+    res = client.post("/api/rename", json={"old_name": NFD_CAFE, "new_name": NFD_CAFE})
+    assert res.status_code == 200, res.text
+    assert res.json()["new_name"] == NFC_CAFE
+    assert _names(root) == [NFC_CAFE]

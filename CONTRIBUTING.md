@@ -19,7 +19,8 @@ cd frontend && npm run dev        # http://localhost:5173
 
 Watch only `backend/`: a plain `--reload` also watches `workspace/`, so every save or render restarts the server
 and drops the render WebSocket. Without reload, `npm run backend -- --port 8100` (or `MANIM_HOST` / `MANIM_PORT`)
-starts the API on another address; point Vite at it with `MANIM_BACKEND_URL=http://127.0.0.1:8100`.
+starts the API on another address; point Vite at it with `MANIM_BACKEND_URL=http://127.0.0.1:8100`. It refuses a
+port that is already in use, so a second copy never touches a running server's temp files.
 
 ## Before you open a pull request
 
@@ -43,6 +44,10 @@ npm run check     # ESLint, TypeScript, production build, backend import check
 - **Accessibility:** icon-only buttons need an `aria-label` (and usually a `Tooltip`); interactive rows are buttons,
   not clickable `div`s.
 - **Tests:** new behavior gets a test. Frontend tests use the fakes in `src/test/` instead of mocking fetch by hand.
+  Vitest allows 15 s per test and Testing Library waits up to 5 s (`findBy*`/`waitFor`), so the App-level tests
+  survive a loaded machine; use fake timers instead of real waits longer than that.
+- **File names:** the rule lives in `backend/workspace_paths.py` and `frontend/src/lib/format.ts`. Change both together
+  and update `tests/fixtures/filename_rules.json`, which both test suites read.
 
 ## Pull requests
 
