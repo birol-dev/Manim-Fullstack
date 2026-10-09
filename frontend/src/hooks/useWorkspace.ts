@@ -10,16 +10,38 @@ import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } 
  * The file changed on disk since this tab loaded it ("changed"), or it was
  * renamed or deleted elsewhere ("missing"). Nothing was written.
  */
+/** current_version from a 412 body, else its ETag (quotes and a weak W/ prefix removed). */
+export function conflictVersion(err: ApiError): string | null {
+  const fromBody = (err.body as { current_version?: unknown } | null)?.current_version;
+  if (typeof fromBody === "string" && fromBody) return fromBody;
+  const tag = err.etag?.replace(/^W\//, "").replace(/^"|"$/g, "");
+  return tag || null;
+}
+
 export class SaveConflictError extends ApiError {
   readonly reason: "changed" | "missing";
   readonly filename: string;
 
-  constructor(message: string, status: number, filename: string) {
+  /** The version on disk now (a 412's current_version / ETag), so Overwrite needs no extra fetch. */
+  readonly currentVersion: string | null;
+
+  constructor(message: string, status: number, filename: string, currentVersion: string | null = null) {
     super(message, status);
     this.name = "SaveConflictError";
     this.reason = status === 404 ? "missing" : "changed";
     this.filename = filename;
+    this.currentVersion = currentVersion;
   }
+}
+
+export interface SaveOptions {
+  /** Write without any version check (Recreate a deleted file). */
+  force?: boolean;
+  /**
+   * Overwrite exactly this version (the one a conflict reported): the save still
+   * conflicts if the file changed yet again in the meantime.
+   */
+  overwriteVersion?: string;
 }
 
 const EMPTY_FILES: WorkspaceFiles = { scripts: [], assets: [], media: [] };
@@ -303,7 +325,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
    * a SaveConflictError when the file changed or disappeared on disk. *force*
    * writes anyway (the user chose "Overwrite" or "Recreate").
    */
-  const save = useCallback(async (options?: { force?: boolean }): Promise<ParseResult> => {
+  const save = useCallback(async (options?: SaveOptions): Promise<ParseResult> => {
     const name = activeFileRef.current;
     if (!name) throw new Error("No file is open.");
     const mode = modeRef.current;
@@ -327,7 +349,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       const all = loadBrowserFiles();
       // Same rules as the server's base_version check: another tab saved or removed the file.
       const base = browserBaseRef.current[name];
-      if (!options?.force && base !== undefined) {
+      if (!options?.force && !options?.overwriteVersion && base !== undefined) {
         if (!(name in all)) throw new SaveConflictError("This file was renamed or deleted in another tab.", 404, name);
         if (all[name] !== base && all[name] !== content) {
           throw new SaveConflictError("This file was changed in another tab since you opened it.", 412, name);
@@ -347,14 +369,14 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     }
 
     const key = fileKey(mode, name);
-    const baseVersion = options?.force ? undefined : versionsRef.current[key];
+    const baseVersion = options?.overwriteVersion ?? (options?.force ? undefined : versionsRef.current[key]);
     let data: SaveResponse;
     savesInFlight.current += 1;
     try {
       data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, base_version: baseVersion });
     } catch (err) {
       if (err instanceof ApiError && (err.status === 412 || (err.status === 404 && baseVersion !== undefined))) {
-        throw new SaveConflictError(err.message, err.status, name);
+        throw new SaveConflictError(err.message, err.status, name, err.status === 412 ? conflictVersion(err) : null);
       }
       throw err;
     } finally {

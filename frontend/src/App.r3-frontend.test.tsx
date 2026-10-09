@@ -475,3 +475,43 @@ describe("R3 browser verification follow-ups", () => {
     expect(within(screen.getByTestId("other-render")).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 });
+
+describe("412 current_version (#15)", () => {
+  it("Overwrite replaces exactly the version the conflict reported, without an extra fetch", async () => {
+    const { server, editor, user } = await renderApp();
+    fireEvent.change(editor, { target: { value: "# mine\n" } });
+    server.scripts["example.py"] = "# theirs\n";
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    const dialog = await screen.findByRole("dialog");
+    const before = server.calls.length;
+    await user.click(within(dialog).getByRole("button", { name: "Overwrite" }));
+    await waitFor(() => expect(server.scripts["example.py"]).toBe("# mine\n"));
+    const calls = server.calls.slice(before);
+    expect(calls.some((call) => call.path.startsWith("/api/file-content"))).toBe(false);
+    const saveCall = calls.find((call) => call.path === "/api/save")!;
+    const { versionOf } = await import("@/test/fakeServer");
+    expect((saveCall.body as { base_version?: string }).base_version).toBe(versionOf("# theirs\n"));
+  });
+
+  it("asks again when the file changed once more before Overwrite landed", async () => {
+    const { server, editor, user } = await renderApp();
+    fireEvent.change(editor, { target: { value: "# mine\n" } });
+    server.scripts["example.py"] = "# theirs\n";
+    fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+    const dialog = await screen.findByRole("dialog");
+    server.scripts["example.py"] = "# theirs, again\n";
+    await user.click(within(dialog).getByRole("button", { name: "Overwrite" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent("example.py changed in another tab");
+    expect(server.scripts["example.py"]).toBe("# theirs, again\n");
+  });
+});
+
+describe("conflictVersion", () => {
+  it("reads current_version from the body, else the ETag", async () => {
+    const { conflictVersion } = await import("@/hooks/useWorkspace");
+    const { ApiError } = await import("@/lib/api");
+    expect(conflictVersion(new ApiError("x", 412, { current_version: "v9" }, '"v8"'))).toBe("v9");
+    expect(conflictVersion(new ApiError("x", 412, { detail: "x" }, 'W/"v8"'))).toBe("v8");
+    expect(conflictVersion(new ApiError("x", 412, null, null))).toBeNull();
+  });
+});

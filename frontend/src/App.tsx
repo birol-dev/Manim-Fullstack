@@ -26,7 +26,7 @@ import { useMinimumStopping } from "@/hooks/useMinimumStopping";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOutput } from "@/hooks/useRenderSession";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
-import { SaveConflictError, useWorkspace } from "@/hooks/useWorkspace";
+import { SaveConflictError, useWorkspace, type SaveOptions } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE, getMaxCodeBytes, renderBlockReason, utf8ByteLength } from "@/lib/constants";
 import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
@@ -258,7 +258,7 @@ export default function App() {
   const lastRenderedCode = useRef<string | null>(null);
   const startingRef = useRef(false);
 
-  const saveRef = useRef<(options?: { force?: boolean }) => Promise<void>>(async () => {});
+  const saveRef = useRef<(options?: SaveOptions) => Promise<void>>(async () => {});
   /** Toast a failed save, or ask what to do when the file changed or vanished on disk. */
   const reportSaveError = useCallback(
     (err: unknown, fallback: string) => {
@@ -284,7 +284,9 @@ export default function App() {
               tone: "danger",
               conflict: true,
               secondaryLabel: "Reload theirs",
-              onConfirm: () => saveRef.current({ force: true }),
+              // Replace the version the server reported (412 current_version): if it changes
+              // yet again before this lands, the save asks again instead of clobbering it.
+              onConfirm: () => saveRef.current(err.currentVersion ? { overwriteVersion: err.currentVersion } : { force: true }),
               onSecondary: () => workspace.reloadFromDisk(),
             },
       );
@@ -372,7 +374,7 @@ export default function App() {
   });
 
   const save = useCallback(
-    async (options?: { force?: boolean }) => {
+    async (options?: SaveOptions) => {
       if (!workspace.activeFile) return;
       try {
         const result = await workspace.save(options);
@@ -876,7 +878,7 @@ export default function App() {
       </div>
 
       <NewFileDialog request={newFile} existing={scriptNames} onClose={() => setNewFile(null)} onCreate={createFile} />
-      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+      <ConfirmDialog request={confirm} onClose={(closing) => setConfirm((current) => (current === closing ? null : current))} />
       <CompareDialog open={compareOpen} onOpenChange={setCompareOpen} videos={videos} />
       <SetupDialog
         open={setupOpen}
