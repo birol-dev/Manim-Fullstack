@@ -3,7 +3,18 @@ import { toast } from "sonner";
 
 import { ApiError, deleteRequest, errorMessage, postJson, requestJson } from "@/lib/api";
 import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMaxCodeBytes } from "@/lib/constants";
-import { loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "@/lib/storage";
+import { foldFilename } from "@/lib/format";
+import {
+  browserFileKey,
+  deleteBrowserFile,
+  isBrowserFilesKey,
+  loadBrowserFiles,
+  readBrowserFile,
+  readStored,
+  STORAGE_KEYS,
+  writeBrowserFile,
+  writeStored,
+} from "@/lib/storage";
 import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } from "@/lib/types";
 
 /**
@@ -90,9 +101,23 @@ function browserScriptList(): ScriptFile[] {
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 }
 
-function parseCode(code: string): Promise<ParseResult> {
+/** Rejects (never throws synchronously) so every caller's .catch / try sees a too-large buffer. */
+async function parseCode(code: string): Promise<ParseResult> {
   assertCodeSize(code);
-  return postJson<ServerParse>("/api/parse-code", { code }).then(asParseResult);
+  return asParseResult(await postJson<ServerParse>("/api/parse-code", { code }));
+}
+
+/**
+ * Browser storage: the same "already exists" rule as the server (NFC + case fold,
+ * fold_filename()), so two scripts can't differ only by case. *except* is the file
+ * being renamed (a case-only rename of itself is fine).
+ */
+function browserNameClash(name: string, except?: string): string | null {
+  const names = Object.keys(loadBrowserFiles()).filter((other) => other !== except);
+  if (names.includes(name)) return `${name} already exists.`;
+  const folded = foldFilename(name);
+  const clash = names.find((other) => foldFilename(other) === folded);
+  return clash ? `'${clash}' already exists. File names that differ only by case are not allowed.` : null;
 }
 
 function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -242,11 +267,21 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     async (name: string): Promise<boolean> => {
       const seq = ++loadSeq.current;
       if (modeRef.current === "browser") {
-        const stored = loadBrowserFiles()[name] ?? "";
+        const stored = readBrowserFile(name) ?? "";
+        const draft = draftsRef.current[fileKey("browser", name)];
+        // Parse before showing, like a disk file arrives with its parse: the scene picker,
+        // timeline, and preview never show the previous file's scenes for this one.
+        const result = await parseCode(draft ?? stored).catch(() => null);
+        if (seq !== loadSeq.current) return false;
         // A restored draft stays based on what it was edited from.
         if (!(fileKey("browser", name) in draftsRef.current && name in browserBaseRef.current)) browserBaseRef.current[name] = stored;
         showBuffer(name, stored);
-        parsedCodeRef.current = null; // parsed by the debounced effect
+        if (result && codeRef.current === (draft ?? stored)) applyParse(result, name, codeRef.current);
+        else {
+          // Offline or too large: nothing from the previous file; the debounced parse retries.
+          applyParse(EMPTY_PARSE, name, "");
+          parsedCodeRef.current = null;
+        }
         return true;
       }
       const data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
@@ -304,6 +339,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       const result = await parseCode(source).catch((err: unknown) => {
         if (codeRef.current === source && err instanceof ApiError && err.status === 413) {
           toast.error(err.message, { id: "code-size" });
+          // The last scene list and timeline describe code that is no longer there: clear
+          // them (the selected scene is kept, so it comes back once the file fits again).
+          // (Not marked as parsed: undoing back to the old code must parse it again.)
+          parsedCodeRef.current = null;
+          parsedRef.current = EMPTY_PARSE;
+          setParsed(EMPTY_PARSE);
         }
         return null;
       });
@@ -347,17 +388,18 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     };
 
     if (mode === "browser") {
-      const all = loadBrowserFiles();
+      // Only this file's key is read and written: other scripts are never rewritten, so a
+      // tab with a stale view of storage can't undo another tab's save of a different file.
+      const stored = readBrowserFile(name);
       // Same rules as the server's base_version check: another tab saved or removed the file.
       const base = browserBaseRef.current[name];
       if (!options?.force && !options?.overwriteVersion && base !== undefined) {
-        if (!(name in all)) throw new SaveConflictError("This file was renamed or deleted in another tab.", 404, name);
-        if (all[name] !== base && all[name] !== content) {
+        if (stored === undefined) throw new SaveConflictError("This file was renamed or deleted in another tab.", 404, name);
+        if (stored !== base && stored !== content) {
           throw new SaveConflictError("This file was changed in another tab since you opened it.", 412, name);
         }
       }
-      all[name] = content;
-      if (!saveBrowserFiles(all)) throw new Error("Browser storage is full. Delete some scripts and try again.");
+      if (!writeBrowserFile(name, content)) throw new Error("Browser storage is full. Delete some scripts and try again.");
       browserBaseRef.current[name] = content;
       markSaved();
       setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
@@ -395,10 +437,9 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     async (name: string, content: string) => {
       let created = name;
       if (modeRef.current === "browser") {
-        const all = loadBrowserFiles();
-        if (name in all) throw new Error(`${name} already exists.`);
-        all[name] = content;
-        if (!saveBrowserFiles(all)) throw new Error("Browser storage is full.");
+        const clash = browserNameClash(name);
+        if (clash) throw new Error(clash);
+        if (!writeBrowserFile(name, content)) throw new Error("Browser storage is full.");
         browserBaseRef.current[name] = content;
       } else {
         const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, create_only: true });
@@ -416,11 +457,20 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     async (oldName: string, newName: string) => {
       if (oldName === newName) return;
       if (modeRef.current === "browser") {
-        const all = loadBrowserFiles();
-        if (newName in all) throw new Error(`${newName} already exists.`);
-        all[newName] = all[oldName] ?? "";
-        delete all[oldName];
-        if (!saveBrowserFiles(all)) throw new Error("Browser storage is full.");
+        const source = readBrowserFile(oldName);
+        if (source === undefined) {
+          // Another tab renamed or deleted it. Don't write an empty file under the new name:
+          // the open buffer keeps its text and the "no longer exists" dialog offers Recreate.
+          void refreshFiles();
+          if (activeFileRef.current === oldName) {
+            throw new SaveConflictError("This file was renamed or deleted in another tab.", 404, oldName);
+          }
+          throw new Error(`${oldName} no longer exists. It was renamed or deleted in another tab.`);
+        }
+        const clash = browserNameClash(newName, oldName);
+        if (clash) throw new Error(clash);
+        if (!writeBrowserFile(newName, source)) throw new Error("Browser storage is full.");
+        deleteBrowserFile(oldName);
         if (oldName in browserBaseRef.current) {
           browserBaseRef.current[newName] = browserBaseRef.current[oldName];
           delete browserBaseRef.current[oldName];
@@ -463,9 +513,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   const deleteFile = useCallback(
     async (name: string) => {
       if (modeRef.current === "browser") {
-        const all = loadBrowserFiles();
-        delete all[name];
-        saveBrowserFiles(all);
+        deleteBrowserFile(name);
         delete browserBaseRef.current[name];
       } else {
         await deleteRequest("/api/scripts", { filename: name });
@@ -490,7 +538,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     const name = activeFileRef.current;
     if (!name) return;
     if (modeRef.current === "browser") {
-      const stored = loadBrowserFiles()[name];
+      const stored = readBrowserFile(name);
       if (stored === undefined) return;
       browserBaseRef.current[name] = stored;
       codeRef.current = stored;
@@ -557,9 +605,9 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (reloaded) toast.info(`Reloaded ${name}`, { id: "external-change", description: "It was changed in another tab or program." });
       return;
     }
-    toast.warning(`${name} changed in another tab`, {
+    toast.warning(`${name} changed outside this tab`, {
       id: "external-change",
-      description: "You have unsaved edits here. Saving will ask which version to keep.",
+      description: "It was changed in another tab or program. You have unsaved edits here; saving will ask which version to keep.",
       action: { label: "Reload theirs", onClick: () => void reloadFromDisk() },
     });
   }, [applyParse, refreshFiles, reloadFromDisk, save]);
@@ -588,11 +636,13 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   useEffect(() => {
     if (mode !== "browser") return;
     const onStorage = (event: StorageEvent) => {
-      if (event.key !== STORAGE_KEYS.browserFiles && event.key !== null) return;
+      if (!isBrowserFilesKey(event.key)) return;
       setFiles((previous) => ({ ...previous, scripts: browserScriptList() }));
       const name = activeFileRef.current;
       if (!name || noticesHeldRef.current || modeRef.current !== "browser") return;
-      const stored = loadBrowserFiles()[name];
+      // Scripts are stored one key each: a change to another script is only a list update.
+      if (event.key?.startsWith(browserFileKey("")) && event.key !== browserFileKey(name)) return;
+      const stored = readBrowserFile(name);
       const base = browserBaseRef.current[name];
       if (stored === base) return;
       if (stored === undefined) {

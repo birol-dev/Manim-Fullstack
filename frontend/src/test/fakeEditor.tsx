@@ -9,6 +9,7 @@ export const editorCalls: Array<[string, ...unknown[]]> = [];
 
 /** A textarea standing in for Monaco (which can't run in jsdom). */
 export const FakeCodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function FakeCodeEditor(props, ref) {
+  const textarea = useRef<HTMLTextAreaElement>(null);
   const latest = useRef(props);
   latest.current = props;
 
@@ -28,11 +29,14 @@ export const FakeCodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(func
     clearMarkers() {
       editorCalls.push(["clearMarkers"]);
     },
-    focus() {},
+    focus() {
+      textarea.current?.focus();
+    },
   }));
 
   return (
     <textarea
+      ref={textarea}
       aria-label="Code editor"
       data-path={props.path}
       value={props.value}

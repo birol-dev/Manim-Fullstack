@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { wsUrl } from "@/lib/api";
-import type { OutputKind, Quality } from "@/lib/types";
+import type { OutputKind, Quality, StorageMode } from "@/lib/types";
 import type { LogLevel } from "./useLogs";
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
 export interface RenderRequest {
   filename: string;
+  /** Where *filename* lives: disk my_scene.py and browser-storage my_scene.py are different files. */
+  storage?: StorageMode;
   scene: string;
   quality: Quality;
   useOpenGL: boolean;
@@ -106,6 +108,9 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
   const socketRef = useRef<WebSocket | null>(null);
   const activeRef = useRef<ActiveRender | null>(null);
   const outputRef = useRef<RenderOutput | null>(null);
+  // The render that finished last: a server error naming it after its result (the socket
+  // failing as it stopped) still belongs in its log, not in a later render's.
+  const finishedIdRef = useRef<string | null>(null);
   const queueRef = useRef<string[]>([]);
   const attemptRef = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,6 +130,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     (success: boolean, status: string) => {
       const render = activeRef.current;
       if (!render) return;
+      finishedIdRef.current = render.id;
       setStopping(false);
       updateActive(null);
       const output = outputRef.current;
@@ -145,8 +151,14 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     (event: ServerEvent) => {
       const render = activeRef.current;
       const { log } = callbacks.current;
-      // Events from a render we already gave up on.
-      if (event.render_id != null && event.render_id !== render?.id) return;
+      // Events from a render we already gave up on. The one exception: an error naming the
+      // render that just finished, while nothing newer runs, is still shown (it explains that render).
+      if (event.render_id != null && event.render_id !== render?.id) {
+        if (event.type === "error" && !render && event.render_id === finishedIdRef.current) {
+          log("error", event.message ?? "Unknown server error.");
+        }
+        return;
+      }
 
       if (render && event.render_id === render.id) {
         if ((event.type === "queued" || event.type === "queue_position") && !render.started) {
@@ -179,9 +191,10 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           log("warning", event.message ?? "");
           break;
         case "error":
+          // The server names the render an error belongs to (render_id), and every render's
+          // error is followed by its result, which ends it. An error with no render_id is about
+          // the connection or a malformed message, not the running render: log it, keep the render.
           log("error", event.message ?? "Unknown server error.");
-          // Errors tied to a render are always followed by a result; others are not.
-          if (event.render_id == null) finish(false, "error");
           break;
         case "progress":
           if (activeRef.current) {
@@ -367,10 +380,24 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     }
   }, [finish]);
 
+  /**
+   * The script being rendered was renamed: keep the job attached to it, so its progress,
+   * Cancel, and result follow the file under its new name. Only the client's label
+   * changes; the server keeps rendering the code it was given.
+   */
+  const retarget = useCallback(
+    (storage: StorageMode, from: string, to: string) => {
+      const render = activeRef.current;
+      if (!render || render.request.filename !== from || (render.request.storage ?? storage) !== storage) return;
+      updateActive({ ...render, request: { ...render.request, filename: to } });
+    },
+    [updateActive],
+  );
+
   const reconnect = useCallback(() => {
     attemptRef.current = 0;
     connect();
   }, [connect]);
 
-  return { connection, active, stopping, start, cancel, reconnect };
+  return { connection, active, stopping, start, cancel, reconnect, retarget };
 }

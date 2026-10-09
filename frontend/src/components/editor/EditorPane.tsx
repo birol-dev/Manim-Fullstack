@@ -140,6 +140,8 @@ interface EditorPaneProps {
   canRender: boolean;
   /** Why Render won't run this buffer (size limit, syntax error): the button says so instead of rendering. */
   renderBlocked?: string | null;
+  /** The buffer is over the size limit (shown as a banner whatever else blocks Render). */
+  oversize?: string | null;
   fontSize: number;
   syntaxError?: SyntaxErrorInfo | null;
   stopping?: boolean;
@@ -161,7 +163,8 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
   // Only when Render would otherwise be available (not while rendering, offline, ...).
   const blocked = props.canRender && props.renderBlocked ? props.renderBlocked : null;
-  const oversize = props.renderBlocked && !props.syntaxError ? props.renderBlocked : null;
+  // Its own prop: the "another file is rendering" reason must never show in this banner.
+  const oversize = props.oversize ?? null;
 
   return (
     <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">

@@ -114,6 +114,10 @@ function Tooltip({ content, shortcut, side = "bottom", align = "center", sideOff
         }}
         onBlur={() => {
           clicked.current = false;
+          // A dialog opened from here covers the trigger, so no pointerleave arrives; when
+          // focus comes back after it closes, that must not count as hovering (the hint
+          // would sit there until the pointer moves). The next pointer move sets it again.
+          hovered.current = false;
           close();
         }}
       >
