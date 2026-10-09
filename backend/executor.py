@@ -11,6 +11,7 @@ Events passed to ``log_callback`` are plain dicts with a ``type`` key:
 
 import asyncio
 import codecs
+import functools
 import os
 import platform
 import re
@@ -19,6 +20,8 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import time
+import unicodedata
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
 IMAGE_EXTENSIONS = (".png", ".gif")
@@ -42,6 +45,14 @@ FILE_READY_PATTERN = re.compile(
 FILE_READY_LEAD = re.compile(r"File ready at:?$")
 # Rich log rows end with a right-aligned "module.py:123" column; it is noise in the UI.
 RICH_SOURCE_COLUMN = re.compile(r"\s{2,}[\w.-]+\.py:\d+$")
+# A source line quoted in a Rich traceback: "│ ❱ 12 │ code" (the user's own code).
+RICH_CODE_LINE = re.compile(r"^[│┃]\s+(?:❱\s+)?\d+\s+[│┃]")
+# One row of a Rich box: "│ text │".
+BOX_LINE = re.compile(r"^(?P<left>[│┃] )(?P<body>.*?)(?P<right> [│┃])$")
+MAX_BOX_CHAIN = 32
+# A "File ready at" output older than the run start (minus this, for coarse
+# filesystem timestamps) is not this run's output.
+FILE_READY_MTIME_SLACK_NS = 2_000_000_000
 RICH_LEVEL_ONLY = re.compile(r"^(?:\[[^\]]*\]\s+)?(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 LATEX_PATTERN = re.compile(r"latex|dvisvgm", re.IGNORECASE)
 FAILURE_PATTERN = re.compile(r"error|fail|not found|no such file", re.IGNORECASE)
@@ -72,12 +83,154 @@ def media_rel_path(abs_path: str) -> str:
     return os.path.basename(abs_path)
 
 
-def keep_box_width(original: str, shortened: str) -> str:
-    """Pad a shortened boxed Rich traceback line so its right border still lines up."""
-    removed = len(original) - len(shortened)
-    if removed > 0 and shortened.endswith(("│", "┃")):
-        return shortened[:-1] + " " * removed + shortened[-1]
-    return shortened
+def cell_len(text: str) -> int:
+    """Terminal cells *text* takes up (CJK and emoji are two wide), as Rich counts them."""
+    try:
+        from rich.cells import cell_len as rich_cell_len
+    except ImportError:  # Rich ships with Manim; the API can run without it
+        width = 0
+        for ch in text:
+            if unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+                continue
+            width += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        return width
+    return rich_cell_len(text)
+
+
+BOX_BORDERS = ("│", "┃")
+
+
+def keep_box_width(original: str, changed: str) -> str:
+    """Keep the right border of a boxed Rich traceback line where it was.
+
+    A shorter line is padded before the border; a longer one gives back spaces
+    from the padding (keeping one). Widths are terminal cells, so CJK counts double.
+    """
+    if not changed.endswith(BOX_BORDERS) or not original.endswith(BOX_BORDERS):
+        return changed
+    delta = cell_len(original) - cell_len(changed)
+    if delta > 0:
+        return changed[:-1] + " " * delta + changed[-1]
+    if delta < 0:
+        body = changed[:-1]
+        spare = len(body) - len(body.rstrip(" ")) - 1
+        take = min(max(spare, 0), -delta)
+        if take:
+            return body[: len(body) - take] + changed[-1]
+    return changed
+
+
+# Hosts paths are replaced by these markers before log lines reach the browser.
+WORKSPACE_MARKER = "<workspace>"
+APP_MARKER = "<app>"
+
+
+def _redaction_candidates(workspace_dir, app_root):
+    """(path, replacement) pairs; the workspace with a separator becomes "" (relative paths)."""
+    paths = sysconfig.get_paths()
+    candidates = [(workspace_dir, WORKSPACE_MARKER)]
+    candidates += [(paths.get(key), "<site-packages>") for key in ("purelib", "platlib")]
+    candidates += [(paths.get(key), "<python-lib>") for key in ("stdlib", "platstdlib")]
+    if sys.prefix != sys.base_prefix:
+        candidates.append((sys.prefix, "<venv>"))  # a virtualenv's own root, never /usr
+    if app_root:
+        candidates.append((app_root, APP_MARKER))
+    candidates += [(tempfile.gettempdir(), "<tmp>"), (os.path.expanduser("~"), "~")]
+    return candidates
+
+
+@functools.lru_cache(maxsize=32)
+def _compile_redaction(workspace_dir, app_root, home, tmp):
+    del home, tmp  # cache keys only: rules change when HOME or TMPDIR change
+    fold = os.path.normcase("A") == "a"  # case-insensitive paths (Windows)
+    lookup = {}
+    with_separator = set()
+    for raw, replacement in _redaction_candidates(workspace_dir, app_root):
+        if not raw:
+            continue
+        path = os.path.abspath(raw).rstrip("\\/")
+        # "/" or "C:" would match far too much.
+        if len(path.replace("\\", "/").strip("/")) <= 2:
+            continue
+        # Windows output can use either separator; POSIX paths only have "/".
+        for variant in {path, path.replace("\\", "/")}:
+            key = variant.lower() if fold else variant
+            lookup.setdefault(key, replacement)
+            if replacement == WORKSPACE_MARKER:
+                # "<workspace>/scene.py" becomes "scene.py"; the bare folder "<workspace>".
+                for sep in {os.sep, "/"}:
+                    with_separator.add(key + sep)
+                    lookup.setdefault(key + sep, "")
+    if not lookup:
+        return None, lookup
+
+    def alternation(keys):
+        return "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+
+    plain = [key for key in lookup if key not in with_separator]
+    # A whole path only: "/home/box" must not eat "/home/boxer" or "/home/box.bak",
+    # but a sentence may end right after it ("saved in /home/box.").
+    whole = rf"(?:{alternation(plain)})(?![\w-]|\.[\w-])"
+    if with_separator:
+        whole = rf"(?:{alternation(with_separator)})|{whole}"
+    # ...and must start a path: "/workspace" inside "/srv/workspace" is left alone,
+    # except right after a file:// scheme.
+    start = r"(?:(?<=file://)|(?<=file:///)|(?<![\w.\-/\\]))"
+    pattern = re.compile(rf"{start}(?:{whole})", re.IGNORECASE if fold else 0)
+    return pattern, lookup
+
+
+def _redaction_for(workspace_dir, app_root=None):
+    return _compile_redaction(
+        os.path.abspath(workspace_dir) if workspace_dir else "",
+        os.path.abspath(app_root) if app_root else None,
+        os.path.expanduser("~"),
+        tempfile.gettempdir(),
+    )
+
+
+def redact_with_offsets(text: str, workspace_dir, app_root=None):
+    """Redact *text*; also return a function mapping an index in *text* to the output.
+
+    An index inside a replaced path maps to the end of its replacement.
+    """
+    pattern, lookup = _redaction_for(workspace_dir, app_root)
+    if pattern is None:
+        return text, (lambda index: index)
+    fold = os.path.normcase("A") == "a"
+    pieces = []
+    spans = []  # (start, end, out_end)
+    last = 0
+    length = 0
+    for match in pattern.finditer(text):
+        pieces.append(text[last:match.start()])
+        length += match.start() - last
+        replacement = lookup[match.group(0).lower() if fold else match.group(0)]
+        if replacement == "" and text[max(0, match.start() - 7):match.start()].lower() in ("file://", "ile:///"):
+            replacement = WORKSPACE_MARKER + "/"  # "file://scene.py" would not be a URI
+        pieces.append(replacement)
+        length += len(replacement)
+        spans.append((match.start(), match.end(), length))
+        last = match.end()
+    pieces.append(text[last:])
+    out = "".join(pieces)
+
+    def mapped(index: int) -> int:
+        shift = 0
+        for start, end, out_end in spans:
+            if index <= start:
+                break
+            if index < end:
+                return out_end
+            shift = out_end - end
+        return index + shift
+
+    return out, mapped
+
+
+def redact_host_paths(text: str, workspace_dir, app_root=None) -> str:
+    """Hide host paths (workspace, app folder, Python install, temp, home) in *text*."""
+    return redact_with_offsets(text, workspace_dir, app_root)[0]
 
 
 def output_kind(path: str) -> str:
@@ -86,8 +239,10 @@ def output_kind(path: str) -> str:
 
 
 class ManimExecutor:
-    def __init__(self, workspace_dir: str, render_timeout=None):
+    def __init__(self, workspace_dir: str, render_timeout=None, app_root=None):
         self.workspace_dir = workspace_dir
+        # The folder the app lives in (the workspace's parent); shown as <app>.
+        self.app_root = app_root
         self.current_process = None
         self.render_timeout = (
             DEFAULT_RENDER_TIMEOUT_SECONDS if render_timeout is None else float(render_timeout)
@@ -100,7 +255,10 @@ class ManimExecutor:
         self._latex_warned = False
         self._last_progress = None
         self._previous_outputs = {}
-        self._redaction = None
+        self._box_carry = {}
+        self._output_stem = None
+        self._hidden_config = None
+        self._run_started_ns = 0
 
     @property
     def is_running(self) -> bool:
@@ -206,12 +364,26 @@ class ManimExecutor:
             "kind": output_kind(abs_path),
         })
 
-    async def execute(self, manim_path, script_name: str, scene_name: str, quality: str, use_opengl: bool, log_callback):
+    async def execute(
+        self,
+        manim_path,
+        script_name: str,
+        scene_name: str,
+        quality: str,
+        use_opengl: bool,
+        log_callback,
+        output_stem=None,
+        extra_args=None,
+    ):
         """Render *scene_name* from *script_name* and stream events to *log_callback*.
 
         *manim_path* is the manim executable, or an argv prefix such as
         ``[sys.executable, "-m", "manim"]``. Quality is one of l, m, h, k.
+        *output_stem* is the media folder the output lands in when it differs
+        from the script's own stem (a snapshot rendered with a per-run config);
+        *extra_args* are passed to Manim but not shown in the command echo.
         """
+        output_stem = output_stem or os.path.splitext(script_name)[0]
         if self.is_running:
             await self.cancel()
 
@@ -222,13 +394,15 @@ class ManimExecutor:
         self._pending_file_ready = None
         self._latex_warned = False
         self._last_progress = None
+        self._box_carry = {}
         self.current_process = None
+        output_name = output_stem + ".py"
         # Outputs that exist before Manim starts; the disk-scan fallback ignores them.
-        self._previous_outputs = self._output_snapshot(script_name, scene_name)
+        self._previous_outputs = self._output_snapshot(output_name, scene_name)
 
         prefix = list(manim_path) if isinstance(manim_path, (list, tuple)) else [manim_path]
         args = self.build_args(script_name, scene_name, quality, use_opengl)
-        cmd = prefix + args
+        cmd = prefix + args + list(extra_args or [])
         await log_callback({"type": "info", "message": f"$ manim {' '.join(args)}"})
 
         popen_kwargs = {
@@ -247,6 +421,13 @@ class ManimExecutor:
             popen_kwargs["start_new_session"] = True
 
         process = None
+        self._output_stem = output_stem
+        args_list = list(extra_args or [])
+        self._hidden_config = (
+            os.path.basename(args_list[args_list.index("--config_file") + 1])
+            if "--config_file" in args_list[:-1] else None
+        )
+        self._run_started_ns = time.time_ns()
         try:
             process = await asyncio.create_subprocess_exec(*cmd, **popen_kwargs)
             self.current_process = process
@@ -287,8 +468,8 @@ class ManimExecutor:
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
             if not self._last_file_ready:
-                latest = self._find_latest_render(script_name, scene_name, self._previous_outputs)
-                if latest:
+                latest = self._find_latest_render(output_name, scene_name, self._previous_outputs)
+                if latest and self._trusted_output(latest):
                     await self._emit_file_ready(latest, log_callback)
 
             if not self._last_file_ready:
@@ -317,6 +498,8 @@ class ManimExecutor:
         finally:
             self._executing = False
             self._cancel_pending = False
+            self._output_stem = None
+            self._hidden_config = None
             if self.current_process is process:
                 self.current_process = None
 
@@ -377,79 +560,141 @@ class ManimExecutor:
             *lines, pending = LINE_SPLIT_PATTERN.split(pending)
             for line in lines:
                 await self._handle_line(line, stream_name, log_callback)
-            if len(pending) > MAX_PENDING_LINE_CHARS:
-                await self._handle_line(pending, stream_name, log_callback)
-                pending = ""
+            while len(pending) > MAX_PENDING_LINE_CHARS:
+                # Cut an endless line at a space, so a path is never split in two
+                # (each half would slip past redaction).
+                cut = max(pending.rfind(" ", 0, MAX_PENDING_LINE_CHARS), pending.rfind("\t", 0, MAX_PENDING_LINE_CHARS))
+                if cut < MAX_PENDING_LINE_CHARS // 2:
+                    cut = MAX_PENDING_LINE_CHARS
+                await self._handle_line(pending[:cut], stream_name, log_callback)
+                pending = pending[cut:]
         pending += decoder.decode(b"", final=True)
         if pending:
             await self._handle_line(pending, stream_name, log_callback)
+        await self._flush_box_carry(stream_name, log_callback)
 
     def _redaction_rules(self):
         """(compiled pattern, replacement lookup) for host paths hidden from the browser.
 
         The workspace prefix and its separator are removed, so paths come out
-        relative ("scene.py:5", "media/videos/..."); site-packages, the standard
-        library, and the virtualenv root become ``<site-packages>``,
+        relative ("scene.py:5", "media/videos/..."), and the bare workspace folder
+        becomes ``<workspace>``; the app folder ``<app>``; site-packages, the
+        standard library, and the virtualenv root ``<site-packages>``,
         ``<python-lib>``, and ``<venv>``; the temp dir ``<tmp>``; and the home
         directory ``~``. Both separator styles are matched; nothing else in the
         line is touched, so ``\\frac`` or ``C:\\Users`` typed by the user survive.
         """
-        if self._redaction is not None:
-            return self._redaction
-        paths = sysconfig.get_paths()
-        candidates = [(self.workspace_dir, "")]
-        candidates += [(paths.get(key), "<site-packages>") for key in ("purelib", "platlib")]
-        candidates += [(paths.get(key), "<python-lib>") for key in ("stdlib", "platstdlib")]
-        if sys.prefix != sys.base_prefix:
-            candidates.append((sys.prefix, "<venv>"))  # a virtualenv's own root, never /usr
-        candidates += [(tempfile.gettempdir(), "<tmp>"), (os.path.expanduser("~"), "~")]
-        fold = os.path.normcase("A") == "a"  # case-insensitive paths (Windows)
-        lookup = {}
-        with_separator = set()
-        for raw, replacement in candidates:
-            if not raw:
-                continue
-            path = os.path.abspath(raw).rstrip("\\/")
-            # "/" or "C:" would match far too much.
-            if len(path.replace("\\", "/").strip("/")) <= 2:
-                continue
-            # Windows output can use either separator; POSIX paths only have "/".
-            for variant in {path, path.replace("\\", "/")}:
-                key = variant.lower() if fold else variant
-                lookup.setdefault(key, replacement)
-                if replacement == "":
-                    # "<workspace>/scene.py" becomes "scene.py", not "/scene.py".
-                    for sep in {os.sep, "/"}:
-                        with_separator.add(key + sep)
-                        lookup.setdefault(key + sep, "")
-        if not lookup:
-            self._redaction = (None, lookup)
-            return self._redaction
-
-        def alternation(keys):
-            return "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
-
-        plain = [key for key in lookup if key not in with_separator]
-        whole = rf"(?:{alternation(plain)})(?![\w.-])"
-        if with_separator:
-            whole = rf"(?:{alternation(with_separator)})|{whole}"
-        # A prefix only counts as a whole path: "/home/box" must not eat "/home/boxer",
-        # and "/workspace" must not match inside "/srv/workspace".
-        pattern = re.compile(rf"(?<![\w.\-/\\])(?:{whole})", re.IGNORECASE if fold else 0)
-        self._redaction = (pattern, lookup)
-        return self._redaction
+        return _redaction_for(self.workspace_dir, self.app_root)
 
     def _redact_paths(self, line: str) -> str:
-        """Hide host paths (workspace, Python install, temp, home) in log lines sent to the browser."""
-        pattern, lookup = self._redaction_rules()
-        if pattern is None:
+        """Hide host paths in a log line sent to the browser.
+
+        Source lines quoted in a Rich traceback (``│ ❱ 12 │ x = "/tmp/a"``) are
+        the user's own code and are left exactly as written.
+        """
+        if RICH_CODE_LINE.match(line):
             return line
-        fold = os.path.normcase("A") == "a"
-        redacted = pattern.sub(lambda match: lookup[match.group(0).lower() if fold else match.group(0)], line)
+        redacted = redact_host_paths(line, self.workspace_dir, self.app_root)
         return keep_box_width(line, redacted)
+
+    @staticmethod
+    def _box_word(line: str):
+        """The match for a boxed Rich line filled edge to edge by one word (a wrapped path)."""
+        match = BOX_LINE.match(line)
+        if match and match.group("body") and not any(ch.isspace() for ch in match.group("body")):
+            return match
+        return None
+
+    def _rejoin_box_lines(self, lines):
+        """Redact a path that Rich folded over several boxed lines, keeping the box.
+
+        The pieces are joined, redacted as one path, and folded again to the
+        box width.
+        """
+        parts = [BOX_LINE.match(line) for line in lines]
+        if any(part is None for part in parts):
+            return [self._redact_paths(line) for line in lines]
+        width = cell_len(parts[0].group("body"))
+        bodies = [part.group("body") for part in parts[:-1]] + [parts[-1].group("body").rstrip()]
+        joined = "".join(bodies)
+        redacted = redact_with_offsets(joined, self.workspace_dir, self.app_root)[0]
+        if redacted == joined:
+            return [self._redact_paths(line) for line in lines]
+        # Rich folded one long word, so the breaks carry no meaning: fold the
+        # redacted text again. Only " in <function>" after a frame path is a real
+        # word break, and it stays on its own line.
+        tail = None
+        if len(bodies) > 1 and bodies[-1].startswith("in "):
+            tail = bodies[-1]
+            folded = redact_with_offsets("".join(bodies[:-1]), self.workspace_dir, self.app_root)[0]
+        else:
+            folded = redacted
+        left, right = parts[0].group("left"), parts[0].group("right")
+        out = []
+        for segment in ([folded, tail] if tail is not None else [folded]):
+            while segment:
+                piece = segment
+                while cell_len(piece) > width:
+                    piece = piece[:-1]
+                if piece != segment and " " in piece.strip():
+                    # Real words ("in boom") wrap at a space, as Rich would.
+                    piece = piece[: piece.rstrip().rindex(" ") + 1]
+                segment = segment[len(piece):].lstrip(" ") if piece != segment else ""
+                piece = piece.rstrip(" ") or piece
+                out.append(left + piece + " " * max(width - cell_len(piece), 0) + right)
+        return out or [self._redact_paths(line) for line in lines]
+
+    async def _flush_box_carry(self, stream_name, log_callback):
+        carry = self._box_carry.pop(stream_name, None)
+        if carry:
+            for line in carry:
+                await self._process_line(line, stream_name, log_callback)
+
+    def _trusted_output(self, abs_path: str) -> bool:
+        """A "File ready at" path counts only if this run could have written it.
+
+        It must resolve inside this script's own media folders and be modified
+        at or after the render started; user code printing a fake line pointing
+        at an older video (or anything else on disk) is ignored.
+        """
+        if self._output_stem is None:
+            return True  # not inside execute(): unit tests feeding lines directly
+        try:
+            real = os.path.realpath(abs_path)
+            info = os.stat(real)
+        except OSError:
+            return False
+        if not os.path.isfile(real):
+            return False
+        inside = False
+        for subdir in ("videos", "images"):
+            root = os.path.realpath(os.path.join(self.workspace_dir, "media", subdir, self._output_stem))
+            if os.path.normcase(real).startswith(os.path.normcase(root) + os.sep):
+                inside = True
+                break
+        if not inside:
+            return False
+        return info.st_mtime_ns >= self._run_started_ns - FILE_READY_MTIME_SLACK_NS
 
     async def _handle_line(self, raw_line: str, stream_name: str, log_callback):
         line = ANSI_PATTERN.sub("", raw_line).rstrip()
+        carry = self._box_carry.get(stream_name)
+        if carry is not None:
+            if BOX_LINE.match(line) and len(carry) < MAX_BOX_CHAIN:
+                carry.append(line)
+                if self._box_word(line):
+                    return  # the folded path goes on
+                del self._box_carry[stream_name]
+                for joined in self._rejoin_box_lines(carry):
+                    await self._process_line(joined, stream_name, log_callback, redacted=True)
+                return
+            await self._flush_box_carry(stream_name, log_callback)
+        if self._box_word(line):
+            self._box_carry[stream_name] = [line]
+            return
+        await self._process_line(line, stream_name, log_callback)
+
+    async def _process_line(self, line: str, stream_name: str, log_callback, redacted: bool = False):
         if self._pending_file_ready:
             # A wrapped "File ready at" path continues on the next physical line.
             pending = self._pending_file_ready
@@ -461,6 +706,8 @@ class ManimExecutor:
                 line = pending + line.lstrip()
         if not line.strip():
             return
+        if self._hidden_config and "Reading config file" in line and self._hidden_config in line:
+            return  # the per-run config is an internal detail, like the scratch script
 
         if "File ready at" in line and not line.lower().rstrip("'\"").endswith(OUTPUT_EXTENSIONS):
             self._pending_file_ready = line
@@ -476,7 +723,8 @@ class ManimExecutor:
             # The first row of a multi-line message; the text follows on the next rows.
             return
 
-        await log_callback({"type": "log", "stream": stream_name, "message": self._redact_paths(line)})
+        message = line if redacted else self._redact_paths(line)
+        await log_callback({"type": "log", "stream": stream_name, "message": message})
 
         bracket = BRACKET_PROGRESS_PATTERN.search(line)
         if bracket:
@@ -487,7 +735,8 @@ class ManimExecutor:
             video_path = (file_match.group("single") or file_match.group("double") or file_match.group("bare") or "").strip()
             if video_path.lower().endswith(OUTPUT_EXTENSIONS):
                 abs_path = os.path.abspath(os.path.join(self.workspace_dir, video_path))
-                await self._emit_file_ready(abs_path, log_callback)
+                if self._trusted_output(abs_path):
+                    await self._emit_file_ready(abs_path, log_callback)
 
         if not self._latex_warned and LATEX_PATTERN.search(line) and FAILURE_PATTERN.search(line):
             self._latex_warned = True

@@ -1,5 +1,6 @@
 """Render socket: queueing, cancel at every phase, superseded starts, and one result per start."""
 
+import json
 import asyncio
 import threading
 import time
@@ -37,7 +38,7 @@ class FakeExecutor:
         self._outcome = None
         FakeExecutor.instances.append(self)
 
-    async def execute(self, manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(self, manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         self.calls.append(scene_name)
         self._loop = asyncio.get_running_loop()
         self._stop = asyncio.Event()
@@ -217,6 +218,9 @@ def test_every_superseded_start_gets_a_result(client, fake_executor):
             message = ws.receive_json()
             if message["type"] == "result":
                 results[message["render_id"]] = message
+        deadline = time.time() + 10
+        while not any(ex.calls for ex in fake_executor.instances) and time.time() < deadline:
+            time.sleep(0.01)  # the last start is still taking its snapshot
         last = next(ex for ex in reversed(fake_executor.instances) if ex.calls)
         last.release()
         while ids[-1] not in results:
@@ -293,7 +297,7 @@ def test_send_failure_cancels_the_render():
     executor = MagicMock()
     executor.cancel = AsyncMock()
 
-    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         await log_callback({"type": "log", "message": "hello"})
         return {"success": False, "status": "cancelled"}
 
@@ -315,7 +319,7 @@ def test_send_failure_cancels_the_render():
         raise WebSocketDisconnect()
 
     websocket.receive_text = receive_text
-    websocket.send_json = AsyncMock(side_effect=RuntimeError("closed"))
+    websocket.send_text = AsyncMock(side_effect=RuntimeError("closed"))
     with patch.object(main, "ManimExecutor", return_value=executor):
         asyncio.run(main.websocket_render(websocket))
     assert executor.cancel.await_count >= 1
@@ -327,9 +331,9 @@ def test_unexpected_socket_error_stops_the_render_and_reports(monkeypatch):
     websocket.client = None
     websocket.accept = AsyncMock()
     websocket.receive_text = AsyncMock(side_effect=KeyError("boom"))
-    websocket.send_json = AsyncMock()
+    websocket.send_text = AsyncMock()
     asyncio.run(main.websocket_render(websocket))
-    sent = websocket.send_json.await_args.args[0]
+    sent = json.loads(websocket.send_text.await_args.args[0])
     assert sent["type"] == "error" and "Server WebSocket error" in sent["message"]
 
 
@@ -337,7 +341,7 @@ def test_scratch_name_swap_keeps_traceback_box_width(client, tmp_path):
     """Swapping _temp_run_xxxxxxxx.py for the user's shorter name keeps Rich's right border aligned."""
     (tmp_path / "media").mkdir()
 
-    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         await log_callback({"type": "log", "message": f"│ {script_name}:5 in construct" + " " * 8 + "│"})
         return {"success": False, "status": "failed"}
 

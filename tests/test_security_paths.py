@@ -72,25 +72,26 @@ def test_chunked_body_cut_off_mid_stream_ends_without_spinning():
         _scope(),
         [{"type": "http.request", "body": b'{"a":', "more_body": True}, {"type": "http.disconnect"}],
     )
-    assert downstream.called is False
-    assert sent == []  # nobody is left to answer
+    # The route sees the disconnect once (FastAPI raises ClientDisconnect); nothing loops.
+    assert downstream.called is True and downstream.body == b'{"a":'
     assert reads == 2
 
 
-def test_chunked_body_over_the_limit_is_413(monkeypatch):
+def test_chunked_body_over_the_limit_is_413_without_reading_the_rest(monkeypatch):
     monkeypatch.setattr(main, "MAX_REQUEST_BODY_BYTES", 10)
     chunk = b"x" * 4096
-    downstream, sent, _ = _run_middleware(
+    downstream, sent, reads = _run_middleware(
         _scope(),
         [{"type": "http.request", "body": chunk, "more_body": True}] * 4,
     )
-    assert downstream.called is False
     assert _status(sent) == 413
+    assert reads == 1  # cut off at the first chunk past the cap
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
     assert b"exceeds maximum size" in body
+    assert downstream.body == b""
 
 
-def test_chunked_body_under_the_limit_is_replayed_then_reads_pass_through():
+def test_chunked_body_under_the_limit_streams_then_reads_pass_through():
     scope = {**_scope("/api/parse-code"), "read_extra": True}
     downstream, sent, _ = _run_middleware(
         scope,
@@ -105,11 +106,107 @@ def test_chunked_body_under_the_limit_is_replayed_then_reads_pass_through():
     assert _status(sent) == 200
 
 
-@pytest.mark.parametrize("declared", ["not-a-number", str(10**9)])
-def test_bad_or_huge_content_length_is_413_before_reading(declared):
-    downstream, sent, reads = _run_middleware(_scope(headers=[(b"content-length", declared.encode())]), [])
+def test_huge_content_length_is_413_before_reading():
+    downstream, sent, reads = _run_middleware(_scope(headers=[(b"content-length", str(10**9).encode())]), [])
     assert downstream.called is False and reads == 0
     assert _status(sent) == 413
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [(b"content-length", b"not-a-number")],
+        [(b"content-length", b"-5")],
+        [(b"content-length", b"5"), (b"content-length", b"6")],
+    ],
+)
+def test_bad_content_length_is_400_before_reading(headers):
+    downstream, sent, reads = _run_middleware(_scope(headers=headers), [])
+    assert downstream.called is False and reads == 0
+    assert _status(sent) == 400
+
+
+def test_content_length_with_transfer_encoding_is_refused():
+    """CL + TE (request smuggling, and the r2 size-cap bypass): 400, nothing read."""
+    downstream, sent, reads = _run_middleware(
+        _scope(headers=[(b"content-length", b"10"), (b"transfer-encoding", b"chunked")]),
+        [{"type": "http.request", "body": b"x" * 100, "more_body": False}],
+    )
+    assert downstream.called is False and reads == 0
+    assert _status(sent) == 400
+    assert (b"connection", b"close") in next(m for m in sent if m["type"] == "http.response.start")["headers"]
+
+
+def test_every_body_route_is_capped_not_just_save(monkeypatch):
+    monkeypatch.setattr(main, "MAX_REQUEST_BODY_BYTES", 10)
+    downstream, sent, _ = _run_middleware(
+        _scope("/api/rename"), [{"type": "http.request", "body": b"x" * 64, "more_body": True}]
+    )
+    assert _status(sent) == 413
+
+
+def test_uploads_get_the_asset_cap():
+    limit, message = main.RequestBodyLimitMiddleware.limit_for("/api/upload-asset")
+    assert limit == main.MAX_ASSET_SIZE_BYTES + main.UPLOAD_OVERHEAD_BYTES and "50MB" in message
+    assert main.RequestBodyLimitMiddleware.limit_for("/api/save")[0] == main.MAX_REQUEST_BODY_BYTES
+
+
+def test_stalled_body_times_out_with_408(monkeypatch):
+    monkeypatch.setattr(main, "BODY_READ_TIMEOUT_SECONDS", 0.05)
+    downstream = _Recorder()
+    middleware = main.RequestBodyLimitMiddleware(downstream)
+    sent = []
+    reads = []
+
+    async def receive():
+        reads.append(1)
+        if len(reads) == 1:
+            return {"type": "http.request", "body": b'{"a"', "more_body": True}
+        await asyncio.sleep(5)  # the client stopped sending
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    async def run():
+        await asyncio.wait_for(middleware(_scope(), receive, send), timeout=2)
+
+    asyncio.run(run())
+    assert _status(sent) == 408
+
+
+def test_timeout_does_not_apply_after_the_body(monkeypatch):
+    """Once the body is complete, a route waiting for the disconnect is not cut off."""
+    monkeypatch.setattr(main, "BODY_READ_TIMEOUT_SECONDS", 0.01)
+    scope = {**_scope("/api/parse-code"), "read_extra": True}
+
+    downstream = _Recorder()
+    middleware = main.RequestBodyLimitMiddleware(downstream)
+    sent = []
+    messages = [{"type": "http.request", "body": b"{}", "more_body": False}]
+
+    async def receive():
+        if messages:
+            return messages.pop(0)
+        await asyncio.sleep(0.1)
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(middleware(scope, receive, send))
+    assert _status(sent) == 200 and downstream.extra == {"type": "http.disconnect"}
+
+
+def test_chunked_request_through_the_app_is_capped(client, monkeypatch):
+    monkeypatch.setattr(main, "MAX_REQUEST_BODY_BYTES", 1000)
+
+    def body():
+        for _ in range(10):
+            yield b"x" * 500
+
+    res = client.post("/api/rename", content=body(), headers={"content-type": "application/json"})
+    assert res.status_code == 413 and "exceeds maximum size" in res.json()["detail"]
 
 
 def test_honest_small_content_length_goes_straight_through():
@@ -311,19 +408,63 @@ def test_invalid_flag_over_the_socket_gets_a_rejected_result(client):
 # --------------------------------------------------------------------------- #
 
 
-def test_lifespan_runs_maintenance_when_enabled(monkeypatch):
+def test_lifespan_sweeps_only_after_the_port_is_bound(monkeypatch):
     calls = []
+    listening = {"now": False}
     monkeypatch.setattr(main, "RUN_STARTUP_MAINTENANCE", True)
     monkeypatch.setattr(main, "_sweep_temp_renders", lambda: calls.append("sweep"))
     monkeypatch.setattr(main, "write_manim_config_file", lambda *a: calls.append("cfg"))
     monkeypatch.setattr(main, "get_cached_profile", lambda: {})
+    monkeypatch.setattr(main, "_process_is_listening", lambda: listening["now"])
 
     async def run():
         async with main._lifespan(main.app):
             calls.append("running")
+            await asyncio.sleep(0.15)
+            assert "sweep" not in calls  # not bound yet: nothing is touched
+            listening["now"] = True
+            for _ in range(50):
+                if "sweep" in calls:
+                    break
+                await asyncio.sleep(0.02)
 
     asyncio.run(run())
-    assert calls == ["sweep", "cfg", "running"]
+    assert calls == ["cfg", "running", "sweep"]
+
+
+def test_server_that_never_binds_never_sweeps(monkeypatch):
+    """uvicorn runs the lifespan before bind(); "address in use" exits without sweeping."""
+    calls = []
+    monkeypatch.setattr(main, "_sweep_temp_renders", lambda: calls.append("sweep"))
+    monkeypatch.setattr(main, "_process_is_listening", lambda: False)
+    assert asyncio.run(main._maintenance_after_bind(wait_seconds=0.1, poll=0.02)) is False
+    assert calls == []
+
+
+def test_lifespan_shutdown_cancels_a_pending_sweep(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "RUN_STARTUP_MAINTENANCE", True)
+    monkeypatch.setattr(main, "_sweep_temp_renders", lambda: calls.append("sweep"))
+    monkeypatch.setattr(main, "write_manim_config_file", lambda *a: None)
+    monkeypatch.setattr(main, "get_cached_profile", lambda: {})
+    monkeypatch.setattr(main, "_process_is_listening", lambda: False)
+
+    async def run():
+        async with main._lifespan(main.app):
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
+
+    asyncio.run(run())
+    assert calls == []
+
+
+def test_process_is_listening_sees_a_bound_socket():
+    import socket
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        assert main._process_is_listening() is True
 
 
 def test_sweep_ignores_unreadable_workspace(monkeypatch, tmp_path):
