@@ -129,6 +129,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   useEffect(() => {
     codeRef.current = code;
   }, [code]);
+  // Typing updates the ref at once: Ctrl+S (or another tab's storage event) right after
+  // a keystroke must see that keystroke, not the last committed render.
+  const editCode = useCallback((next: string) => {
+    codeRef.current = next;
+    setCode(next);
+  }, []);
 
   const updateDrafts = useCallback((change: (drafts: Record<string, string>) => Record<string, string>) => {
     draftsRef.current = change(draftsRef.current);
@@ -645,7 +651,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     filesStatus,
     activeFile,
     code,
-    setCode,
+    setCode: editCode,
     isDirty,
     dirtyFiles,
     hasUnsavedWork: isDirty || Object.keys(drafts).length > 0,

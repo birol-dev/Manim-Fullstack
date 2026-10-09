@@ -214,3 +214,49 @@ describe("insert planning", () => {
     expect(opensBlock("x = {'a':")).toBe(false);
   });
 });
+
+describe("planBlockInsert refuses broken code at or before the cursor (R3 verify A)", () => {
+  const file = (bad: string, at: "class" | "construct") => {
+    const lines = ["from manim import *", "", "", "class A(Scene):", "    def construct(self):", "        c = Circle()", "        self.play(Create(c))", ""];
+    if (at === "construct") lines.splice(7, 0, `        ${bad}`);
+    else lines.push(`    ${bad}`);
+    return lines;
+  };
+
+  it("refuses for an unterminated string on the cursor line, even at class level", () => {
+    const lines = file('x = "abc', "class");
+    const plan = planBlockInsert(lines, lines.length, "sq = Square()");
+    expect(isInsertRefusal(plan) && plan.refused).toMatch(/^Line 9 has a string that never ends/);
+  });
+
+  it("refuses for an unterminated string above the cursor", () => {
+    const lines = [...file("y = 'oops", "construct"), "        z = 1"];
+    const plan = planBlockInsert(lines, lines.length, "sq = Square()");
+    expect(isInsertRefusal(plan) && plan.refused).toMatch(/^Line 8 has a string/);
+  });
+
+  it("refuses when the code would go after a broken string (the end of construct)", () => {
+    const lines = [...file('x = "abc', "construct"), "", "", "class B(Scene):", "    pass"];
+    // Cursor at class B level: the block would go to the end of A.construct, past line 8.
+    const plan = planBlockInsert(lines, lines.length, "sq = Square()");
+    expect(isInsertRefusal(plan)).toBe(true);
+  });
+
+  it("refuses for a bracket that is never closed before the cursor", () => {
+    const lines = [...file("c2 = Circle(radius=1,", "construct"), "        d = 2"];
+    const plan = planBlockInsert(lines, lines.length, "sq = Square()");
+    expect(isInsertRefusal(plan) && plan.refused).toMatch(/never ends/);
+  });
+
+  it("still inserts above broken code that comes after the cursor and the insertion point", () => {
+    const lines = [...file("x = 1", "construct"), "", "", "class B(Scene):", "    def construct(self):", '        s = "never closed'];
+    const plan = planBlockInsert(lines, 6, "sq = Square()");
+    expect(isInsertRefusal(plan)).toBe(false);
+    expect((plan as BlockInsertPlan).line).toBe(6);
+  });
+
+  it("doesn't count escaped quotes, triple-quoted strings, or comments as unterminated", () => {
+    const lines = ["class A(Scene):", "    def construct(self):", '        a = "say \\"hi\\""', "        b = '''x", "        y'''", "        # don't stop", "        c = 1"];
+    expect(isInsertRefusal(planBlockInsert(lines, 7, "sq = Square()"))).toBe(false);
+  });
+});

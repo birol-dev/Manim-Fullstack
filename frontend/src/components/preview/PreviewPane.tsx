@@ -211,10 +211,17 @@ export function PreviewPane(props: PreviewPaneProps) {
             icon={<Film />}
             title="Nothing rendered yet"
             description={
-              <>
-                Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
-                here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
-              </>
+              props.renderBlocked && props.canRender ? (
+                // Same reason as the toolbar's Render, in plain sight (not only in a tooltip).
+                <span id="preview-render-blocked-reason" className="text-warning">
+                  {props.renderBlocked}
+                </span>
+              ) : (
+                <>
+                  Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
+                  here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
+                </>
+              )
             }
             action={
               props.renderBlocked && props.canRender ? (
@@ -223,15 +230,14 @@ export function PreviewPane(props: PreviewPaneProps) {
                     variant="primary"
                     size="sm"
                     onClick={props.onRender}
+                    aria-label="Render"
                     aria-disabled="true"
-                    aria-describedby="preview-render-blocked"
-                    className="cursor-not-allowed opacity-50 hover:brightness-100"
+                    aria-describedby="preview-render-blocked-reason"
+                    data-blocked="true"
+                    className="cursor-not-allowed opacity-40 saturate-0 hover:brightness-100"
                   >
                     <Play className="fill-current" />
                     Render
-                    <span id="preview-render-blocked" className="sr-only">
-                      {props.renderBlocked}
-                    </span>
                   </Button>
                 </Tooltip>
               ) : (
