@@ -3,6 +3,7 @@ import { Check, Copy, CornerDownLeft } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { CodeText } from "@/components/ui/code-text";
 import { Field, Input } from "@/components/ui/input";
 import { Section } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -232,9 +233,9 @@ export function ShapeBuilderPanel({ canInsert, onInsert }: ShapeBuilderPanelProp
         >
           <pre
             aria-label="Generated code"
-            className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-canvas p-2.5 font-mono text-[11.5px] leading-relaxed text-fg-muted select-text"
+            className="code-wrap max-w-full overflow-x-auto whitespace-pre-wrap rounded-lg border border-line bg-canvas p-2.5 font-mono text-[11.5px] leading-relaxed text-fg-muted select-text"
           >
-            {code}
+            <CodeText text={code} />
           </pre>
         </Section>
 

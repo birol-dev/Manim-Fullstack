@@ -45,7 +45,8 @@ function ScenePicker({
   const [draft, setDraft] = useState("");
   const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
   const valid = CLASS_NAME.test(draft.trim());
-  const className = "w-36 min-w-0 @max-[720px]:w-28 @max-[420px]:w-24";
+  // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
+  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[400px]:max-w-32 @max-[400px]:min-w-[5.5rem]";
 
   if (typing) {
     const commit = () => {
@@ -73,7 +74,7 @@ function ScenePicker({
           }
         }}
         onBlur={commit}
-        className={cn("h-7 font-mono text-xs", className)}
+        className={cn("h-7 w-36 font-mono text-xs @max-[400px]:w-28", className)}
       />
     );
   }
@@ -91,9 +92,11 @@ function ScenePicker({
       }}
       disabled={disabled}
     >
-      <SelectTrigger aria-label="Scene" className={className}>
-        <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
-      </SelectTrigger>
+      <Tooltip content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"} wrap>
+        <SelectTrigger aria-label="Scene" className={className}>
+          <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
+        </SelectTrigger>
+      </Tooltip>
       <SelectContent>
         {scenes.map((scene) => (
           <SelectItem key={scene} value={scene}>
@@ -146,8 +149,8 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
       <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2">
         {activeFile && (
           <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg">
-            <FileCode2 className="size-3.5 shrink-0 text-accent" />
-            <span className="min-w-0 truncate font-medium" title={activeFile}>
+            <FileCode2 className="size-3.5 shrink-0 text-accent @max-[460px]:hidden" />
+            <span className="min-w-[2.5rem] truncate font-medium" title={activeFile}>
               {activeFile}
             </span>
             {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
@@ -155,7 +158,11 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
         )}
 
         <div className="flex shrink-0 items-center gap-1.5">
-          <Tooltip content="Save" shortcut={`${MOD_KEY}+S`}>
+          <Tooltip
+            content={!activeFile ? "Save (no script open)" : isDirty ? "Save" : "Saved (no unsaved changes)"}
+            shortcut={`${MOD_KEY}+S`}
+            wrap
+          >
             <Button
               variant="ghost"
               size="icon-sm"
@@ -190,9 +197,11 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           />
 
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
-            <SelectTrigger aria-label="Quality" className="w-[88px] @max-[420px]:w-16">
-              <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
-            </SelectTrigger>
+            <Tooltip content={qualityOption ? `Quality: ${qualityOption.label} · ${qualityOption.detail}` : "Render quality"}>
+              <SelectTrigger aria-label="Quality" className="w-[78px] shrink-0">
+                <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
+              </SelectTrigger>
+            </Tooltip>
             <SelectContent align="end">
               {QUALITY_OPTIONS.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
@@ -206,19 +215,21 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           {rendering ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={props.onCancel}
-              disabled={props.stopping}
-              className="w-[104px] @max-[520px]:w-auto"
-              aria-label={props.stopping ? "Stopping" : "Cancel"}
-            >
-              <Square className="fill-current" />
-              <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
-            </Button>
+            <Tooltip content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={props.onCancel}
+                disabled={props.stopping}
+                className="w-[104px] @max-[520px]:w-auto"
+                aria-label={props.stopping ? "Stopping" : "Cancel"}
+              >
+                <Square className="fill-current" />
+                <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
+              </Button>
+            </Tooltip>
           ) : (
-            <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`}>
+            <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`} wrap>
               <Button
                 variant="primary"
                 size="sm"

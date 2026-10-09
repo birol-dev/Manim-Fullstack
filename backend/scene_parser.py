@@ -2,6 +2,7 @@
 
 import ast
 import hashlib
+import re
 import threading
 from collections import OrderedDict
 from typing import List, Optional
@@ -64,7 +65,104 @@ def _safe_unparse(expr: ast.AST, fallback: str) -> str:
         return fallback
 
 
-def _animation_step(call: ast.Call) -> Optional[dict]:
+# --- Run-time estimates -----------------------------------------------------------
+# Manim's own defaults (manim/animation/*.py, v0.18-0.22). Anything not listed runs 1s.
+_FIXED_RUN_TIMES = {"DrawBorderThenFill": 2.0, "SpiralIn": 2.0, "Circumscribe": 1.0}
+# Write/Unwrite: ``run_time = 1 if len(family_members_with_points()) < 15 else 2``.
+_LENGTH_BASED = {"Write", "Unwrite"}
+# AddTextLetterByLetter: ``run_time = time_per_char * len(text)`` (time_per_char=0.1).
+_PER_CHAR = {"AddTextLetterByLetter", "RemoveTextLetterByLetter"}
+_GROUPS = {"AnimationGroup", "LaggedStart", "LaggedStartMap", "Succession"}
+_TEXT_CLASSES = {"Text", "MarkupText", "Paragraph", "Tex", "MathTex", "SingleStringMathTex", "Title", "BulletedList"}
+_TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
+
+
+def _call_name(call: ast.Call) -> Optional[str]:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in {"manim", "mn", "m"}:
+        return func.attr
+    return None
+
+
+def _root_call(expr: ast.AST) -> Optional[ast.Call]:
+    """``Text("Hi").scale(2).to_edge(UP)`` -> the ``Text("Hi")`` call."""
+    while isinstance(expr, ast.Call):
+        if _call_name(expr) is not None:
+            return expr
+        func = expr.func
+        if not isinstance(func, ast.Attribute):
+            return None
+        expr = func.value
+    return None
+
+
+def _glyph_count(expr: ast.AST, texts: dict) -> Optional[int]:
+    """Approximate number of glyphs (submobjects with points) a text mobject has."""
+    if isinstance(expr, ast.Name):
+        return texts.get(expr.id)
+    call = _root_call(expr)
+    if call is None or _call_name(call) not in _TEXT_CLASSES:
+        return None
+    strings = [arg.value for arg in call.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)]
+    if not strings:
+        return None
+    if _call_name(call) in {"Text", "MarkupText", "Paragraph"}:
+        return sum(len("".join(part.split())) for part in strings)
+    # LaTeX: each \command is roughly one glyph; braces and scripts markers draw nothing.
+    total = 0
+    for part in strings:
+        commands = len(_TEX_COMMAND.findall(part))
+        rest = re.sub(r"[{}^_&\s]", "", _TEX_COMMAND.sub("", part))
+        total += commands + len(rest)
+    return total
+
+
+def _collect_texts(construct: ast.AST) -> dict:
+    """``name = Text("...")`` assignments in construct(), mapped to their glyph counts."""
+    texts = {}
+    for node in ast.walk(construct):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            count = _glyph_count(node.value, texts)
+            if count is not None:
+                texts[node.targets[0].id] = count
+    return texts
+
+
+def _animation_seconds(expr: ast.AST, texts: dict) -> float:
+    """Best static guess of one animation's run time, following Manim's defaults."""
+    if not isinstance(expr, ast.Call):
+        return 1.0  # mobject.animate..., variables holding animations
+    explicit = _numeric_constant(_keyword(expr, "run_time"))
+    if explicit is not None:
+        return explicit
+    name = _call_name(expr)
+    if name is None:
+        return 1.0  # x.animate.shift(...), helper calls
+    if name in _LENGTH_BASED:
+        count = _glyph_count(expr.args[0], texts) if expr.args else None
+        return 2.0 if count is not None and count >= 15 else 1.0
+    if name in _PER_CHAR:
+        count = _glyph_count(expr.args[0], texts) if expr.args else None
+        per_char = _numeric_constant(_keyword(expr, "time_per_char")) or 0.1
+        return round(max(per_char * count, 1 / 15), 2) if count else 1.0
+    if name in _GROUPS:
+        children = [arg for arg in expr.args if not isinstance(arg, ast.Starred)]
+        if not children:
+            return 1.0
+        durations = [_animation_seconds(child, texts) for child in children]
+        if name == "Succession":
+            return sum(durations)
+        if name.startswith("Lagged"):
+            lag = _numeric_constant(_keyword(expr, "lag_ratio"))
+            lag = 0.05 if lag is None else lag
+            return round(max(durations) * (1 + lag * (len(durations) - 1)), 2)
+        return max(durations)
+    return _FIXED_RUN_TIMES.get(name, 1.0)
+
+
+def _animation_step(call: ast.Call, texts: Optional[dict] = None) -> Optional[dict]:
     """Describe a ``self.play(...)`` or ``self.wait(...)`` call for the timeline."""
     func = call.func
     if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "self"):
@@ -77,6 +175,12 @@ def _animation_step(call: ast.Call) -> Optional[dict]:
         run_time = _numeric_constant(_keyword(call, "run_time"))
         if run_time is not None:
             step["duration"] = run_time
+        else:
+            # self.play() runs as long as its longest animation.
+            animations = [arg for arg in call.args if not isinstance(arg, ast.Starred)]
+            seconds = max((_animation_seconds(arg, texts or {}) for arg in animations), default=1.0)
+            step["duration"] = float(seconds)
+            step["estimated"] = True
         return step
 
     if func.attr == "wait":
@@ -159,6 +263,77 @@ def _has_foreign_star_import(nodes) -> bool:
     return False
 
 
+def _loop_count(node: ast.AST) -> Optional[int]:
+    """Iterations of ``for _ in range(3)`` or ``for x in [a, b]``; None when unknown."""
+    if not isinstance(node, (ast.For, ast.AsyncFor)):
+        return None  # while loops: unknown
+    iterable = node.iter
+    if isinstance(iterable, (ast.List, ast.Tuple, ast.Set)) and not any(isinstance(e, ast.Starred) for e in iterable.elts):
+        return len(iterable.elts)
+    if isinstance(iterable, ast.Constant) and isinstance(iterable.value, str):
+        return len(iterable.value)
+    if (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id == "range"
+        and not iterable.keywords
+        and 1 <= len(iterable.args) <= 3
+    ):
+        values = [_numeric_constant(arg) for arg in iterable.args]
+        if all(value is not None and float(value).is_integer() for value in values):
+            try:
+                return len(range(*(int(value) for value in values)))
+            except ValueError:  # range() step of 0
+                return None
+    return None
+
+
+def _collect_steps(construct: ast.AST) -> List[dict]:
+    """play/wait calls in source order, tagged with the loop that repeats them.
+
+    Limits: only literal ``range(...)`` and list/tuple/string literals give an iteration
+    count. ``while`` loops, loops over variables and comprehensions are marked as
+    repeating an unknown number of times (``repeat: None``).
+    """
+    texts = _collect_texts(construct)
+    steps: List[dict] = []
+
+    def visit(node: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
+        for child in ast.iter_child_nodes(node):
+            child_repeat, child_line = repeat, loop_line
+            if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
+                # The loop header (iterable / condition) runs once; only the body repeats.
+                header = child.iter if isinstance(child, (ast.For, ast.AsyncFor)) else child.test
+                visit_expr(header, repeat, loop_line)
+                count = _loop_count(child)
+                body_repeat = None if (count is None or (loop_line is not None and repeat is None)) else count * (repeat or 1)
+                body_line = child.lineno if loop_line is None else loop_line
+                for stmt in child.body:
+                    visit_stmt(stmt, body_repeat, body_line)
+                for stmt in child.orelse:
+                    visit_stmt(stmt, repeat, loop_line)
+                continue
+            if isinstance(child, ast.Call):
+                step = _animation_step(child, texts)
+                if step is not None:
+                    if loop_line is not None:
+                        step["repeat"] = repeat
+                        step["loop_line"] = loop_line
+                    steps.append(step)
+            visit(child, child_repeat, child_line)
+
+    def visit_stmt(stmt: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
+        wrapper = ast.Module(body=[stmt], type_ignores=[])
+        visit(wrapper, repeat, loop_line)
+
+    def visit_expr(expr: ast.AST, repeat: Optional[int], loop_line: Optional[int]) -> None:
+        visit(ast.Expr(value=expr), repeat, loop_line)
+
+    visit(construct, None, None)
+    steps.sort(key=lambda step: step["line"])
+    return steps
+
+
 def _parse_code_ast(code_content: str) -> tuple:
     """Find scene classes and their play/wait timeline in one AST pass (cached).
 
@@ -228,15 +403,8 @@ def _analyze(code_content: str) -> tuple:
         )
         if construct is None:
             continue
-        steps = [
-            step
-            for sub in ast.walk(construct)
-            if isinstance(sub, ast.Call)
-            for step in [_animation_step(sub)]
-            if step is not None
-        ]
+        steps = _collect_steps(construct)
         if steps:
-            steps.sort(key=lambda step: step["line"])
             scene_anims[node.name] = tuple(tuple(step.items()) for step in steps)
 
     names = {
