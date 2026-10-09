@@ -28,6 +28,8 @@ export interface ActiveRender {
   request: RenderRequest;
   progress: RenderProgress | null;
   startedAt: number;
+  /** Waiting for another render (any tab) to finish; Manim hasn't started yet. */
+  queued?: boolean;
 }
 
 export interface RenderOutput {
@@ -71,6 +73,9 @@ interface Options {
   onOutput: (output: RenderOutput, render: ActiveRender) => void;
   onFinished: (outcome: RenderOutcome) => void;
 }
+
+/** The server's notice that a render waits for the render slot. */
+export const QUEUED_MESSAGE_PREFIX = "Waiting for another render";
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 const CONNECT_TIMEOUT_MS = 8000;
@@ -130,6 +135,12 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
       // Events from a render we already gave up on.
       if (event.render_id != null && event.render_id !== render?.id) return;
 
+      // Queued until the server says anything else about this render (the "$ manim" line, logs...).
+      if (render && event.render_id === render.id) {
+        const queued = event.type === "info" && (event.message ?? "").startsWith(QUEUED_MESSAGE_PREFIX);
+        if (queued !== Boolean(render.queued)) updateActive({ ...render, queued });
+      }
+
       switch (event.type) {
         case "log":
           log(event.stream === "stderr" ? "stderr" : "stdout", event.message ?? "");
@@ -151,9 +162,9 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           if (event.render_id == null) finish(false, "error");
           break;
         case "progress":
-          if (render) {
+          if (activeRef.current) {
             updateActive({
-              ...render,
+              ...activeRef.current,
               progress: { percent: event.percent ?? 0, animation: event.animation, label: event.label },
             });
           }
@@ -307,11 +318,18 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
   );
 
   const cancel = useCallback(() => {
-    if (!activeRef.current) return;
+    const render = activeRef.current;
+    if (!render) return;
     setStopping(true);
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN && queueRef.current.length === 0) {
       socket.send(JSON.stringify({ type: "cancel" }));
+      // Nothing has run yet: drop it now. The server removes it from the queue, and
+      // anything it still sends for this render is ignored by its id.
+      if (render.queued) {
+        callbacks.current.log("warning", "Cancelled before it started.");
+        finish(false, "cancelled");
+      }
     } else {
       queueRef.current = [];
       finish(false, "cancelled");

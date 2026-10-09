@@ -6,6 +6,22 @@ import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMax
 import { loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "@/lib/storage";
 import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } from "@/lib/types";
 
+/**
+ * The file changed on disk since this tab loaded it ("changed"), or it was
+ * renamed or deleted elsewhere ("missing"). Nothing was written.
+ */
+export class SaveConflictError extends ApiError {
+  readonly reason: "changed" | "missing";
+  readonly filename: string;
+
+  constructor(message: string, status: number, filename: string) {
+    super(message, status);
+    this.name = "SaveConflictError";
+    this.reason = status === 404 ? "missing" : "changed";
+    this.filename = filename;
+  }
+}
+
 const EMPTY_FILES: WorkspaceFiles = { scripts: [], assets: [], media: [] };
 const EMPTY_PARSE: ParseResult = { scenes: [], animations: {}, syntaxError: null };
 
@@ -36,10 +52,13 @@ export type FilesStatus = "loading" | "ready" | "error";
 interface FileContentResponse extends ServerParse {
   filename: string;
   code: string;
+  /** Opaque version of the file on disk, sent back on save to detect conflicts. */
+  version?: string;
 }
 
 interface SaveResponse extends ServerParse {
   filename: string;
+  version?: string;
 }
 
 function browserScriptList(): ScriptFile[] {
@@ -96,6 +115,11 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   const parsedRef = useRef<ParseResult>(EMPTY_PARSE);
   const parsedCodeRef = useRef<string | null>(null);
   const loadSeq = useRef(0);
+  // "mode:file" -> version of the file on disk that the buffer (or draft) is based on.
+  const versionsRef = useRef<Record<string, string>>({});
+  const savesInFlight = useRef(0);
+  // "mode:file" -> a scene name typed with "Other scene…" that the parser can't see.
+  const typedScenesRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     codeRef.current = code;
@@ -113,9 +137,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     const remembered = file
       ? readStored<Record<string, string>>(STORAGE_KEYS.sceneByFile, {})[fileKey(modeRef.current, file)]
       : undefined;
+    const typed = file ? typedScenesRef.current[fileKey(modeRef.current, file)] : undefined;
     setSelectedSceneState((previous) => {
-      if (previous && result.scenes.includes(previous)) return previous;
-      if (remembered && result.scenes.includes(remembered)) return remembered;
+      if (previous && (result.scenes.includes(previous) || previous === typed)) return previous;
+      if (remembered && (result.scenes.includes(remembered) || remembered === typed)) return remembered;
       return result.scenes[0] ?? "";
     });
   }, []);
@@ -124,6 +149,8 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     setSelectedSceneState(scene);
     const file = activeFileRef.current;
     if (!file) return;
+    // A name the parser didn't find was typed in: keep it selected while the code changes.
+    if (scene && !parsedRef.current.scenes.includes(scene)) typedScenesRef.current[fileKey(modeRef.current, file)] = scene;
     const memory = readStored<Record<string, string>>(STORAGE_KEYS.sceneByFile, {});
     writeStored(STORAGE_KEYS.sceneByFile, { ...memory, [fileKey(modeRef.current, file)]: scene });
   }, []);
@@ -185,6 +212,11 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       }
       const data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
       if (seq !== loadSeq.current) return false;
+      const key = fileKey(modeRef.current, data.filename);
+      // An unsaved draft stays based on the version it was edited from, so saving it
+      // still notices changes made elsewhere in the meantime.
+      const keepVersion = key in draftsRef.current && key in versionsRef.current;
+      if (!keepVersion && data.version) versionsRef.current[key] = data.version;
       showBuffer(data.filename, data.code);
       applyParse(asParseResult(data), data.filename, data.code);
       return true;
@@ -231,7 +263,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     const timer = setTimeout(async () => {
       const result = await parseCode(source).catch((err: unknown) => {
         if (codeRef.current === source && err instanceof ApiError && err.status === 413) {
-          toast.error(err.message);
+          toast.error(err.message, { id: "code-size" });
         }
         return null;
       });
@@ -249,8 +281,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     return result;
   }, [applyParse]);
 
-  /** Save the buffer. Resolves with the scenes it contains; throws on failure. */
-  const save = useCallback(async (): Promise<ParseResult> => {
+  /**
+   * Save the buffer. Resolves with the scenes it contains; throws on failure, with
+   * a SaveConflictError when the file changed or disappeared on disk. *force*
+   * writes anyway (the user chose "Overwrite" or "Recreate").
+   */
+  const save = useCallback(async (options?: { force?: boolean }): Promise<ParseResult> => {
     const name = activeFileRef.current;
     if (!name) throw new Error("No file is open.");
     const mode = modeRef.current;
@@ -284,7 +320,21 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       }
     }
 
-    const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content });
+    const key = fileKey(mode, name);
+    const baseVersion = options?.force ? undefined : versionsRef.current[key];
+    let data: SaveResponse;
+    savesInFlight.current += 1;
+    try {
+      data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, base_version: baseVersion });
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 412 || (err.status === 404 && baseVersion !== undefined))) {
+        throw new SaveConflictError(err.message, err.status, name);
+      }
+      throw err;
+    } finally {
+      savesInFlight.current -= 1;
+    }
+    if (data.version) versionsRef.current[key] = data.version;
     markSaved();
     const result = asParseResult(data);
     if (stillOpen()) applyParse(result, name, content);
@@ -300,7 +350,8 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         all[name] = content;
         if (!saveBrowserFiles(all)) throw new Error("Browser storage is full.");
       } else {
-        await postJson<SaveResponse>("/api/save", { filename: name, code: content });
+        const data = await postJson<SaveResponse>("/api/save", { filename: name, code: content, create_only: true });
+        if (data.version) versionsRef.current[fileKey("disk", data.filename)] = data.version;
       }
       await refreshFiles();
       await openFile(name);
@@ -321,6 +372,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         await postJson("/api/rename", { old_name: oldName, new_name: newName });
       }
       const oldKey = fileKey(modeRef.current, oldName);
+      if (oldKey in versionsRef.current) {
+        versionsRef.current[fileKey(modeRef.current, newName)] = versionsRef.current[oldKey];
+        delete versionsRef.current[oldKey];
+      }
       if (oldKey in draftsRef.current) {
         const draft = draftsRef.current[oldKey];
         updateDrafts((all) => ({ ...withoutKey(all, oldKey), [fileKey(modeRef.current, newName)]: draft }));
@@ -346,6 +401,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         await deleteRequest("/api/scripts", { filename: name });
       }
       const key = fileKey(modeRef.current, name);
+      delete versionsRef.current[key];
       updateDrafts((all) => withoutKey(all, key));
       const next = await refreshFiles();
       if (activeFileRef.current === name) {
@@ -358,6 +414,79 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     },
     [openFile, refreshFiles, showBuffer, updateDrafts],
   );
+
+  /** Replace the open buffer with the file on disk ("Reload theirs"); unsaved edits are dropped. */
+  const reloadFromDisk = useCallback(async () => {
+    const name = activeFileRef.current;
+    if (!name || modeRef.current !== "disk") return;
+    const seq = ++loadSeq.current;
+    const data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
+    if (seq !== loadSeq.current || activeFileRef.current !== name) return;
+    const key = fileKey(modeRef.current, name);
+    if (data.version) versionsRef.current[key] = data.version;
+    codeRef.current = data.code;
+    savedCodeRef.current = data.code;
+    setCode(data.code);
+    setSavedCode(data.code);
+    applyParse(asParseResult(data), name, data.code);
+  }, [applyParse]);
+
+  /**
+   * When the tab regains focus, look for changes made to the open file elsewhere.
+   * A clean buffer reloads quietly; edits are kept and the user is told.
+   */
+  const checkOpenFile = useCallback(async () => {
+    const name = activeFileRef.current;
+    if (!name || modeRef.current !== "disk" || savesInFlight.current > 0) return;
+    const key = fileKey("disk", name);
+    const known = versionsRef.current[key];
+    const seq = loadSeq.current;
+    let data: FileContentResponse;
+    try {
+      data = await requestJson<FileContentResponse>(`/api/file-content?filename=${encodeURIComponent(name)}`);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404 && activeFileRef.current === name) {
+        toast.warning(`${name} was renamed or deleted elsewhere`, {
+          id: "external-change",
+          description: "Your text is still here. Saving asks before recreating the file.",
+        });
+        void refreshFiles();
+      }
+      return;
+    }
+    const unchanged = !data.version || data.version === known;
+    if (unchanged || seq !== loadSeq.current || activeFileRef.current !== name || savesInFlight.current > 0) return;
+    if (data.code === codeRef.current || codeRef.current === savedCodeRef.current) {
+      // Same text, or nothing unsaved here: take the file as it is on disk now.
+      const reloaded = data.code !== codeRef.current;
+      versionsRef.current[key] = data.version!;
+      codeRef.current = data.code;
+      savedCodeRef.current = data.code;
+      setCode(data.code);
+      setSavedCode(data.code);
+      applyParse(asParseResult(data), name, data.code);
+      if (reloaded) toast.info(`Reloaded ${name}`, { id: "external-change", description: "It was changed in another tab or program." });
+      return;
+    }
+    toast.warning(`${name} changed in another tab`, {
+      id: "external-change",
+      description: "You have unsaved edits here. Saving will ask which version to keep.",
+      action: { label: "Reload theirs", onClick: () => void reloadFromDisk() },
+    });
+  }, [applyParse, refreshFiles, reloadFromDisk]);
+
+  useEffect(() => {
+    if (mode !== "disk") return;
+    const onFocus = () => {
+      if (document.visibilityState !== "hidden") void checkOpenFile();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [mode, checkOpenFile]);
 
   const uploadAsset = useCallback(
     async (file: File, options?: { overwrite?: boolean }) => {
@@ -414,11 +543,14 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     syntaxError: parsed.syntaxError ?? null,
     animations: parsed.animations,
     selectedScene,
+    /** The selected scene was typed in ("Other scene…"), not found by the parser. */
+    selectedSceneTyped: selectedScene !== "" && !parsed.scenes.includes(selectedScene),
     setSelectedScene,
     refreshFiles,
     openFile,
     parseNow,
     save,
+    reloadFromDisk,
     createFile,
     renameFile,
     deleteFile,

@@ -1,12 +1,30 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 
+import { IS_MAC } from "@/lib/constants";
+import { focusNextAfter } from "@/lib/focus";
+import { planBlockInsert } from "@/lib/insert";
 import { EDITOR_THEME, monaco } from "@/lib/monaco";
 import type { CodeEditorHandle, CodeEditorProps } from "./types";
 
 type StandaloneEditor = Parameters<OnMount>[0];
 
 const MARKER_OWNER = "manim-render";
+const TAB_FOCUS_KEY = IS_MAC ? "⌃⇧M" : "Ctrl+M";
+// Escape leaves the editor unless Monaco needs it (closing a widget, a selection, extra cursors...).
+const LEAVE_EDITOR_WHEN = [
+  "!suggestWidgetVisible",
+  "!findWidgetVisible",
+  "!parameterHintsVisible",
+  "!renameInputVisible",
+  "!editorHoverVisible",
+  "!editorHasSelection",
+  "!editorHasMultipleSelections",
+  "!inSnippetMode",
+  "!markersNavigationVisible",
+  "!referenceSearchVisible",
+  "!inlineSuggestionVisible",
+].join(" && ");
 const SYNTAX_OWNER = "manim-syntax";
 
 function applySyntaxMarker(editor: StandaloneEditor | null, marker: { line: number; message: string } | null) {
@@ -28,33 +46,13 @@ function applySyntaxMarker(editor: StandaloneEditor | null, marker: { line: numb
   ]);
 }
 
-function leadingWhitespace(line: string): string {
-  return line.match(/^\s*/)?.[0] ?? "";
-}
-
-/** Indentation for a block inserted on (blank) line *lineNumber*, from the code above it. */
-function contextIndent(model: monaco.editor.ITextModel, lineNumber: number): string {
-  for (let line = lineNumber - 1; line >= 1; line -= 1) {
-    const text = model.getLineContent(line);
-    if (!text.trim()) continue;
-    const indent = leadingWhitespace(text);
-    return text.trimEnd().endsWith(":") ? `${indent}    ` : indent;
-  }
-  return "";
-}
-
-function indentBlock(block: string, indent: string): string {
-  return block
-    .split("\n")
-    .map((line) => (line ? indent + line : line))
-    .join("\n");
-}
-
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
   { path, value, onChange, onCursorChange, onSave, onRender, fontSize = 13, syntaxError = null },
   ref,
 ) {
   const editorRef = useRef<StandaloneEditor | null>(null);
+  const [focused, setFocused] = useState(false);
+  const [tabFocusMode, setTabFocusMode] = useState(false);
   // Keyboard actions are registered once; read the latest callbacks through refs.
   const saveRef = useRef(onSave);
   const renderRef = useRef(onRender);
@@ -80,20 +78,16 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
       if (mode === "inline") {
         editor.executeEdits("insert", [{ range: selection, text, forceMoveMarkers: true }]);
       } else {
-        const lineNumber = selection.positionLineNumber;
-        const lineText = model.getLineContent(lineNumber);
-        const endColumn = model.getLineMaxColumn(lineNumber);
-        if (lineText.trim()) {
-          // Below the current line, matching its indentation (one level deeper after a colon).
-          const indent = leadingWhitespace(lineText) + (lineText.trimEnd().endsWith(":") ? "    " : "");
-          const range = new monaco.Range(lineNumber, endColumn, lineNumber, endColumn);
-          editor.executeEdits("insert", [{ range, text: `\n${indentBlock(text, indent)}`, forceMoveMarkers: true }]);
-        } else {
-          const range = new monaco.Range(lineNumber, 1, lineNumber, endColumn);
-          editor.executeEdits("insert", [
-            { range, text: indentBlock(text, contextIndent(model, lineNumber)), forceMoveMarkers: true },
-          ]);
-        }
+        const plan = planBlockInsert(model.getLinesContent(), selection.positionLineNumber, text);
+        const endColumn = model.getLineMaxColumn(plan.line);
+        const range = plan.replace
+          ? new monaco.Range(plan.line, 1, plan.line, endColumn)
+          : new monaco.Range(plan.line, endColumn, plan.line, endColumn);
+        // Leave the cursor after the inserted code, wherever it went.
+        editor.executeEdits("insert", [{ range, text: plan.replace ? plan.text : `\n${plan.text}`, forceMoveMarkers: true }], (inverse) => {
+          const end = inverse[0]?.range;
+          return end ? [new monaco.Selection(end.endLineNumber, end.endColumn, end.endLineNumber, end.endColumn)] : null;
+        });
       }
       editor.pushUndoStop();
       editor.revealPositionInCenterIfOutsideViewport(editor.getPosition() ?? selection.getPosition());
@@ -145,48 +139,82 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
       contextMenuGroupId: "navigation",
       run: () => renderRef.current?.(),
     });
+    editor.addAction({
+      id: "manim.leaveEditor",
+      label: "Move Focus Out of the Editor",
+      keybindings: [monaco.KeyCode.Escape],
+      precondition: LEAVE_EDITOR_WHEN,
+      run: () => {
+        focusNextAfter(editor.getContainerDomNode());
+      },
+    });
     editor.onDidChangeCursorPosition((event) =>
       cursorRef.current?.({ line: event.position.lineNumber, column: event.position.column }),
     );
+    // Another file's model: report where its cursor is instead of keeping the old position.
+    editor.onDidChangeModel(() => {
+      const position = editor.getPosition();
+      if (position) cursorRef.current?.({ line: position.lineNumber, column: position.column });
+    });
+    editor.onDidFocusEditorText(() => setFocused(true));
+    editor.onDidBlurEditorText(() => setFocused(false));
+    editor.onDidChangeConfiguration((event) => {
+      if (event.hasChanged(monaco.editor.EditorOption.tabFocusMode)) {
+        setTabFocusMode(editor.getOption(monaco.editor.EditorOption.tabFocusMode));
+      }
+    });
+    setTabFocusMode(editor.getOption(monaco.editor.EditorOption.tabFocusMode));
     editor.focus();
   };
 
   return (
-    <Editor
-      path={path}
-      value={value}
-      language="python"
-      theme={EDITOR_THEME}
-      onChange={(next) => onChange(next ?? "")}
-      onMount={handleMount}
-      loading={<div className="h-full w-full bg-surface" />}
-      options={{
-        fontFamily: "'JetBrains Mono Variable', ui-monospace, Menlo, Consolas, monospace",
-        fontSize,
-        lineHeight: Math.round(fontSize * 1.6),
-        fontLigatures: false,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        tabSize: 4,
-        insertSpaces: true,
-        wordWrap: "on",
-        wrappingIndent: "indent",
-        padding: { top: 12, bottom: 12 },
-        renderLineHighlight: "line",
-        cursorBlinking: "smooth",
-        cursorSmoothCaretAnimation: "on",
-        smoothScrolling: true,
-        stickyScroll: { enabled: true, maxLineCount: 3 },
-        guides: { indentation: true, bracketPairs: false },
-        bracketPairColorization: { enabled: false },
-        overviewRulerBorder: false,
-        hideCursorInOverviewRuler: true,
-        scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
-        fixedOverflowWidgets: true,
-        "semanticHighlighting.enabled": false,
-      }}
-    />
+    <div className="relative h-full">
+      <Editor
+        path={path}
+        value={value}
+        language="python"
+        theme={EDITOR_THEME}
+        onChange={(next) => onChange(next ?? "")}
+        onMount={handleMount}
+        loading={<div className="h-full w-full bg-surface" />}
+        options={{
+          fontFamily: "'JetBrains Mono Variable', ui-monospace, Menlo, Consolas, monospace",
+          fontSize,
+          lineHeight: Math.round(fontSize * 1.6),
+          fontLigatures: false,
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          automaticLayout: true,
+          tabSize: 4,
+          insertSpaces: true,
+          wordWrap: "on",
+          wrappingIndent: "indent",
+          padding: { top: 12, bottom: 12 },
+          renderLineHighlight: "line",
+          cursorBlinking: "smooth",
+          cursorSmoothCaretAnimation: "on",
+          smoothScrolling: true,
+          stickyScroll: { enabled: true, maxLineCount: 3 },
+          guides: { indentation: true, bracketPairs: false },
+          bracketPairColorization: { enabled: false },
+          overviewRulerBorder: false,
+          hideCursorInOverviewRuler: true,
+          scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+          fixedOverflowWidgets: true,
+          "semanticHighlighting.enabled": false,
+          ariaLabel: `Python code editor. Press Escape to move focus out of the editor, or ${TAB_FOCUS_KEY} to make Tab move focus.`,
+        }}
+      />
+      {focused && (
+        <div
+          aria-hidden="true"
+          data-testid="editor-focus-hint"
+          className="pointer-events-none absolute bottom-1.5 right-4 z-10 rounded border border-line bg-raised/90 px-1.5 py-0.5 font-sans text-2xs text-fg-subtle"
+        >
+          {tabFocusMode ? `Tab moves focus · ${TAB_FOCUS_KEY} to indent with Tab` : `Esc leaves the editor · ${TAB_FOCUS_KEY}: Tab moves focus`}
+        </div>
+      )}
+    </div>
   );
 });
 

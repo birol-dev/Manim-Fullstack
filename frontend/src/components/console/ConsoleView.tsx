@@ -3,7 +3,7 @@ import { CornerDownRight, Terminal } from "lucide-react";
 
 import { EmptyState } from "@/components/ui/panel";
 import type { LogEntry, LogLevel } from "@/hooks/useLogs";
-import { findLineReference } from "@/lib/logs";
+import { findLineReferenceMatch } from "@/lib/logs";
 import { cn } from "@/lib/utils";
 
 const LEVEL_STYLES: Record<LogLevel, string> = {
@@ -61,17 +61,26 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
       className="h-full min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 font-mono text-[12px] leading-[1.45] select-text outline-none"
     >
       {logs.map((entry) => {
-        const line = entry.level === "command" ? null : findLineReference(entry.text, linkFiles);
+        const reference = entry.level === "command" ? null : findLineReferenceMatch(entry.text, linkFiles);
+        const line = reference?.line ?? null;
         return (
           <div key={entry.id} className={cn("group flex items-start gap-2 whitespace-pre-wrap break-words", LEVEL_STYLES[entry.level])}>
-            {line !== null ? (
-              <button
-                type="button"
-                onClick={() => onJumpToLine(line)}
-                className="min-w-0 flex-1 text-left underline decoration-dotted decoration-fg-subtle/50 underline-offset-2 hover:decoration-accent"
-              >
-                {entry.text}
-              </button>
+            {reference ? (
+              <span className="min-w-0 flex-1">
+                {entry.text.slice(0, reference.start)}
+                {/* Mouse shortcut only; the "Line N" button is the keyboard and screen reader control. */}
+                <span
+                  data-line-link
+                  onClick={() => {
+                    // Selecting text to copy it shouldn't jump.
+                    if (!window.getSelection()?.toString()) onJumpToLine(reference.line);
+                  }}
+                  className="cursor-pointer underline decoration-dotted decoration-fg-subtle/50 underline-offset-2 hover:decoration-accent"
+                >
+                  {entry.text.slice(reference.start, reference.end)}
+                </span>
+                {entry.text.slice(reference.end)}
+              </span>
             ) : (
               <span className="min-w-0 flex-1">{entry.text}</span>
             )}
@@ -79,6 +88,7 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
               <button
                 type="button"
                 onClick={() => onJumpToLine(line)}
+                aria-label={`Go to line ${line}`}
                 className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded border border-line-strong bg-raised px-1.5 font-sans text-2xs text-fg-muted transition-colors hover:border-accent hover:text-accent"
                 title={`Jump to line ${line}`}
               >
