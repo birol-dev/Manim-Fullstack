@@ -204,6 +204,12 @@ export function FilesPanel(props: FilesPanelProps) {
               {files.scripts.map((script) => {
                 const active = script.name === activeFile;
                 const tabIndex = script.name === scriptRoving.focusKey ? 0 : -1;
+                // Links out of the workspace (or to nothing) can't be opened; offer Delete only.
+                const linkNote = script.outside
+                  ? "link to a file outside the workspace"
+                  : script.broken
+                    ? "broken link"
+                    : null;
                 return (
                   <li
                     key={script.name}
@@ -237,37 +243,45 @@ export function FilesPanel(props: FilesPanelProps) {
                           data-name={script.name}
                           tabIndex={tabIndex}
                           aria-current={active ? "true" : undefined}
-                          onClick={() => props.onOpen(script.name)}
-                          onDoubleClick={() => startRename(script.name)}
+                          onClick={() => {
+                            if (!linkNote) props.onOpen(script.name);
+                          }}
+                          onDoubleClick={() => {
+                            if (!linkNote) startRename(script.name);
+                          }}
+                          aria-disabled={linkNote ? "true" : undefined}
                           onKeyDown={(event) => {
-                            if (event.key === "F2") startRename(script.name);
+                            if (event.key === "F2" && !linkNote) startRename(script.name);
                             else if (event.key === "Delete") props.onDelete(script.name);
                             else return;
                             event.preventDefault();
                           }}
                           aria-keyshortcuts="F2 Delete ArrowRight"
                           aria-describedby="script-row-keys"
-                          title={`${script.name} · ${formatBytes(script.size)}`}
-                          className="h-7 min-w-0 flex-1 truncate text-left text-xs"
+                          title={linkNote ? `${script.name} · ${linkNote} (can only be deleted)` : `${script.name} · ${formatBytes(script.size)}`}
+                          className={cn("h-7 min-w-0 flex-1 truncate text-left text-xs", linkNote && "italic text-fg-subtle")}
                         >
                           {script.name}
+                          {linkNote && <span className="sr-only"> ({linkNote}, can only be deleted)</span>}
                         </button>
                         {dirtyFiles.includes(script.name) && (
                           <span className="size-1.5 shrink-0 rounded-full bg-fg-muted group-hover:hidden" aria-label="Unsaved changes" />
                         )}
                         <RowActions>
-                          <Tooltip content="Rename">
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              tabIndex={-1}
-                              data-row-action
-                              aria-label={`Rename ${script.name}`}
-                              onClick={() => startRename(script.name)}
-                            >
-                              <Pencil />
-                            </Button>
-                          </Tooltip>
+                          {!linkNote && (
+                            <Tooltip content="Rename">
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                tabIndex={-1}
+                                data-row-action
+                                aria-label={`Rename ${script.name}`}
+                                onClick={() => startRename(script.name)}
+                              >
+                                <Pencil />
+                              </Button>
+                            </Tooltip>
+                          )}
                           <Tooltip content="Delete">
                             <Button
                               variant="danger-ghost"

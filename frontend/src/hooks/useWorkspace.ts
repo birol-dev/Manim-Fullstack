@@ -266,7 +266,8 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   const initialize = useCallback(async () => {
     const next = await refreshFiles();
     if (!next) return;
-    const names = next.scripts.map((script) => script.name);
+    // Links out of the workspace are listed (so they can be deleted) but can't be opened.
+    const names = next.scripts.filter((script) => !script.outside && !script.broken).map((script) => script.name);
     const remembered = readStored<string | null>(activeFileKey(modeRef.current), null);
     const target = remembered && names.includes(remembered) ? remembered : names[0];
     if (target) {
@@ -476,7 +477,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (activeFileRef.current === name) {
         // Nothing to keep from a deleted file.
         activeFileRef.current = null;
-        const fallback = next?.scripts[0]?.name;
+        const fallback = next?.scripts.find((script) => !script.outside && !script.broken)?.name;
         if (fallback) await openFile(fallback).catch(() => false);
         else showBuffer(null, "");
       }
