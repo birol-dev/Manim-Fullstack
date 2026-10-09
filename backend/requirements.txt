@@ -5,4 +5,5 @@ psutil>=5.9.0
 pydantic>=2.0
 python-multipart>=0.0.6
 # 0.19+ encodes video with PyAV, so a separate FFmpeg install is optional.
-manim>=0.19.0
+# Capped below 0.23: 0.22 removed the OpenGL --write_to_movie flag this app used to pass.
+manim>=0.19.0,<0.23

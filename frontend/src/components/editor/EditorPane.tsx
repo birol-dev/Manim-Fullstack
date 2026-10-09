@@ -1,6 +1,8 @@
 import { forwardRef, lazy, Suspense } from "react";
 import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
+import type { SyntaxErrorInfo } from "@/lib/types";
+
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/panel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -30,6 +32,8 @@ interface EditorPaneProps {
   latexAvailable: boolean;
   canRender: boolean;
   fontSize: number;
+  syntaxError?: SyntaxErrorInfo | null;
+  stopping?: boolean;
   onCodeChange: (code: string) => void;
   onCursorChange: (position: { line: number; column: number }) => void;
   onSceneChange: (scene: string) => void;
@@ -49,24 +53,31 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
 
   return (
-    <section aria-label="Editor" className="@container flex h-full min-h-0 flex-col bg-surface">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line pl-1 pr-2">
-        <div className="flex h-full min-w-0 flex-1 items-center overflow-hidden">
-          {activeFile && (
-            <div className="relative flex h-full min-w-0 items-center gap-2 px-2.5 text-xs text-fg after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-surface">
-              <FileCode2 className="size-3.5 shrink-0 text-accent" />
-              <span className="truncate font-medium">{activeFile}</span>
-              {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
-            </div>
-          )}
+    <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
+      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2">
+        {activeFile && (
+          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg">
+            <FileCode2 className="size-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 truncate font-medium" title={activeFile}>
+              {activeFile}
+            </span>
+            {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
+          </div>
+        )}
+
+        <div className="flex shrink-0 items-center gap-1.5">
           <Tooltip content="Save" shortcut={`${MOD_KEY}+S`}>
-            <Button variant="ghost" size="icon-sm" aria-label="Save" disabled={!activeFile || !isDirty} onClick={props.onSave}>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Save"
+              disabled={!activeFile || !isDirty}
+              onClick={props.onSave}
+              className="shrink-0"
+            >
               <Save />
             </Button>
           </Tooltip>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
           <Tooltip content={props.autoRender ? "Auto-render on (renders when you pause typing)" : "Auto-render when you pause typing"}>
             <Button
               variant="ghost"
@@ -81,8 +92,12 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Tooltip>
 
           <Select value={selectedScene} onValueChange={props.onSceneChange} disabled={scenes.length === 0}>
-            <SelectTrigger aria-label="Scene" className="w-40 @max-[600px]:w-28">
-              <SelectValue placeholder={activeFile ? "No scenes found" : "Scene"} />
+            <SelectTrigger aria-label="Scene" className="w-36 min-w-0 @max-[720px]:w-28 @max-[420px]:w-24">
+              <SelectValue
+                placeholder={
+                  props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"
+                }
+              />
             </SelectTrigger>
             <SelectContent>
               {scenes.map((scene) => (
@@ -94,7 +109,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
-            <SelectTrigger aria-label="Quality" className="w-[88px]">
+            <SelectTrigger aria-label="Quality" className="w-[88px] @max-[420px]:w-16">
               <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
             </SelectTrigger>
             <SelectContent align="end">
@@ -110,9 +125,16 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           {rendering ? (
-            <Button variant="secondary" size="sm" onClick={props.onCancel} className="w-[92px] @max-[520px]:w-auto" aria-label="Cancel">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={props.onCancel}
+              disabled={props.stopping}
+              className="w-[104px] @max-[520px]:w-auto"
+              aria-label={props.stopping ? "Stopping" : "Cancel"}
+            >
               <Square className="fill-current" />
-              <span className="@max-[520px]:hidden">Cancel</span>
+              <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
             </Button>
           ) : (
             <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`}>
@@ -131,6 +153,15 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           )}
         </div>
       </div>
+
+      {props.syntaxError && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-danger/20 bg-danger-soft px-3 py-1.5 text-xs text-fg-muted">
+          <AlertTriangle className="size-3.5 shrink-0 text-danger" />
+          <span className="min-w-0 flex-1 truncate" title={props.syntaxError.message}>
+            Line {props.syntaxError.line}: {props.syntaxError.message}
+          </span>
+        </div>
+      )}
 
       {needsLatexWarning && (
         <div className="flex shrink-0 items-center gap-2 border-b border-warning/20 bg-warning-soft px-3 py-1.5 text-xs text-fg-muted">
@@ -160,6 +191,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               onCursorChange={props.onCursorChange}
               onSave={props.onSave}
               onRender={props.onRender}
+              syntaxError={props.syntaxError ? { line: props.syntaxError.line, message: props.syntaxError.message } : null}
             />
           </Suspense>
         ) : (

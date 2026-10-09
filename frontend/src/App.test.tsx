@@ -352,7 +352,7 @@ describe("App", () => {
     fireEvent.change(input, { target: { value: "a^2" } });
     // KaTeX's MathML output trips jsdom's accessible-name computation, so avoid role queries here.
     await user.click(screen.getByText("Insert MathTex"));
-    expect(editorCalls).toContainEqual(["insert", 'MathTex(r"a^2")', "inline"]);
+    expect(editorCalls).toContainEqual(["insert", 'MathTex(r"a^2")', "block"]);
   });
 
   it("uploads assets, rejects unsupported types, and inserts usage code", async () => {
@@ -367,7 +367,7 @@ describe("App", () => {
     await user.upload(input, new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" }));
     await waitFor(() => expect(server.assets.map((asset) => asset.name)).toEqual(["logo.svg"]));
     await user.click(await screen.findByRole("button", { name: "Insert logo.svg" }));
-    expect(editorCalls).toContainEqual(["insert", 'SVGMobject("assets/logo.svg")', "inline"]);
+    expect(editorCalls).toContainEqual(["insert", 'SVGMobject("assets/logo.svg")', "block"]);
   });
 
   it("opens setup when Manim is missing and starts installers", async () => {

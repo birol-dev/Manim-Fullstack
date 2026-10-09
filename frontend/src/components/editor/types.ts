@@ -22,4 +22,6 @@ export interface CodeEditorProps {
   onSave?: () => void;
   onRender?: () => void;
   fontSize?: number;
+  /** Live Python syntax error, shown as a squiggle independent of render errors. */
+  syntaxError?: { line: number; message: string } | null;
 }

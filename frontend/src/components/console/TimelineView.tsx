@@ -52,7 +52,7 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
                 onClick={() => onJumpToLine(step.line)}
                 title={`Line ${step.line}: ${isPlay ? `self.play(${step.label})` : step.label}`}
                 className={cn(
-                  "flex max-h-24 w-full flex-col justify-between gap-1 rounded-md border px-2.5 py-2 text-left transition-colors",
+                  "flex min-h-16 w-full flex-col justify-between gap-1 rounded-md border px-2.5 py-2 text-left transition-colors",
                   isPlay
                     ? "border-accent/25 bg-accent-soft hover:border-accent/60"
                     : "hatched border-dashed border-line-strong hover:border-fg-subtle",
@@ -63,7 +63,9 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
                   <span className={cn("font-medium", isPlay ? "text-accent" : "text-fg-muted")}>{isPlay ? "play" : "wait"}</span>
                   <span className="tabular-nums">L{step.line}</span>
                 </span>
-                <span className="truncate font-mono text-[11.5px] text-fg">{isPlay ? step.label : step.label.replace(/^Wait /, "")}</span>
+                <span className="line-clamp-3 whitespace-normal break-words font-mono text-[11.5px] leading-snug text-fg">
+                  {isPlay ? step.label : step.label.replace(/^Wait /, "")}
+                </span>
                 <span className="text-2xs tabular-nums text-fg-subtle">
                   {typeof step.duration === "number" ? formatDuration(seconds) : isPlay ? "1s" : String(step.duration ?? "1s")}
                 </span>

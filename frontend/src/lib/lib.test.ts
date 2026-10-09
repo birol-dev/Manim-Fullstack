@@ -13,7 +13,7 @@ import {
   validateScriptName,
 } from "./format";
 import { findErrorLocation, findLineReference } from "./logs";
-import { overallPercent, stepSeconds } from "./progress";
+import { overallPercent, risingPercent, stepSeconds } from "./progress";
 import { buildShapeCode, DEFAULT_SHAPE_OPTIONS, defaultVariableName, isFillable, toIdentifier } from "./shapeBuilder";
 import { BROWSER_STARTER, BROWSER_STARTER_NAME, loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "./storage";
 import { newSceneCode, SCENE_TEMPLATES } from "./templates";
@@ -121,6 +121,12 @@ describe("progress", () => {
     // More animations than the static count (loops): never exceed 100.
     expect(overallPercent(render({ percent: 50, animation: 9 }), 4)).toBe(95);
     expect(overallPercent(render({ percent: 70, animation: 2 }), 0)).toBe(70);
+  });
+
+  it("does not walk progress backwards when a loop restarts the bar", () => {
+    expect(risingPercent(null, 40)).toBe(40);
+    expect(risingPercent(100, 75)).toBe(100);
+    expect(risingPercent(40, 80)).toBe(80);
   });
 
   it("assumes one second for steps without a literal duration", () => {

@@ -20,7 +20,7 @@ export function TemplatesPanel({ latexAvailable, canReplace, onCreateFrom, onRep
       </p>
       <ul className="flex flex-col gap-2">
         {SCENE_TEMPLATES.map((template) => (
-          <li key={template.id} className="rounded-lg border border-line bg-raised/40 p-3 transition-colors hover:border-line-strong">
+          <li key={template.id} className="min-w-0 overflow-hidden rounded-lg border border-line bg-raised/40 p-3 transition-colors hover:border-line-strong">
             <div className="mb-1 flex items-center justify-between gap-2">
               <h3 className="truncate text-[13px] font-medium text-fg">{template.title}</h3>
               <span
@@ -33,7 +33,7 @@ export function TemplatesPanel({ latexAvailable, canReplace, onCreateFrom, onRep
                 {template.needsLatex && !latexAvailable ? "Needs LaTeX" : template.category}
               </span>
             </div>
-            <p className="mb-3 text-xs leading-relaxed text-fg-muted">{template.description}</p>
+            <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted">{template.description}</p>
             <div className="flex gap-1.5">
               <Button size="xs" onClick={() => onCreateFrom(template)}>
                 <FilePlus2 />

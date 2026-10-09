@@ -88,10 +88,10 @@ export function BottomPanel(props: BottomPanelProps) {
         </div>
       </div>
 
-      <TabsContent value="console" className="min-h-0 flex-1">
+      <TabsContent value="console" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <ConsoleView logs={props.logs} linkFiles={props.linkFiles} onJumpToLine={props.onJumpToLine} />
       </TabsContent>
-      <TabsContent value="timeline" className="min-h-0 flex-1">
+      <TabsContent value="timeline" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <TimelineView scene={props.scene} steps={props.steps} activeIndex={props.activeStep} onJumpToLine={props.onJumpToLine} />
       </TabsContent>
     </Tabs>

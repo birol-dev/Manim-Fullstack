@@ -29,10 +29,10 @@ import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE } from "@/lib/constants";
 import { classNameFromFile } from "@/lib/format";
 import { findErrorLocation } from "@/lib/logs";
-import { overallPercent } from "@/lib/progress";
+import { overallPercent, risingPercent } from "@/lib/progress";
 import { STORAGE_KEYS } from "@/lib/storage";
 import { newSceneCode, type SceneTemplate } from "@/lib/templates";
-import type { AssetFile, MediaFile, PreviewItem, Quality, StorageMode } from "@/lib/types";
+import type { AssetFile, MediaFile, ParseResult, PreviewItem, Quality, StorageMode } from "@/lib/types";
 
 // KaTeX is only needed by this panel.
 const LatexPanel = lazy(() => import("@/components/sidebar/LatexPanel").then((module) => ({ default: module.LatexPanel })));
@@ -106,6 +106,13 @@ export default function App() {
 
   // ---- UI state ----------------------------------------------------------
   const editorRef = useRef<CodeEditorHandle>(null);
+  const revealLine = useCallback((line: number) => {
+    // After the toast button's click, so closing the toast doesn't steal focus.
+    window.setTimeout(() => {
+      editorRef.current?.revealLine(line);
+      editorRef.current?.focus();
+    }, 0);
+  }, []);
   const [preview, setPreview] = useState<PreviewItem | null>(null);
   const objectUrlRef = useRef<string | null>(null);
   const [lastOutcome, setLastOutcome] = useState<RenderOutcome | null>(null);
@@ -175,6 +182,7 @@ export default function App() {
     (outcome: RenderOutcome) => {
       setLastOutcome(outcome);
       if (!outcome.success && outcome.status !== "cancelled") {
+        setPreview((current) => (current ? { ...current, stale: true } : current));
         setBottomTab("console");
         expandBottom();
         const location = findErrorLocation(
@@ -186,11 +194,10 @@ export default function App() {
         }
         toast.error(`${outcome.request.scene} didn't render`, {
           description: location ? `${location.message} (line ${location.line})` : "See the console for details.",
-          action: location
-            ? { label: "Go to line", onClick: () => editorRef.current?.revealLine(location.line) }
-            : undefined,
+          action: location ? { label: "Go to line", onClick: () => revealLine(location.line) } : undefined,
         });
       } else if (outcome.success && !outcome.output) {
+        setPreview((current) => (current ? { ...current, stale: true } : current));
         toast.warning("Manim finished but produced no output file.");
       }
       if (pendingAutoRender.current) {
@@ -198,7 +205,7 @@ export default function App() {
         setTimeout(() => void startRenderRef.current(), 0);
       }
     },
-    [expandBottom, logSnapshot],
+    [expandBottom, logSnapshot, revealLine],
   );
 
   const session = useRenderSession({ log, onOutput: handleOutput, onFinished: handleFinished });
@@ -217,18 +224,28 @@ export default function App() {
     editorRef.current?.clearMarkers();
 
     let scenes = workspace.scenes;
+    let parsed: ParseResult | null;
     let code: string | undefined;
     const buffer = workspace.code;
     try {
       if (storageMode === "disk" && autoSave) {
-        scenes = (workspace.isDirty ? await workspace.save() : await workspace.parseNow())?.scenes ?? scenes;
+        parsed = workspace.isDirty ? await workspace.save() : await workspace.parseNow();
       } else {
-        scenes = (await workspace.parseNow())?.scenes ?? scenes;
+        parsed = await workspace.parseNow();
         // Send the buffer unless it is identical to the file on disk.
         if (storageMode === "browser" || workspace.isDirty) code = buffer;
       }
     } catch (err) {
       toast.error(errorMessage(err, "Couldn't save before rendering."));
+      return;
+    }
+    scenes = parsed?.scenes ?? scenes;
+    if (parsed?.syntaxError) {
+      const syntax = parsed.syntaxError;
+      toast.error("This file has a syntax error", {
+        description: `Line ${syntax.line}: ${syntax.message}`,
+        action: { label: "Go to line", onClick: () => revealLine(syntax.line) },
+      });
       return;
     }
 
@@ -242,7 +259,7 @@ export default function App() {
     clearLogs();
     lastRenderedCode.current = buffer;
     session.start({ filename, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
-  }, [workspace, storageMode, autoSave, clearLogs, session, quality, useOpenGL, openGLSupported, downloadOnly]);
+  }, [workspace, storageMode, autoSave, clearLogs, session, quality, useOpenGL, openGLSupported, downloadOnly, revealLine]);
 
   useEffect(() => {
     activeFileRef.current = workspace.activeFile;
@@ -253,11 +270,18 @@ export default function App() {
   const save = useCallback(async () => {
     if (!workspace.activeFile) return;
     try {
-      await workspace.save();
+      const result = await workspace.save();
+      if (result.syntaxError) {
+        const syntax = result.syntaxError;
+        toast.warning("Saved, but this file has a syntax error", {
+          description: `Line ${syntax.line}: ${syntax.message}`,
+          action: { label: "Go to line", onClick: () => revealLine(syntax.line) },
+        });
+      }
     } catch (err) {
       toast.error(errorMessage(err, "Couldn't save the file."));
     }
-  }, [workspace]);
+  }, [workspace, revealLine]);
   const saveRef = useRef(save);
   useEffect(() => {
     saveRef.current = save;
@@ -339,7 +363,7 @@ export default function App() {
     if (!editorRef.current?.insertText(code, mode)) toast.error("Open a script to insert code into.");
   };
 
-  const jumpToLine = (line: number) => editorRef.current?.revealLine(line);
+  const jumpToLine = (line: number) => revealLine(line);
 
   const selectSidebarView = (view: SidebarView) => {
     const panel = sidebarPanelRef.current;
@@ -410,7 +434,17 @@ export default function App() {
 
   const activeSteps = workspace.animations[workspace.selectedScene] ?? [];
   const renderingSteps = session.active ? (workspace.animations[session.active.request.scene] ?? []) : [];
-  const renderPercent = session.active ? (overallPercent(session.active, renderingSteps.length) ?? 0) : null;
+  const [percentFloor, setPercentFloor] = useState<{ id: string; value: number } | null>(null);
+  const rawPercent = session.active ? overallPercent(session.active, renderingSteps.length) : null;
+  let renderPercent: number | null = null;
+  if (!session.active) {
+    if (percentFloor !== null) setPercentFloor(null);
+  } else {
+    const previous = percentFloor?.id === session.active.id ? percentFloor.value : null;
+    const next = risingPercent(previous, rawPercent) ?? 0;
+    renderPercent = next;
+    if (previous !== next) setPercentFloor({ id: session.active.id, value: next });
+  }
   const activeStep =
     session.active && session.active.request.scene === workspace.selectedScene
       ? (session.active.progress?.animation ?? null)
@@ -471,7 +505,7 @@ export default function App() {
             <LatexPanel
               latexAvailable={latexAvailable}
               canInsert={Boolean(workspace.activeFile)}
-              onInsert={(code) => insertCode(code, "inline")}
+              onInsert={(code) => insertCode(code, "block")}
               onOpenSetup={() => setSetupOpen(true)}
             />
           </Suspense>
@@ -482,7 +516,7 @@ export default function App() {
             assets={workspace.files.assets}
             canInsert={Boolean(workspace.activeFile)}
             onUpload={workspace.uploadAsset}
-            onInsert={(code) => insertCode(code, code.startsWith("self.") ? "block" : "inline")}
+            onInsert={(code) => insertCode(code, "block")}
             onDelete={requestDeleteAsset}
           />
         );
@@ -522,21 +556,20 @@ export default function App() {
             <Panel
               id="sidebar"
               panelRef={sidebarPanelRef}
-              defaultSize="280px"
-              minSize="220px"
-              maxSize="480px"
+              defaultSize="240px"
+              minSize="200px"
+              maxSize="320px"
               collapsible
-              groupResizeBehavior="preserve-pixel-size"
               onResize={(size) => setSidebarOpen(size.inPixels > 0)}
             >
               {sidebarContent}
             </Panel>
             <ResizeHandle direction="horizontal" />
-            <Panel id="work" minSize="480px">
+            <Panel id="work" minSize="400px">
               <Group orientation="vertical" id="mc-layout-work" {...workLayout}>
                 <Panel id="top" minSize="200px">
                   <Group orientation="horizontal" id="mc-layout-top" {...topLayout}>
-                    <Panel id="editor" minSize="280px">
+                    <Panel id="editor" minSize="320px">
                       <EditorPane
                         ref={editorRef}
                         storageKey={storageMode}
@@ -551,6 +584,8 @@ export default function App() {
                         latexAvailable={latexAvailable}
                         canRender={canRender}
                         fontSize={editorFontSize}
+                        syntaxError={workspace.syntaxError}
+                        stopping={session.stopping}
                         onCodeChange={workspace.setCode}
                         onCursorChange={setCursor}
                         onSceneChange={workspace.setSelectedScene}
@@ -564,7 +599,7 @@ export default function App() {
                       />
                     </Panel>
                     <ResizeHandle direction="horizontal" />
-                    <Panel id="preview" defaultSize="42%" minSize="260px">
+                    <Panel id="preview" defaultSize="42%" minSize="280px">
                       <PreviewPane
                         preview={preview}
                         active={session.active}

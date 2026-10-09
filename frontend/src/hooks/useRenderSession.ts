@@ -83,6 +83,7 @@ function makeId(): string {
 export function useRenderSession({ log, onOutput, onFinished }: Options) {
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [active, setActive] = useState<ActiveRender | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
   const activeRef = useRef<ActiveRender | null>(null);
@@ -106,6 +107,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     (success: boolean, status: string) => {
       const render = activeRef.current;
       if (!render) return;
+      setStopping(false);
       updateActive(null);
       const output = outputRef.current;
       outputRef.current = null;
@@ -278,6 +280,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
       if (activeRef.current) return null;
       const id = makeId();
       outputRef.current = null;
+      setStopping(false);
       updateActive({ id, request, progress: null, startedAt: Date.now() });
       send({
         type: "start",
@@ -305,6 +308,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
 
   const cancel = useCallback(() => {
     if (!activeRef.current) return;
+    setStopping(true);
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN && queueRef.current.length === 0) {
       socket.send(JSON.stringify({ type: "cancel" }));
@@ -319,5 +323,5 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     connect();
   }, [connect]);
 
-  return { connection, active, start, cancel, reconnect };
+  return { connection, active, stopping, start, cancel, reconnect };
 }

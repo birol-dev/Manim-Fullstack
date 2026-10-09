@@ -220,7 +220,8 @@ async def test_execute_cancels_running_process_before_starting_new(tmp_path):
                 log_callback=AsyncMock(),
             )
             mock_cancel.assert_called()
-            assert res["success"] is True
+            assert res["success"] is False
+            assert res["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -383,10 +384,11 @@ def test_find_latest_render_falls_back_to_images(tmp_path):
 def test_build_args_and_subprocess_env():
     assert ManimExecutor.build_args("a.py", "S", "h", False) == ["a.py", "S", "-qh", "--progress_bar=display"]
     assert ManimExecutor.build_args("a.py", "S", "zz", True) == [
-        "a.py", "S", "-qm", "--renderer=opengl", "--write_to_movie", "--progress_bar=display",
+        "a.py", "S", "-qm", "--renderer=opengl", "--progress_bar=display",
     ]
     env = ManimExecutor("/w")._subprocess_env()
     assert env["COLUMNS"] == "400"
+    assert env["TERM"] == "xterm-256color"
     assert env["PYTHONIOENCODING"] == "utf-8"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
 
@@ -406,6 +408,7 @@ async def test_execute_accepts_command_prefix(tmp_path):
     with patch("asyncio.create_subprocess_exec", return_value=proc) as spawn:
         await executor.execute(["py", "-m", "manim"], "a.py", "S", "l", False, log)
     assert spawn.call_args[0][:5] == ("py", "-m", "manim", "a.py", "S")
+    assert spawn.call_args.kwargs["stdin"] is asyncio.subprocess.DEVNULL
     assert log.call_args_list[0][0][0] == {"type": "info", "message": "$ manim a.py S -ql --progress_bar=display"}
 
 

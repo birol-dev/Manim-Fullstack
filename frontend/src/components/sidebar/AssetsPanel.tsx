@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
-import { apiUrl, errorMessage } from "@/lib/api";
+import { ApiError, apiUrl, errorMessage } from "@/lib/api";
 import { ALLOWED_ASSET_EXTENSIONS } from "@/lib/constants";
 import { assetKind, assetUsageSnippet, formatBytes } from "@/lib/format";
 import type { AssetFile } from "@/lib/types";
@@ -15,7 +15,7 @@ import { RowActions, SidebarPanel } from "./SidebarPanel";
 interface AssetsPanelProps {
   assets: AssetFile[];
   canInsert: boolean;
-  onUpload: (file: File) => Promise<void>;
+  onUpload: (file: File, options?: { overwrite?: boolean }) => Promise<void>;
   onInsert: (code: string) => void;
   onDelete: (asset: AssetFile) => void;
 }
@@ -54,7 +54,19 @@ export function AssetsPanel({ assets, canInsert, onUpload, onInsert, onDelete }:
         await onUpload(file);
         toast.success(`Uploaded ${file.name}`);
       } catch (err) {
-        toast.error(errorMessage(err, `Couldn't upload ${file.name}.`));
+        if (err instanceof ApiError && err.status === 409) {
+          const replace = window.confirm(`${file.name} already exists. Replace it?`);
+          if (replace) {
+            try {
+              await onUpload(file, { overwrite: true });
+              toast.success(`Replaced ${file.name}`);
+            } catch (replaceErr) {
+              toast.error(errorMessage(replaceErr, `Couldn't replace ${file.name}.`));
+            }
+          }
+        } else {
+          toast.error(errorMessage(err, `Couldn't upload ${file.name}.`));
+        }
       } finally {
         setUploading((count) => count - 1);
       }

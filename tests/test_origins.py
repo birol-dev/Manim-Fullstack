@@ -13,14 +13,28 @@ from origins import is_host_allowed, is_origin_allowed
         None,
         "",
         "http://localhost:5173",
-        "http://localhost",
+        "http://localhost:8000",
         "https://127.0.0.1:8000",
-        "http://[::1]:3000",
-        "http://app.localhost:8080",
+        "http://[::1]:8000",
     ],
 )
 def test_local_and_missing_origins_are_allowed(origin):
     assert is_origin_allowed(origin, "localhost:8000") is True
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:3000",
+        "http://localhost",
+        "http://[::1]:9999",
+        "http://app.localhost:8080",
+    ],
+)
+def test_other_localhost_ports_are_rejected(origin, monkeypatch):
+    monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.delenv("MANIM_DEV_ORIGIN_PORTS", raising=False)
+    assert is_origin_allowed(origin, "localhost:8000") is False
 
 
 @pytest.mark.parametrize(
@@ -32,9 +46,11 @@ def test_foreign_origins_are_rejected(origin, monkeypatch):
     assert is_origin_allowed(origin, "localhost:8000") is False
 
 
-def test_same_origin_by_ip_allowed_but_not_by_hostname(monkeypatch):
+def test_same_origin_by_ip_requires_lan_opt_in(monkeypatch):
     monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
-    # LAN access by IP address is fine.
+    monkeypatch.delenv("MANIM_ALLOW_LAN", raising=False)
+    assert is_origin_allowed("http://192.168.1.20:8000", "192.168.1.20:8000") is False
+    monkeypatch.setenv("MANIM_ALLOW_LAN", "1")
     assert is_origin_allowed("http://192.168.1.20:8000", "192.168.1.20:8000") is True
     # A hostname matching its own Host header could be DNS rebinding.
     assert is_origin_allowed("http://rebind.example:8000", "rebind.example:8000") is False
@@ -89,15 +105,22 @@ def test_websocket_from_foreign_origin_is_refused(client, monkeypatch):
         ("localhost:8000", True),
         ("127.0.0.1", True),
         ("[::1]:8000", True),
-        ("192.168.1.5:8000", True),
-        ("studio.localhost:5173", True),
+        ("192.168.1.5:8000", False),
+        ("studio.localhost:5173", False),
         ("rebind.example:8000", False),
         ("evil.example", False),
     ],
 )
 def test_host_policy(host, allowed, monkeypatch):
     monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.delenv("MANIM_ALLOW_LAN", raising=False)
     assert is_host_allowed(host) is allowed
+
+
+def test_lan_opt_in_allows_ip_hosts(monkeypatch):
+    monkeypatch.delenv("MANIM_ALLOWED_ORIGINS", raising=False)
+    monkeypatch.setenv("MANIM_ALLOW_LAN", "1")
+    assert is_host_allowed("192.168.1.5:8000") is True
 
 
 def test_configured_origins_allow_their_hosts(monkeypatch):
@@ -125,8 +148,8 @@ def test_cors_headers_follow_the_policy(client, monkeypatch):
     assert res.headers["access-control-allow-origin"] == "https://studio.example.com"
 
     monkeypatch.delenv("MANIM_ALLOWED_ORIGINS")
-    res = client.get("/api/health", headers={"Origin": "http://app.localhost:5173"})
-    assert res.headers["access-control-allow-origin"] == "http://app.localhost:5173"
+    res = client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
 
     preflight = client.options(
         "/api/save",
