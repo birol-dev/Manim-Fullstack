@@ -34,6 +34,8 @@ export interface ActiveRender {
   queuePosition?: number;
   /** The server sends typed "queued"/"started" events, so only "started" ends the wait. */
   queueEvents?: boolean;
+  /** Manim was started for this render (it left the queue, or was never queued). */
+  started?: boolean;
 }
 
 export interface RenderOutput {
@@ -147,14 +149,17 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
       if (event.render_id != null && event.render_id !== render?.id) return;
 
       if (render && event.render_id === render.id) {
-        if (event.type === "queued") {
+        if ((event.type === "queued" || event.type === "queue_position") && !render.started) {
+          // Sent again whenever the queue ahead moves (a render finished or was cancelled).
           updateActive({ ...render, queued: true, queuePosition: event.position || undefined, queueEvents: true });
         } else if (event.type === "info" && (event.message ?? "").startsWith(QUEUED_MESSAGE_PREFIX)) {
           // Legacy queue notice (also sent after "queued", for older clients).
           if (!render.queued) updateActive({ ...render, queued: true });
         } else if (render.queued && (event.type === "started" || (!render.queueEvents && event.type !== "result"))) {
           // "started", or for older servers anything else about this render (the "$ manim" line...).
-          updateActive({ ...render, queued: false, queuePosition: undefined });
+          updateActive({ ...render, queued: false, queuePosition: undefined, started: true });
+        } else if (event.type === "started" && !render.started) {
+          updateActive({ ...render, started: true });
         }
       }
 
@@ -201,7 +206,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           break;
         case "result":
           // A render cancelled while queued gets only a result; say what happened.
-          if (render?.queued && event.status === "cancelled") log("warning", "Cancelled before it started.");
+          if (render && !render.started && render.queued && event.status === "cancelled") log("warning", "Cancelled before it started.");
           finish(Boolean(event.success), event.status ?? "unknown");
           break;
       }
@@ -343,12 +348,15 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN && queueRef.current.length === 0) {
       socket.send(JSON.stringify({ type: "cancel", id: render.id }));
-      if (render.queued) {
+      if (render.queued && !render.started) {
         // The server drops it from the queue and answers with one "cancelled" result.
         // Fallback for servers that never answer: finish locally; a late result is
-        // then ignored by its id, so nothing is logged or toasted twice.
+        // then ignored by its id, so nothing is logged or toasted twice. If the render
+        // started in the meantime (cancel raced "started"), Manim is being stopped and
+        // its own result is on the way, so don't claim it never started.
         setTimeout(() => {
-          if (activeRef.current?.id !== render.id) return;
+          const current = activeRef.current;
+          if (current?.id !== render.id || current.started) return;
           callbacks.current.log("warning", "Cancelled before it started.");
           finish(false, "cancelled");
         }, QUEUED_CANCEL_FALLBACK_MS);

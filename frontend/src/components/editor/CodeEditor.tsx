@@ -3,8 +3,8 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 
 import { IS_MAC } from "@/lib/constants";
 import { focusNextAfter } from "@/lib/focus";
-import { planBlockInsert } from "@/lib/insert";
-import { EDITOR_THEME, monaco } from "@/lib/monaco";
+import { isInsertRefusal, planBlockInsert } from "@/lib/insert";
+import { EDITOR_THEME, monaco, TabFocus } from "@/lib/monaco";
 import type { CodeEditorHandle, CodeEditorProps } from "./types";
 
 type StandaloneEditor = Parameters<OnMount>[0];
@@ -79,6 +79,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
         editor.executeEdits("insert", [{ range: selection, text, forceMoveMarkers: true }]);
       } else {
         const plan = planBlockInsert(model.getLinesContent(), selection.positionLineNumber, text);
+        if (isInsertRefusal(plan)) return plan;
         const endColumn = model.getLineMaxColumn(plan.line);
         const range = plan.replace
           ? new monaco.Range(plan.line, 1, plan.line, endColumn)
@@ -158,12 +159,15 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
     });
     editor.onDidFocusEditorText(() => setFocused(true));
     editor.onDidBlurEditorText(() => setFocused(false));
+    // Ctrl+M toggles Monaco's global TabFocus, which the editor's tabFocusMode option
+    // doesn't reflect; follow both so the hint chip always says what Tab does.
+    const readTabFocus = () => Boolean(editor.getOption(monaco.editor.EditorOption.tabFocusMode) || TabFocus.getTabFocusMode());
     editor.onDidChangeConfiguration((event) => {
-      if (event.hasChanged(monaco.editor.EditorOption.tabFocusMode)) {
-        setTabFocusMode(editor.getOption(monaco.editor.EditorOption.tabFocusMode));
-      }
+      if (event.hasChanged(monaco.editor.EditorOption.tabFocusMode)) setTabFocusMode(readTabFocus());
     });
-    setTabFocusMode(editor.getOption(monaco.editor.EditorOption.tabFocusMode));
+    const subscription = TabFocus.onDidChangeTabFocus(() => setTabFocusMode(readTabFocus()));
+    editor.onDidDispose(() => subscription.dispose());
+    setTabFocusMode(readTabFocus());
   };
 
   return (
@@ -210,7 +214,7 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
           data-testid="editor-focus-hint"
           className="pointer-events-none absolute bottom-1.5 right-4 z-10 rounded border border-line bg-raised/90 px-1.5 py-0.5 font-sans text-2xs text-fg-subtle"
         >
-          {tabFocusMode ? `Tab moves focus · ${TAB_FOCUS_KEY} to indent with Tab` : `Esc leaves the editor · ${TAB_FOCUS_KEY}: Tab moves focus`}
+          {tabFocusMode ? `Tab moves focus · ${TAB_FOCUS_KEY} to indent` : `Esc leaves the editor · ${TAB_FOCUS_KEY}: Tab moves focus`}
         </div>
       )}
     </div>

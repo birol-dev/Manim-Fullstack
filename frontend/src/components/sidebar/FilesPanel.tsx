@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,11 @@ interface FilesPanelProps {
   onCompare: () => void;
 }
 
+/**
+ * Inline rename. The name is checked while typing (same rule and wording as the
+ * New script dialog); Enter/Escape hand focus back to the row (*keyboard*), a
+ * click elsewhere commits without taking focus back.
+ */
 function RenameInput({
   initial,
   existing,
@@ -35,24 +40,26 @@ function RenameInput({
 }: {
   initial: string;
   existing: string[];
-  onCommit: (name: string) => Promise<void>;
-  onCancel: () => void;
+  onCommit: (name: string, keyboard: boolean) => Promise<void>;
+  onCancel: (keyboard: boolean) => void;
 }) {
   const [value, setValue] = useState(initial);
-  const [error, setError] = useState<string | null>(null);
+  const [serverError, setServerError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const name = toScriptName(value);
+  const unchanged = name === initial || !value.trim();
+  const problem = unchanged ? null : validateScriptName(name, existing.filter((other) => other !== initial));
+  const error = serverError ?? problem;
 
-  const commit = async () => {
+  const commit = async (keyboard: boolean) => {
     if (busy) return;
-    const name = toScriptName(value);
-    if (name === initial || !value.trim()) return onCancel();
-    const problem = validateScriptName(name, existing.filter((other) => other !== initial));
-    if (problem) return setError(problem);
+    if (unchanged) return onCancel(keyboard);
+    if (problem) return;
     setBusy(true);
     try {
-      await onCommit(name);
+      await onCommit(name, keyboard);
     } catch (err) {
-      setError(errorMessage(err, "Rename failed."));
+      setServerError(errorMessage(err, "Couldn't rename the file."));
       setBusy(false);
     }
   };
@@ -63,21 +70,34 @@ function RenameInput({
         autoFocus
         aria-label="New file name"
         aria-invalid={error ? true : undefined}
+        aria-describedby={error ? "rename-error" : undefined}
         value={value}
         disabled={busy}
         onChange={(event) => {
           setValue(dedupeExtension(event.target.value));
-          setError(null);
+          setServerError(null);
         }}
-        onFocus={(event) => event.currentTarget.setSelectionRange(0, initial.replace(/\.py$/, "").length)}
+        onFocus={(event) => event.currentTarget.setSelectionRange(0, initial.replace(/\.py$/i, "").length)}
         onKeyDown={(event) => {
-          if (event.key === "Enter") void commit();
-          if (event.key === "Escape") onCancel();
+          if (event.key === "Enter") {
+            event.preventDefault();
+            void commit(true);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            onCancel(true);
+          }
         }}
-        onBlur={() => void commit()}
+        onBlur={() => void commit(false)}
         className="h-6 w-full rounded border border-accent bg-canvas px-1.5 text-xs text-fg outline-none aria-[invalid=true]:border-danger"
       />
-      {error && <p className="text-2xs text-danger">{error}</p>}
+      {error ? (
+        <p id="rename-error" role="alert" className="text-2xs text-danger">
+          {error}
+        </p>
+      ) : (
+        !unchanged && name !== value.trim() && <p className="text-2xs text-fg-subtle">Will be saved as {name}</p>
+      )}
     </div>
   );
 }
@@ -122,6 +142,23 @@ function useRovingList(keys: string[], preferred: string | null) {
 export function FilesPanel(props: FilesPanelProps) {
   const { files, storageMode, activeFile, dirtyFiles, previewPath } = props;
   const [renaming, setRenaming] = useState<string | null>(null);
+  // After a keyboard rename (Enter/Escape), focus goes back to that row, under its new name.
+  const refocusRow = useRef<string | null>(null);
+  const scriptListRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    const name = refocusRow.current;
+    if (!name || renaming) return;
+    const row = Array.from(scriptListRef.current?.querySelectorAll<HTMLElement>("[data-roving-item]") ?? []).find(
+      (element) => element.dataset.name === name,
+    );
+    if (!row) return; // the list hasn't caught up with a rename yet
+    refocusRow.current = null;
+    row.focus();
+  });
+  const startRename = (name: string) => {
+    refocusRow.current = null;
+    setRenaming(name);
+  };
   const scriptNames = files.scripts.map((script) => script.name);
   const videos = files.media.filter((item) => item.type === "video");
   const scriptRoving = useRovingList(scriptNames, activeFile);
@@ -163,7 +200,7 @@ export function FilesPanel(props: FilesPanelProps) {
           {props.filesError ? (
             <EmptyState title="Couldn't load scripts" description="The server isn't reachable. Retrying automatically." />
           ) : (
-            <ul aria-label="Scripts" className="flex flex-col gap-px" onKeyDown={scriptRoving.onKeyDown}>
+            <ul ref={scriptListRef} aria-label="Scripts" className="flex flex-col gap-px" onKeyDown={scriptRoving.onKeyDown}>
               {files.scripts.map((script) => {
                 const active = script.name === activeFile;
                 const tabIndex = script.name === scriptRoving.focusKey ? 0 : -1;
@@ -182,9 +219,13 @@ export function FilesPanel(props: FilesPanelProps) {
                       <RenameInput
                         initial={script.name}
                         existing={scriptNames}
-                        onCancel={() => setRenaming(null)}
-                        onCommit={async (name) => {
+                        onCancel={(keyboard) => {
+                          if (keyboard) refocusRow.current = script.name;
+                          setRenaming(null);
+                        }}
+                        onCommit={async (name, keyboard) => {
                           await props.onRename(script.name, name);
+                          if (keyboard) refocusRow.current = name;
                           setRenaming(null);
                         }}
                       />
@@ -193,12 +234,13 @@ export function FilesPanel(props: FilesPanelProps) {
                         <button
                           type="button"
                           data-roving-item
+                          data-name={script.name}
                           tabIndex={tabIndex}
                           aria-current={active ? "true" : undefined}
                           onClick={() => props.onOpen(script.name)}
-                          onDoubleClick={() => setRenaming(script.name)}
+                          onDoubleClick={() => startRename(script.name)}
                           onKeyDown={(event) => {
-                            if (event.key === "F2") setRenaming(script.name);
+                            if (event.key === "F2") startRename(script.name);
                             else if (event.key === "Delete") props.onDelete(script.name);
                             else return;
                             event.preventDefault();
@@ -221,7 +263,7 @@ export function FilesPanel(props: FilesPanelProps) {
                               tabIndex={-1}
                               data-row-action
                               aria-label={`Rename ${script.name}`}
-                              onClick={() => setRenaming(script.name)}
+                              onClick={() => startRename(script.name)}
                             >
                               <Pencil />
                             </Button>

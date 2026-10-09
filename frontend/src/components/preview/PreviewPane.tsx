@@ -1,4 +1,4 @@
-import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Play, Square, XCircle } from "lucide-react";
+import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Loader2, Play, Square, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
@@ -10,7 +10,13 @@ import type { PreviewItem } from "@/lib/types";
 
 interface PreviewPaneProps {
   preview: PreviewItem | null;
+  /** The render of the open file, if one is running. */
   active: ActiveRender | null;
+  /** A render of another file, running while this one is open (shown as a slim banner, not the overlay). */
+  otherRender?: ActiveRender | null;
+  onOpenFile?: (name: string) => void;
+  /** Why Render won't run (size limit, syntax error), or null. */
+  renderBlocked?: string | null;
   /** Number of play()/wait() calls in the scene being rendered, when known. */
   stepCount: number;
   lastOutcome: RenderOutcome | null;
@@ -205,16 +211,41 @@ export function PreviewPane(props: PreviewPaneProps) {
             icon={<Film />}
             title="Nothing rendered yet"
             description={
-              <>
-                Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
-                here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
-              </>
+              props.renderBlocked && props.canRender ? (
+                // Same reason as the toolbar's Render, in plain sight (not only in a tooltip).
+                <span id="preview-render-blocked-reason" className="text-warning">
+                  {props.renderBlocked}
+                </span>
+              ) : (
+                <>
+                  Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
+                  here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
+                </>
+              )
             }
             action={
-              <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
-                <Play className="fill-current" />
-                Render
-              </Button>
+              props.renderBlocked && props.canRender ? (
+                <Tooltip content={props.renderBlocked} wrap>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={props.onRender}
+                    aria-label="Render"
+                    aria-disabled="true"
+                    aria-describedby="preview-render-blocked-reason"
+                    data-blocked="true"
+                    className="cursor-not-allowed opacity-40 saturate-0 hover:brightness-100"
+                  >
+                    <Play className="fill-current" />
+                    Render
+                  </Button>
+                </Tooltip>
+              ) : (
+                <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
+                  <Play className="fill-current" />
+                  Render
+                </Button>
+              )
             }
           />
         )}
@@ -238,6 +269,29 @@ export function PreviewPane(props: PreviewPaneProps) {
 
         {active && (
           <RenderingOverlay active={active} stepCount={props.stepCount} stopping={Boolean(props.stopping)} onCancel={props.onCancel} />
+        )}
+
+        {props.otherRender && (
+          <div
+            role="status"
+            data-testid="other-render"
+            className="absolute inset-x-0 bottom-0 z-10 flex items-center gap-2 border-t border-line bg-surface/95 px-3 py-1.5 text-xs text-fg-muted"
+          >
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-accent" />
+            <span className="min-w-0 flex-1 truncate">
+              {props.otherRender.queued ? "Queued" : "Rendering"} <span className="text-fg">{props.otherRender.request.scene}</span> from{" "}
+              <span className="font-mono">{props.otherRender.request.filename}</span>
+              {props.otherRender.queued && props.otherRender.queuePosition ? ` · position ${props.otherRender.queuePosition}` : ""}
+            </span>
+            {props.onOpenFile && (
+              <Button variant="ghost" size="xs" onClick={() => props.onOpenFile?.(props.otherRender!.request.filename)}>
+                Open
+              </Button>
+            )}
+            <Button variant="ghost" size="xs" onClick={props.onCancel} disabled={props.stopping}>
+              {props.stopping ? "Stopping…" : "Cancel"}
+            </Button>
+          </div>
         )}
       </div>
 

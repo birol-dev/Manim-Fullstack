@@ -64,3 +64,45 @@ export type ManimColorName = (typeof MANIM_COLORS)[number]["name"];
 
 export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
+
+/** UTF-8 size of *text* in bytes, without allocating an encoded copy (the buffer can be megabytes). */
+export function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) {
+      bytes += 4; // surrogate pair
+      index += 1;
+    } else bytes += 3; // includes a lone surrogate, which TextEncoder writes as U+FFFD (3 bytes)
+  }
+  return bytes;
+}
+
+/**
+ * Why the open buffer can't be rendered, or null: it is over the server's size
+ * limit (/api/diagnostics max_code_bytes) or has a syntax error.
+ */
+export function renderBlockReason({
+  codeBytes,
+  maxCodeBytes,
+  syntaxError,
+}: {
+  codeBytes: number;
+  maxCodeBytes: number;
+  syntaxError: { line: number; message: string } | null;
+}): string | null {
+  if (codeBytes > maxCodeBytes) {
+    let size = formatByteLimit(codeBytes);
+    let limit = formatByteLimit(maxCodeBytes);
+    if (size === limit) {
+      // Just over: "2 MB, over the 2 MB limit" would read like a contradiction.
+      size = `${codeBytes.toLocaleString("en-US")} bytes`;
+      limit = `${limit} (${maxCodeBytes.toLocaleString("en-US")} bytes)`;
+    }
+    return `This script is ${size}, over the ${limit} limit, so it can't be saved or rendered.`;
+  }
+  if (syntaxError) return `Fix the syntax error on line ${syntaxError.line} first: ${syntaxError.message}`;
+  return null;
+}

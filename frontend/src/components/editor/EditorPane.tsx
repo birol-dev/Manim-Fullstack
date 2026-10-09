@@ -1,4 +1,4 @@
-import { forwardRef, lazy, Suspense, useState } from "react";
+import { forwardRef, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
 import type { SyntaxErrorInfo } from "@/lib/types";
@@ -43,14 +43,23 @@ function ScenePicker({
 }) {
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState("");
+  // Enter/Escape in the name box hand focus back to the picker (a click elsewhere keeps it there).
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (typing || !refocus.current) return;
+    refocus.current = false;
+    triggerRef.current?.focus();
+  }, [typing]);
   const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
   const valid = CLASS_NAME.test(draft.trim());
   // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
   const className = "w-auto min-w-[6.5rem] max-w-44 @max-[400px]:max-w-32 @max-[400px]:min-w-[5.5rem]";
 
   if (typing) {
-    const commit = () => {
+    const commit = (keyboard = false) => {
       if (valid) onSceneChange(draft.trim());
+      refocus.current = keyboard;
       setTyping(false);
     };
     return (
@@ -67,13 +76,15 @@ function ScenePicker({
         onKeyDown={(event) => {
           if (event.key === "Enter") {
             event.preventDefault();
-            commit();
+            commit(true);
           } else if (event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
+            refocus.current = true;
             setTyping(false);
           }
         }}
-        onBlur={commit}
+        onBlur={() => commit()}
         className={cn("h-7 w-36 font-mono text-xs @max-[400px]:w-28", className)}
       />
     );
@@ -93,7 +104,7 @@ function ScenePicker({
       disabled={disabled}
     >
       <Tooltip content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"} wrap>
-        <SelectTrigger aria-label="Scene" className={className}>
+        <SelectTrigger ref={triggerRef} aria-label="Scene" className={className}>
           <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
         </SelectTrigger>
       </Tooltip>
@@ -120,9 +131,12 @@ interface EditorPaneProps {
   selectedScene: string;
   quality: Quality;
   autoRender: boolean;
+  /** This file's render (another file's job shows in the preview banner, not here). */
   active: ActiveRender | null;
   latexAvailable: boolean;
   canRender: boolean;
+  /** Why Render won't run this buffer (size limit, syntax error): the button says so instead of rendering. */
+  renderBlocked?: string | null;
   fontSize: number;
   syntaxError?: SyntaxErrorInfo | null;
   stopping?: boolean;
@@ -143,6 +157,9 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
   const rendering = active !== null;
   const qualityOption = QUALITY_OPTIONS.find((option) => option.value === quality);
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
+  // Only when Render would otherwise be available (not while rendering, offline, ...).
+  const blocked = props.canRender && props.renderBlocked ? props.renderBlocked : null;
+  const oversize = props.renderBlocked && !props.syntaxError ? props.renderBlocked : null;
 
   return (
     <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
@@ -230,19 +247,27 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               </Button>
             </Tooltip>
           ) : (
-            <Tooltip key="render" content="Render scene" shortcut={`${MOD_KEY}+Enter`} wrap>
+            <Tooltip key="render" content={blocked ?? "Render scene"} shortcut={blocked ? undefined : `${MOD_KEY}+Enter`} wrap>
               <Button
                 variant="primary"
                 size="sm"
                 onClick={props.onRender}
                 disabled={!props.canRender}
-                className="w-[92px] @max-[520px]:w-auto"
+                // Still focusable when blocked, so the reason is reachable by keyboard and read out.
+                aria-disabled={blocked ? true : undefined}
+                aria-describedby={blocked ? "render-blocked-reason" : undefined}
+                className={cn("w-[92px] @max-[520px]:w-auto", blocked && "cursor-not-allowed opacity-40 saturate-0 hover:brightness-100")}
                 aria-label="Render"
               >
                 <Play className="fill-current" />
                 <span className="@max-[520px]:hidden">Render</span>
               </Button>
             </Tooltip>
+          )}
+          {blocked && (
+            <span id="render-blocked-reason" className="sr-only">
+              {blocked}
+            </span>
           )}
         </div>
       </div>
@@ -252,6 +277,18 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           <AlertTriangle className="size-3.5 shrink-0 text-danger" />
           <span className="min-w-0 flex-1 truncate" title={props.syntaxError.message}>
             Line {props.syntaxError.line}: {props.syntaxError.message}
+          </span>
+        </div>
+      )}
+
+      {oversize && (
+        <div
+          role="note"
+          className="flex shrink-0 items-center gap-2 border-b border-danger/20 bg-danger-soft px-3 py-1.5 text-xs text-fg-muted"
+        >
+          <AlertTriangle className="size-3.5 shrink-0 text-danger" />
+          <span className="min-w-0 flex-1 truncate" title={oversize}>
+            {oversize}
           </span>
         </div>
       )}
