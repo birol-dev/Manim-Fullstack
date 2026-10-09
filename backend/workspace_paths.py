@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -34,31 +35,39 @@ WINDOWS_RESERVED_NAMES = {
     "PRN",
     "AUX",
     "NUL",
-    "COM1",
-    "COM2",
-    "COM3",
-    "COM4",
-    "COM5",
-    "COM6",
-    "COM7",
-    "COM8",
-    "COM9",
-    "LPT1",
-    "LPT2",
-    "LPT3",
-    "LPT4",
-    "LPT5",
-    "LPT6",
-    "LPT7",
-    "LPT8",
-    "LPT9",
+    *(f"COM{i}" for i in range(10)),
+    *(f"LPT{i}" for i in range(10)),
+    "CONIN$",
+    "CONOUT$",
 }
+
+# Characters Windows forbids in file names. Linux accepts them, but a workspace
+# should survive being copied to any OS (and ":" means a drive on Windows).
+RESERVED_FILENAME_CHARS = frozenset('<>:"|?*')
+
+MAX_FILENAME_BYTES = 255  # common filesystem limit for one path segment
+MAX_FILENAME_STEM_CHARS = 100
+
+# Scratch copies of unsaved code are named like this. A user script with the
+# same prefix would be hidden from the file list and swept at startup.
+TEMP_SCRIPT_PREFIX = "_temp_run_"
+
+
+def _has_control_or_format_char(name: str) -> bool:
+    """Control characters (newline, tab, DEL, ...) and invisible format characters
+    such as U+202E (right-to-left override, used to disguise extensions)."""
+    return any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name)
 
 
 def safe_basename(
     filename: Optional[str], *, required_suffix: Optional[str] = None
 ) -> str:
-    """Return a single path segment, rejecting separators, parent references, and device names."""
+    """Return a single, portable path segment or raise :class:`UnsafePathError`.
+
+    Use this to *refer to* a file (read, delete, the source of a rename). Names
+    for files that are about to be created go through :func:`validate_new_filename`,
+    which adds the creation-only rules on top.
+    """
     if filename is None or not str(filename).strip():
         raise UnsafePathError("Filename is required.")
 
@@ -72,15 +81,63 @@ def safe_basename(
 
     name = os.path.basename(raw)
     if not name or name in {".", ".."} or name != raw:
-        raise UnsafePathError("Invalid filename.")
-    if "\x00" in name:
-        raise UnsafePathError("Invalid filename.")
+        raise UnsafePathError("Filename cannot contain folders or path separators.")
+    if "\x00" in name or _has_control_or_format_char(name):
+        raise UnsafePathError("Filename cannot contain control or invisible characters.")
 
-    # Disallow Windows reserved device names (e.g. CON, NUL, AUX, COM1)
-    stem = Path(name).stem.upper()
-    if stem in WINDOWS_RESERVED_NAMES:
+    bad = sorted({ch for ch in name if ch in RESERVED_FILENAME_CHARS})
+    if bad:
+        raise UnsafePathError(f"Filename cannot contain {' '.join(bad)}.")
+
+    if len(name.encode("utf-8")) > MAX_FILENAME_BYTES:
+        raise UnsafePathError(f"Filename is too long (max {MAX_FILENAME_BYTES} bytes).")
+    if required_suffix and name.endswith(required_suffix):
+        stem = name[: -len(required_suffix)]
+    else:
+        stem = os.path.splitext(name)[0]
+    if len(stem) > MAX_FILENAME_STEM_CHARS:
+        raise UnsafePathError(f"Filename is too long (max {MAX_FILENAME_STEM_CHARS} characters before the extension).")
+    if not stem.strip("."):
+        raise UnsafePathError("Filename needs a name before the extension.")
+
+    # Windows reserves device names with any extension (CON.py, con.tar.py, COM1.mp4).
+    if name.split(".", 1)[0].rstrip(" ").upper() in WINDOWS_RESERVED_NAMES:
         raise UnsafePathError(f"Filename '{name}' is a reserved device name.")
 
     if required_suffix and not name.endswith(required_suffix):
         raise UnsafePathError(f"File must end with {required_suffix}.")
     return name
+
+
+def validate_new_filename(
+    filename: Optional[str],
+    *,
+    required_suffix: Optional[str] = None,
+    forbid_temp_prefix: bool = False,
+) -> str:
+    """Validate the name of a file that is about to be created (save, rename target,
+    upload, render). Adds rules that only matter for new names, so files that
+    already exist with a legacy name can still be opened, renamed, or deleted."""
+    name = safe_basename(filename, required_suffix=required_suffix)
+    if name.startswith("-"):
+        raise UnsafePathError("Filename cannot start with a dash.")
+    if name.startswith("."):
+        raise UnsafePathError("Filename cannot start with a dot.")
+    if forbid_temp_prefix and name.lower().startswith(TEMP_SCRIPT_PREFIX):
+        raise UnsafePathError(f"Filenames starting with '{TEMP_SCRIPT_PREFIX}' are reserved for scratch renders.")
+    return name
+
+
+def find_case_insensitive_match(directory: str, name: str) -> Optional[str]:
+    """Name of an existing entry in *directory* that equals *name* ignoring case
+    but is spelled differently, or None. Prevents Example.py next to example.py,
+    which collide on Windows and macOS."""
+    folded = name.casefold()
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name != name and entry.name.casefold() == folded:
+                    return entry.name
+    except OSError:
+        return None
+    return None
