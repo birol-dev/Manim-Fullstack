@@ -18,6 +18,14 @@ DIST_INDEX = os.path.join(FRONTEND_DIR, "dist", "index.html")
 FRONTEND_SOURCES = ("src", "public", "index.html", "package.json", "package-lock.json", "vite.config.ts")
 
 
+# backend/main.py prints the same warning (tests/test_cli_r3.py keeps them in sync).
+LAN_WARNING = (
+    "\n[warn] This process runs the Python you send it, with no login.\n"
+    "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
+    "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n"
+)
+
+
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Check if a given TCP port is already open/bound on the host."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -109,12 +117,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print(
-            "\n[warn] This process runs the Python you send it, with no login.\n"
-            "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
-            "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n",
-            file=sys.stderr,
-        )
+        print(LAN_WARNING, file=sys.stderr)
 
     browser_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0", "::") else args.host
     url = f"http://{browser_host}:{args.port}"

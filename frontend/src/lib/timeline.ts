@@ -51,15 +51,66 @@ export function expandedStepCount(steps: readonly AnimationStep[]): number {
   return steps.reduce((sum, step) => sum + stepRuns(step), 0);
 }
 
+/**
+ * Step indices in the order Manim plays them, expanding loop bodies the way they run:
+ * a body [a, b] repeated 3 times gives a, b, a, b, a, b (not a, a, a, b, b, b).
+ * Uses each step's `loops` chain from the parser; a loop with an unknown count runs
+ * once here, and a step from an older server without `loops` repeats in place.
+ * Stops after *limit* entries so huge literal loops stay cheap.
+ */
+export function executionOrder(steps: readonly AnimationStep[], limit = Number.POSITIVE_INFINITY): number[] {
+  const out: number[] = [];
+  const loopKey = (step: AnimationStep, depth: number) => {
+    const loop = step.loops?.[depth];
+    return loop ? `${loop[0]}:${loop[1]}` : null;
+  };
+
+  const expand = (indices: readonly number[], depth: number, into: number[], cap: number) => {
+    let position = 0;
+    while (position < indices.length && into.length < cap) {
+      const step = steps[indices[position]];
+      const key = loopKey(step, depth);
+      if (key === null) {
+        const copies = !step.loops && depth === 0 ? stepRuns(step) : 1;
+        for (let copy = 0; copy < copies && into.length < cap; copy += 1) into.push(indices[position]);
+        position += 1;
+        continue;
+      }
+      const group: number[] = [];
+      while (position < indices.length && loopKey(steps[indices[position]], depth) === key) {
+        group.push(indices[position]);
+        position += 1;
+      }
+      const count = step.loops?.[depth]?.[2];
+      const times = typeof count === "number" && count >= 0 ? count : 1;
+      if (times === 0) continue;
+      const body: number[] = [];
+      expand(group, depth + 1, body, cap - into.length);
+      for (let pass = 0; pass < times && into.length < cap; pass += 1) {
+        for (const index of body) {
+          if (into.length >= cap) break;
+          into.push(index);
+        }
+      }
+    }
+  };
+
+  expand(
+    steps.map((_, index) => index),
+    0,
+    out,
+    limit,
+  );
+  return out;
+}
+
 /** Map Manim's running animation index onto the timeline step it belongs to. */
 export function stepIndexForAnimation(steps: readonly AnimationStep[], animation: number | null | undefined): number | null {
   if (animation === null || animation === undefined || animation < 0) return null;
-  let seen = 0;
-  for (let index = 0; index < steps.length; index += 1) {
-    seen += stepRuns(steps[index]);
-    if (animation < seen) return index;
-  }
-  return steps.length ? steps.length - 1 : null;
+  if (!steps.length) return null;
+  const order = executionOrder(steps, animation + 1);
+  if (animation < order.length) return order[animation];
+  return order.length ? order[order.length - 1] : steps.length - 1;
 }
 
 /**

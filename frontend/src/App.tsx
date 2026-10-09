@@ -27,7 +27,7 @@ import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOut
 import { SaveConflictError, useWorkspace } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE } from "@/lib/constants";
-import { classNameFromFile } from "@/lib/format";
+import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
 import { overallPercent, risingPercent } from "@/lib/progress";
@@ -213,9 +213,11 @@ export default function App() {
         if (location && outcome.request.filename === activeFileRef.current) {
           editorRef.current?.setErrorMarker(location.line, location.message);
         }
+        // A file whose name the rules now forbid: say so instead of "see the console".
+        const renameHint = logSnapshot().find((entry) => entry.text.startsWith(RENAME_REQUIRED_PREFIX))?.text;
         toast.error(`${outcome.request.scene} didn't render`, {
           id: "render-failed",
-          description: location ? `${location.message} (line ${location.line})` : "See the console for details.",
+          description: location ? `${location.message} (line ${location.line})` : renameHint ?? "See the console for details.",
           action: location ? { label: "Go to line", onClick: () => revealLine(location.line) } : undefined,
         });
       } else if (outcome.success && !outcome.output) {
