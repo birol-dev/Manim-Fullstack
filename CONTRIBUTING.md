@@ -6,20 +6,25 @@ Thanks for helping out! Bug reports, feature ideas, docs fixes, and code are all
 
 ```bash
 pip install -r backend/requirements.txt
-pip install pytest pytest-asyncio pytest-cov pytest-timeout httpx
+pip install pytest pytest-asyncio pytest-cov pytest-timeout httpx pyflakes
 cd frontend && npm install
 ```
 
 Run the backend with reload and the Vite dev server (it proxies API calls to port 8000):
 
 ```bash
-uvicorn backend.main:app --reload --port 8000
+uvicorn backend.main:app --reload --reload-dir backend --port 8000
 cd frontend && npm run dev        # http://localhost:5173
 ```
+
+Watch only `backend/`: a plain `--reload` also watches `workspace/`, so every save or render restarts the server
+and drops the render WebSocket. Without reload, `npm run backend -- --port 8100` (or `MANIM_HOST` / `MANIM_PORT`)
+starts the API on another address; point Vite at it with `MANIM_BACKEND_URL=http://127.0.0.1:8100`.
 
 ## Before you open a pull request
 
 ```bash
+python -m pyflakes backend tests run.py   # the same lint CI runs
 npm test          # pytest + Vitest (with coverage thresholds)
 npm run check     # ESLint, TypeScript, production build, backend import check
 ```
