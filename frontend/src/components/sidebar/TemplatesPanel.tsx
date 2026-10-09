@@ -21,9 +21,13 @@ export function TemplatesPanel({ latexAvailable, canReplace, onCreateFrom, onRep
       </p>
       <ul className="flex flex-col gap-2">
         {SCENE_TEMPLATES.map((template) => (
-          <li key={template.id} className="min-w-0 overflow-hidden rounded-lg border border-line bg-raised/40 p-3 transition-colors hover:border-line-strong">
-            <div className="mb-1 flex items-start justify-between gap-2">
-              <h3 className="min-w-0 text-[13px] font-medium leading-snug text-balance text-fg">{template.title}</h3>
+          <li
+            key={template.id}
+            className="@container min-w-0 overflow-hidden rounded-lg border border-line bg-raised/40 p-3 transition-colors hover:border-line-strong"
+          >
+            {/* In a narrow sidebar the badge moves under the title, so "Square to Circle" isn't squeezed into two lines. */}
+            <div className="mb-1 flex items-start justify-between gap-x-2 gap-y-1 @max-[190px]:flex-col @max-[190px]:items-start">
+              <h3 className="min-w-0 text-[13px] font-medium leading-snug text-fg">{template.title}</h3>
               <span
                 className={cn(
                   "mt-px shrink-0 rounded px-1.5 py-px text-2xs font-medium",

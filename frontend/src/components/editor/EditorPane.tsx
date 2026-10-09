@@ -197,7 +197,8 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           />
 
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
-            <Tooltip content={qualityOption ? `Quality: ${qualityOption.label} · ${qualityOption.detail}` : "Render quality"}>
+            {/* wrap: merged onto the trigger, the tooltip's data-state ("closed") would replace the Select's ("open"). */}
+            <Tooltip content={qualityOption ? `Quality: ${qualityOption.label} · ${qualityOption.detail}` : "Render quality"} wrap>
               <SelectTrigger aria-label="Quality" className="w-[78px] shrink-0">
                 <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
               </SelectTrigger>
@@ -215,7 +216,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Select>
 
           {rendering ? (
-            <Tooltip content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
+            <Tooltip key="cancel" content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
               <Button
                 variant="secondary"
                 size="sm"
@@ -229,7 +230,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               </Button>
             </Tooltip>
           ) : (
-            <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`} wrap>
+            <Tooltip key="render" content="Render scene" shortcut={`${MOD_KEY}+Enter`} wrap>
               <Button
                 variant="primary"
                 size="sm"

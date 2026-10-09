@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 
+import { pathSegments } from "@/lib/paths";
 import { codeBreakSegments, fileNameSegments } from "@/lib/timeline";
 
 /**
@@ -32,4 +33,9 @@ function withBreaks(segments: string[]) {
 /** A file name that wraps after "_", "-", "." or camelCase steps instead of mid-word. */
 export function FileNameText({ name }: { name: string }) {
   return <>{withBreaks(fileNameSegments(name))}</>;
+}
+
+/** A file system path that wraps only after "/" or "\", never mid-name. Pair with `code-wrap`. */
+export function PathText({ path }: { path: string }) {
+  return <>{withBreaks(pathSegments(path))}</>;
 }

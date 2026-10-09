@@ -22,12 +22,15 @@ import { TemplatesPanel } from "@/components/sidebar/TemplatesPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { isInstalled, useDiagnostics } from "@/hooks/useDiagnostics";
 import { useLogs } from "@/hooks/useLogs";
+import { useMinimumStopping } from "@/hooks/useMinimumStopping";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOutput } from "@/hooks/useRenderSession";
+import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { SaveConflictError, useWorkspace } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE } from "@/lib/constants";
 import { classNameFromFile } from "@/lib/format";
+import { workPanelSizes } from "@/lib/layout";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
 import { overallPercent, risingPercent } from "@/lib/progress";
@@ -112,6 +115,8 @@ export default function App() {
   const [logsFile, setLogsFile] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
+  const [bottomPx, setBottomPx] = useState<number | null>(null);
+  const workSizes = workPanelSizes(useViewportHeight());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [newFile, setNewFile] = useState<(NewFileRequest & { code?: string }) | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -232,6 +237,8 @@ export default function App() {
   );
 
   const session = useRenderSession({ log, onOutput: handleOutput, onFinished: handleFinished });
+  // What the toolbar and preview overlay show: a quick cancel keeps "Stopping…" up for a moment.
+  const shownRender = useMinimumStopping(session.active, session.stopping);
 
   // The socket is the first to notice a server going away or coming back.
   const { refresh: refreshDiagnostics } = diagnostics;
@@ -684,7 +691,7 @@ export default function App() {
             {/* Must cover the editor + preview minimums below, or the group fights itself at 1024 px. */}
             <Panel id="work" minSize="568px">
               <Group orientation="vertical" id="mc-layout-work" {...workLayout}>
-                <Panel id="top" minSize="240px">
+                <Panel id="top" minSize={`${workSizes.topMinPx}px`}>
                   <Group orientation="horizontal" id="mc-layout-top" {...topLayout}>
                     <Panel id="editor" minSize="300px">
                       <EditorPane
@@ -697,12 +704,12 @@ export default function App() {
                         selectedScene={workspace.selectedScene}
                         quality={quality}
                         autoRender={autoRender}
-                        active={session.active}
+                        active={shownRender.active}
                         latexAvailable={latexAvailable}
                         canRender={canRender}
                         fontSize={editorFontSize}
                         syntaxError={workspace.syntaxError}
-                        stopping={session.stopping}
+                        stopping={shownRender.stopping}
                         onCodeChange={workspace.setCode}
                         onCursorChange={setCursor}
                         onSceneChange={workspace.setSelectedScene}
@@ -719,8 +726,8 @@ export default function App() {
                     <Panel id="preview" defaultSize="42%" minSize="260px">
                       <PreviewPane
                         preview={preview}
-                        active={session.active}
-                        stopping={session.stopping}
+                        active={shownRender.active}
+                        stopping={shownRender.stopping}
                         stepCount={expandedStepCount(renderingSteps)}
                         lastOutcome={lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null}
                         loop={loopPreview}
@@ -742,13 +749,16 @@ export default function App() {
                 <Panel
                   id="bottom"
                   panelRef={bottomPanelRef}
-                  defaultSize="26%"
+                  defaultSize={`${workSizes.bottomDefaultPx}px`}
                   minSize="120px"
                   maxSize="60%"
                   collapsible
                   collapsedSize="36px"
                   groupResizeBehavior="preserve-pixel-size"
-                  onResize={(size) => setBottomCollapsed(size.inPixels <= 40)}
+                  onResize={(size) => {
+                    setBottomCollapsed(size.inPixels <= 40);
+                    setBottomPx(size.inPixels);
+                  }}
                 >
                   <BottomPanel
                     tab={bottomTab}
@@ -810,7 +820,8 @@ export default function App() {
       <Toaster
         theme="dark"
         position="bottom-right"
-        offset={{ bottom: 36, right: 16 }}
+        // Above the console/timeline panel, so an error toast never covers the traceback it points to.
+        offset={{ bottom: bottomPx === null ? 36 : Math.round(bottomPx) + 24 + 12, right: 16 }}
         toastOptions={{
           classNames: {
             toast: "!bg-overlay !border-line-strong !text-fg !shadow-popover !rounded-lg !text-[13px]",
