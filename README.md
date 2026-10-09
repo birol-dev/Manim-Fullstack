@@ -97,6 +97,11 @@ Publish on **127.0.0.1** only. `docker run -p 8000:8000` listens on every interf
 | `MANIM_MAX_CODE_BYTES`  | `2097152`               | Largest script the API accepts, measured as UTF-8. Reported to the UI as `max_code_bytes` by `/api/diagnostics`. |
 | `MANIM_MAX_REQUEST_BYTES` | 6 × code limit + 64 KB | Raw request body / WebSocket message cap (room for JSON escaping) |
 | `MANIM_TEMP_DOWNLOAD_TTL` | `3600`               | Seconds before an unfetched download-only render is removed          |
+| `MANIM_MAX_QUEUED_RENDERS` | `16`                | Renders that may wait for a free slot; further requests are rejected with "The render queue is full". |
+| `MANIM_BODY_TIMEOUT`    | `30`                    | Seconds a request body may stall between chunks before the server answers 408. |
+| `MANIM_BODY_DEADLINE`   | `120`                   | Seconds the whole request body may take to arrive (408 after that, however steadily it trickles). Uploads to `/api/upload-asset` get 5 × this (10 minutes by default, room for a 50 MB file at ~90 KB/s). |
+| `MANIM_SWEEP_MIN_AGE`   | `21600`                 | Startup cleanup: scratch renders (`_temp_run_*`) and leftover save temp files older than this many seconds are removed once the server has bound its port. A second server started on a busy port never sweeps. |
+| `MANIM_UPLOAD_PARTIAL_AGE` | `900`                | Startup cleanup: interrupted uploads (`assets/<name>.uploading-<hex>`) older than this many seconds are removed. They are never listed or served. |
 | `MANIM_HOST` / `MANIM_PORT` | `127.0.0.1` / `8000` | Address for `npm run backend` / `python backend/main.py` (or pass `--host` / `--port`, which win). The port must be an integer 1–65535 (otherwise exit status 2); a host other than `127.0.0.1`/`localhost`/`::1` prints the same LAN warning as `run.py`, and a port that is already in use stops it before startup. |
 | `MANIM_ALLOW_INSTALLS`  | enabled                 | Set to `0` to disable the installer endpoints                        |
 | `MANIM_BACKEND_URL`     | `http://127.0.0.1:8000` | Backend the Vite dev server proxies to                               |
