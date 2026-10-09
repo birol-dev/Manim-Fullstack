@@ -14,6 +14,7 @@ import App from "./App";
 import { editorCalls } from "@/test/fakeEditor";
 import { EXAMPLE_CODE, installFakeServer, media, type FakeServer } from "@/test/fakeServer";
 import { FakeWebSocket } from "@/test/fakeSocket";
+import { validateScriptName } from "@/lib/format";
 
 type Overrides = Parameters<typeof installFakeServer>[0];
 
@@ -296,12 +297,16 @@ describe("toasts", () => {
     fireEvent.keyDown(window, { key: "Enter", ctrlKey: true });
     await screen.findByText("This file has a syntax error");
     await waitFor(() => expect(screen.getAllByText("This file has a syntax error")).toHaveLength(1));
-    // One save even though the shortcut fired three times.
-    expect(calls(server, "POST", "/api/save")).toHaveLength(1);
+    // A render refused for a syntax error doesn't write the broken buffer to disk.
+    expect(calls(server, "POST", "/api/save")).toHaveLength(0);
+    expect(server.scripts["example.py"]).toBe(EXAMPLE_CODE);
+    expect(FakeWebSocket.latest().sent.some((message) => message.type === "start")).toBe(false);
 
     fireEvent.change(editor, { target: { value: `${broken}# more\n` } });
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     expect(await screen.findByText("Saved, but this file has a syntax error")).toBeInTheDocument();
+    // An explicit save still writes it.
+    expect(server.scripts["example.py"]).toBe(`${broken}# more\n`);
     await waitFor(() => expect(screen.queryByText("This file has a syntax error")).not.toBeInTheDocument());
 
     fireEvent.change(editor, { target: { value: EXAMPLE_CODE } });
@@ -335,7 +340,8 @@ describe("console and keyboard", () => {
     const list = screen.getByRole("list", { name: "Scripts" });
     const rows = within(list).getAllByRole("button", { name: /^s\d\.py$/ });
     expect(rows.filter((row) => row.tabIndex === 0)).toEqual([rows[0]]);
-    expect(within(list).getAllByRole("button", { name: /^Rename/ }).filter((button) => button.tabIndex === 0)).toHaveLength(1);
+    // Row actions are never Tab stops, so one Tab leaves the list.
+    expect(within(list).getAllByRole("button", { name: /^(Rename|Delete) / }).every((button) => button.tabIndex === -1)).toBe(true);
 
     rows[0].focus();
     await user.keyboard("{ArrowDown}{ArrowDown}");
@@ -445,5 +451,117 @@ describe("Other scene…", () => {
     input = await chooseOther(user);
     await user.type(input, "Other{Escape}", { skipClick: true });
     expect(screen.getByRole("combobox", { name: "Scene" })).toHaveTextContent("Intro");
+  });
+});
+
+describe("browser verification follow-ups", () => {
+  it("B: keeps row actions out of the Tab order but reachable with arrows, F2, and Delete", async () => {
+    const { user } = await renderApp();
+    const list = screen.getByRole("list", { name: "Scripts" });
+    const row = within(list).getByRole("button", { name: "example.py" });
+    const rename = within(list).getByRole("button", { name: "Rename example.py" });
+    const remove = within(list).getByRole("button", { name: "Delete example.py" });
+    expect(row).toHaveAttribute("aria-keyshortcuts", "F2 Delete ArrowRight");
+
+    row.focus();
+    await user.tab();
+    expect(list.contains(document.activeElement)).toBe(false);
+
+    row.focus();
+    await user.keyboard("{ArrowRight}");
+    expect(rename).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(remove).toHaveFocus();
+    await user.keyboard("{ArrowRight}{ArrowLeft}{ArrowLeft}");
+    expect(row).toHaveFocus();
+
+    await user.keyboard("{F2}");
+    expect(await screen.findByLabelText("New file name")).toHaveValue("example.py");
+    await user.keyboard("{Escape}");
+
+    within(list).getByRole("button", { name: "example.py" }).focus();
+    await user.keyboard("{Delete}");
+    expect(await screen.findByText("Delete example.py?")).toBeInTheDocument();
+  });
+
+  it("D: a pasted or filled name that already ends in .py isn't doubled", async () => {
+    const { user } = await renderApp();
+    await user.click(screen.getByRole("button", { name: "New script" }));
+    const input = (await screen.findByLabelText("File name")) as HTMLInputElement;
+
+    // Focus selects only the stem; pasting a full name over it used to keep the old ".py".
+    input.setSelectionRange(0, input.value.replace(/\.py$/i, "").length);
+    await user.paste("pasted.py");
+    expect(input).toHaveValue("pasted.py");
+
+    fireEvent.change(input, { target: { value: "Example.py.py" } });
+    expect(input).toHaveValue("Example.py");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText("'example.py' already exists. File names that differ only by case are not allowed.")).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: ".x.py.py" } });
+    expect(input).toHaveValue(".x.py");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    expect(await screen.findByText(validateScriptName(".x.py")!)).toBeInTheDocument();
+  });
+
+  it("E: Refresh notices that the open file was deleted outside the app", async () => {
+    const { server } = await renderApp();
+    delete server.scripts["example.py"];
+    const refresh = screen.getByRole("button", { name: "Refresh files" });
+    refresh.focus();
+    fireEvent.click(refresh);
+
+    expect(await screen.findByText("example.py was renamed or deleted elsewhere")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(screen.getByRole("list", { name: "Scripts" })).queryByRole("button", { name: "example.py" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByLabelText("Code editor")).toHaveValue(EXAMPLE_CODE);
+
+    fireEvent.click(screen.getByRole("button", { name: "Recreate file" }));
+    await waitFor(() => expect(server.scripts["example.py"]).toBe(EXAMPLE_CODE));
+  });
+
+  it("F/G: labels another file's output, links only the open file's, and jumps despite a selection elsewhere", async () => {
+    const { user } = await renderApp();
+    const { socket, id } = await startRender(user);
+    act(() => {
+      socket.emit({ type: "log", render_id: id, stream: "stderr", message: "│ example.py:7 in construct │" });
+      socket.emit({ type: "log", render_id: id, stream: "stderr", message: "NameError: name 'Foo' is not defined" });
+    });
+    const log = await screen.findByRole("log");
+    await waitFor(() => expect(log.querySelector("[data-line-link]")).not.toBeNull());
+    const link = log.querySelector("[data-line-link]")!;
+    expect(link.parentElement).toHaveTextContent("│ example.py:7 in construct │");
+
+    // G: a selection in another line doesn't swallow the first click.
+    const other = within(log).getByText("NameError: name 'Foo' is not defined");
+    const range = document.createRange();
+    range.selectNodeContents(other);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.click(link);
+    await waitFor(() => expect(editorCalls).toContainEqual(["reveal", 7]));
+
+    // Selecting the link itself (to copy it) doesn't jump.
+    editorCalls.length = 0;
+    range.selectNodeContents(link);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    fireEvent.click(link);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(editorCalls).not.toContainEqual(["reveal", 7]);
+    window.getSelection()!.removeAllRanges();
+
+    // F: switching files labels the output instead of linking it into the wrong file.
+    act(() => socket.emit({ type: "result", render_id: id, success: false, status: "error" }));
+    await user.click(screen.getByRole("button", { name: "notes.py" }));
+    expect(await within(log).findByText(/not the open file/)).toBeInTheDocument();
+    expect(log.querySelector("[data-line-link]")).toBeNull();
+    expect(within(log).queryByRole("button", { name: "Go to line 7" })).not.toBeInTheDocument();
+
+    await user.click(within(log).getByRole("button", { name: "Open example.py" }));
+    await waitFor(() => expect(log.querySelector("[data-line-link]")).not.toBeNull());
+    expect(within(log).queryByText(/not the open file/)).not.toBeInTheDocument();
   });
 });

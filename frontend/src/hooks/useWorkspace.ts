@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { ApiError, deleteRequest, postJson, requestJson } from "@/lib/api";
+import { ApiError, deleteRequest, errorMessage, postJson, requestJson } from "@/lib/api";
 import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMaxCodeBytes } from "@/lib/constants";
 import { loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "@/lib/storage";
 import type { MediaFile, ParseResult, ScriptFile, StorageMode, WorkspaceFiles } from "@/lib/types";
@@ -449,6 +449,14 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
         toast.warning(`${name} was renamed or deleted elsewhere`, {
           id: "external-change",
           description: "Your text is still here. Saving asks before recreating the file.",
+          action: {
+            label: "Recreate file",
+            onClick: () =>
+              void save({ force: true }).then(
+                () => refreshFiles(),
+                (error) => toast.error(errorMessage(error, "Couldn't recreate the file.")),
+              ),
+          },
         });
         void refreshFiles();
       }
@@ -473,7 +481,13 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       description: "You have unsaved edits here. Saving will ask which version to keep.",
       action: { label: "Reload theirs", onClick: () => void reloadFromDisk() },
     });
-  }, [applyParse, refreshFiles, reloadFromDisk]);
+  }, [applyParse, refreshFiles, reloadFromDisk, save]);
+
+  /** The Refresh button: reload the lists and notice if the open file changed or vanished on disk. */
+  const refresh = useCallback(async () => {
+    await refreshFiles();
+    if (modeRef.current === "disk") await checkOpenFile();
+  }, [refreshFiles, checkOpenFile]);
 
   useEffect(() => {
     if (mode !== "disk") return;
@@ -547,6 +561,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     selectedSceneTyped: selectedScene !== "" && !parsed.scenes.includes(selectedScene),
     setSelectedScene,
     refreshFiles,
+    refresh,
     openFile,
     parseNow,
     save,

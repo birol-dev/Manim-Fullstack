@@ -18,6 +18,9 @@ interface BottomPanelProps {
   onToggleCollapsed: () => void;
   logs: LogEntry[];
   linkFiles: string[];
+  /** Set when the console shows another file's output. */
+  logsFile: string | null;
+  onOpenLogsFile: (name: string) => void;
   onClearLogs: () => void;
   scene: string;
   steps: AnimationStep[];
@@ -89,7 +92,13 @@ export function BottomPanel(props: BottomPanelProps) {
       </div>
 
       <TabsContent value="console" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <ConsoleView logs={props.logs} linkFiles={props.linkFiles} onJumpToLine={props.onJumpToLine} />
+        <ConsoleView
+          logs={props.logs}
+          linkFiles={props.linkFiles}
+          otherFile={props.logsFile}
+          onOpenFile={props.onOpenLogsFile}
+          onJumpToLine={props.onJumpToLine}
+        />
       </TabsContent>
       <TabsContent value="timeline" className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <TimelineView scene={props.scene} steps={props.steps} activeIndex={props.activeStep} onJumpToLine={props.onJumpToLine} />

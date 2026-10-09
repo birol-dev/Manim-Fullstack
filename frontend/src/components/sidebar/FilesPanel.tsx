@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Callout, EmptyState, Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { apiUrl, errorMessage } from "@/lib/api";
-import { formatBytes, formatRelativeTime, toScriptName, validateScriptName } from "@/lib/format";
+import { dedupeExtension, formatBytes, formatRelativeTime, toScriptName, validateScriptName } from "@/lib/format";
 import type { MediaFile, StorageMode, WorkspaceFiles } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { RowActions, SidebarPanel } from "./SidebarPanel";
@@ -66,7 +66,7 @@ function RenameInput({
         value={value}
         disabled={busy}
         onChange={(event) => {
-          setValue(event.target.value);
+          setValue(dedupeExtension(event.target.value));
           setError(null);
         }}
         onFocus={(event) => event.currentTarget.setSelectionRange(0, initial.replace(/\.py$/, "").length)}
@@ -83,17 +83,29 @@ function RenameInput({
 }
 
 /**
- * One Tab stop per list (roving tabindex): Tab reaches the current row and its
- * actions, and the arrow keys, Home, and End move between rows.
+ * One Tab stop per list (roving tabindex): Tab reaches the current row and the
+ * next Tab leaves the list. Up/Down, Home, and End move between rows;
+ * Right/Left move between a row and its actions, which are never Tab stops.
  */
 function useRovingList(keys: string[], preferred: string | null) {
   const [current, setCurrent] = useState<string | null>(null);
   const focusKey = [current, preferred, keys[0]].find((key) => key != null && keys.includes(key)) ?? null;
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLUListElement>) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const target = event.target as HTMLElement;
     if (target.tagName === "INPUT") return;
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      const controls = Array.from(
+        target.closest("li")?.querySelectorAll<HTMLElement>("[data-roving-item], [data-row-action]") ?? [],
+      );
+      const index = controls.indexOf(target);
+      if (index < 0) return;
+      event.preventDefault();
+      const step = event.key === "ArrowRight" ? 1 : -1;
+      controls[Math.max(0, Math.min(controls.length - 1, index + step))].focus();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-roving-item]"));
     if (items.length === 0) return;
     const row = target.closest("li")?.querySelector<HTMLElement>("[data-roving-item]");
@@ -137,6 +149,12 @@ export function FilesPanel(props: FilesPanelProps) {
       }
     >
       <div className="flex flex-col gap-4">
+        <p id="script-row-keys" hidden>
+          Right arrow reaches Rename and Delete. F2 renames, Delete deletes.
+        </p>
+        <p id="render-row-keys" hidden>
+          Right arrow reaches Download and Delete. Delete removes the render.
+        </p>
         {storageMode === "browser" && (
           <Callout icon={<Globe />}>Scripts are saved in this browser only. Renders still run on the server.</Callout>
         )}
@@ -179,6 +197,14 @@ export function FilesPanel(props: FilesPanelProps) {
                           aria-current={active ? "true" : undefined}
                           onClick={() => props.onOpen(script.name)}
                           onDoubleClick={() => setRenaming(script.name)}
+                          onKeyDown={(event) => {
+                            if (event.key === "F2") setRenaming(script.name);
+                            else if (event.key === "Delete") props.onDelete(script.name);
+                            else return;
+                            event.preventDefault();
+                          }}
+                          aria-keyshortcuts="F2 Delete ArrowRight"
+                          aria-describedby="script-row-keys"
                           title={`${script.name} · ${formatBytes(script.size)}`}
                           className="h-7 min-w-0 flex-1 truncate text-left text-xs"
                         >
@@ -192,7 +218,8 @@ export function FilesPanel(props: FilesPanelProps) {
                             <Button
                               variant="ghost"
                               size="icon-xs"
-                              tabIndex={tabIndex}
+                              tabIndex={-1}
+                              data-row-action
                               aria-label={`Rename ${script.name}`}
                               onClick={() => setRenaming(script.name)}
                             >
@@ -203,7 +230,8 @@ export function FilesPanel(props: FilesPanelProps) {
                             <Button
                               variant="danger-ghost"
                               size="icon-xs"
-                              tabIndex={tabIndex}
+                              tabIndex={-1}
+                              data-row-action
                               aria-label={`Delete ${script.name}`}
                               onClick={() => props.onDelete(script.name)}
                             >
@@ -259,6 +287,13 @@ export function FilesPanel(props: FilesPanelProps) {
                       tabIndex={tabIndex}
                       aria-current={active ? "true" : undefined}
                       onClick={() => props.onPreviewMedia(item)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Delete") return;
+                        event.preventDefault();
+                        props.onDeleteMedia(item);
+                      }}
+                      aria-keyshortcuts="Delete ArrowRight"
+                      aria-describedby="render-row-keys"
                       title={`${item.path} · ${formatBytes(item.size)}`}
                       className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
                     >
@@ -271,7 +306,13 @@ export function FilesPanel(props: FilesPanelProps) {
                     <RowActions>
                       <Tooltip content="Download">
                         <Button asChild variant="ghost" size="icon-xs">
-                          <a href={apiUrl(item.url)} download={item.name} tabIndex={tabIndex} aria-label={`Download ${item.name}`}>
+                          <a
+                            href={apiUrl(item.url)}
+                            download={item.name}
+                            tabIndex={-1}
+                            data-row-action
+                            aria-label={`Download ${item.name}`}
+                          >
                             <Download />
                           </a>
                         </Button>
@@ -280,7 +321,8 @@ export function FilesPanel(props: FilesPanelProps) {
                         <Button
                           variant="danger-ghost"
                           size="icon-xs"
-                          tabIndex={tabIndex}
+                          tabIndex={-1}
+                          data-row-action
                           aria-label={`Delete render ${item.name}`}
                           onClick={() => props.onDeleteMedia(item)}
                         >
