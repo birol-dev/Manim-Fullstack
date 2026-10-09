@@ -95,3 +95,24 @@ export function codeBreakSegments(text: string): string[] {
 export function longestSegment(text: string): number {
   return codeBreakSegments(text).reduce((max, segment) => Math.max(max, segment.trimEnd().length), 0);
 }
+
+/**
+ * Split a file name into segments that may wrap after "_", "-", ".", spaces or
+ * a lower→upper camelCase step ("qa_asset-final.png" -> "qa_", "asset-", "final.", "png").
+ */
+export function fileNameSegments(name: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  for (let index = 0; index < name.length; index += 1) {
+    const char = name[index];
+    const next = name[index + 1];
+    current += char;
+    if (next === undefined) break;
+    if ("_-. ".includes(char) || (/[a-z0-9]/.test(char) && /[A-Z]/.test(next))) {
+      segments.push(current);
+      current = "";
+    }
+  }
+  if (current) segments.push(current);
+  return segments;
+}
