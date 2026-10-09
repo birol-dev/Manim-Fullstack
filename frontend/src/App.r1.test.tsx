@@ -226,25 +226,66 @@ describe("preview follows the open file and job", () => {
 });
 
 describe("cancel and queue states", () => {
-  it("shows a queued render as waiting and cancels it right away", async () => {
+  it("shows the queue position from the server and ends on its one cancelled result", async () => {
+    const { user } = await renderApp();
+    const { socket, id } = await startRender(user);
+    const message = "Waiting for another render to finish… (position 2 in queue)";
+    act(() => {
+      socket.emit({ type: "queued", render_id: id, position: 2, message });
+      socket.emit({ type: "info", render_id: id, message });
+    });
+
+    const overlay = screen.getByRole("status");
+    expect(within(overlay).getByText("Queued Intro · position 2")).toBeInTheDocument();
+    expect(within(overlay).getByText("Waiting for another render to finish…")).toBeInTheDocument();
+    expect(screen.getByText("Intro · queued")).toBeInTheDocument();
+    act(() => socket.emit({ type: "queued", render_id: id, position: 1, message }));
+    expect(within(overlay).getByText("Queued Intro · position 1")).toBeInTheDocument();
+
+    await user.click(within(overlay).getByRole("button", { name: "Cancel" }));
+    expect(socket.lastSent()).toMatchObject({ type: "cancel", id });
+    // Waits for the server instead of guessing.
+    expect(within(overlay).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(within(overlay).getByText("Leaving the queue…")).toBeInTheDocument();
+    act(() => socket.emit({ type: "info", render_id: id, message: "Stopping render..." }));
+    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 1")).toBeInTheDocument();
+
+    act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
+    expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("log")).getAllByText("Cancelled before it started.")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Render" })[0]).toBeEnabled();
+  });
+
+  it("switches from queued to rendering on the server's started event", async () => {
+    const { user } = await renderApp();
+    const { socket, id } = await startRender(user);
+    act(() => socket.emit({ type: "queued", render_id: id, position: 1, message: "Waiting for another render to finish… (position 1 in queue)" }));
+    // With typed events, other lines don't end the wait.
+    act(() => socket.emit({ type: "info", render_id: id, message: "Some notice" }));
+    expect(within(screen.getByRole("status")).getByText("Queued Intro · position 1")).toBeInTheDocument();
+
+    act(() => socket.emit({ type: "started", render_id: id, waited: true }));
+    expect(within(screen.getByRole("status")).getByText("Rendering Intro")).toBeInTheDocument();
+    expect(screen.getByText("Intro · rendering")).toBeInTheDocument();
+    act(() => socket.emit({ type: "progress", render_id: id, percent: 40, animation: 0 }));
+    expect(within(screen.getByRole("status")).getByText(/Animation 1 of/)).toBeInTheDocument();
+  });
+
+  it("falls back to finishing a queued cancel locally when an older server never answers", async () => {
     const { user } = await renderApp();
     const { socket, id } = await startRender(user);
     act(() => socket.emit({ type: "info", render_id: id, message: "Waiting for another render to finish…" }));
+    expect(within(screen.getByRole("status")).getByText("Queued Intro")).toBeInTheDocument();
 
-    const overlay = screen.getByRole("status");
-    expect(within(overlay).getByText("Waiting for another render to finish…")).toBeInTheDocument();
-    expect(within(overlay).getByText("Queued Intro")).toBeInTheDocument();
-    expect(screen.getByText("Intro · queued")).toBeInTheDocument();
-
-    await user.click(within(overlay).getByRole("button", { name: "Cancel" }));
+    await user.click(within(screen.getByRole("status")).getByRole("button", { name: "Cancel" }));
     expect(socket.lastSent().type).toBe("cancel");
-    expect(await screen.findByText("Render cancelled")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Render" })[0]).toBeEnabled();
+    expect(await screen.findByText("Render cancelled", undefined, { timeout: 5000 })).toBeInTheDocument();
 
-    // Whatever the server still sends for it is ignored.
-    act(() => socket.emit({ type: "info", render_id: id, message: "$ manim example.py Intro -qm" }));
-    act(() => socket.emit({ type: "result", render_id: id, success: true, status: "success" }));
+    // A late result for it is ignored: no second log line or toast.
+    act(() => socket.emit({ type: "result", render_id: id, success: false, status: "cancelled" }));
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("log")).getAllByText("Cancelled before it started.")).toHaveLength(1);
   });
 
   it("leaves the queue when Manim starts, and toolbar and overlay agree while stopping", async () => {

@@ -68,7 +68,7 @@ function RenderingOverlay({
   const percent = active.queued ? null : overallPercent(active, stepCount);
   let detail = "Starting Manim…";
   if (stopping) {
-    detail = "Stopping Manim…";
+    detail = active.queued ? "Leaving the queue…" : "Stopping Manim…";
   } else if (active.queued) {
     detail = "Waiting for another render to finish…";
   } else if (progress?.animation !== undefined) {
@@ -88,6 +88,7 @@ function RenderingOverlay({
       <div className="flex max-w-full flex-col gap-1">
         <p className="text-[13px] font-medium text-fg">
           {active.queued ? "Queued" : "Rendering"} {active.request.scene}
+          {active.queued && active.queuePosition ? ` · position ${active.queuePosition}` : ""}
         </p>
         <p className="max-w-80 truncate font-mono text-2xs text-fg-muted" title={detail}>
           {detail}

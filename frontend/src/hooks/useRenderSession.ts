@@ -30,6 +30,10 @@ export interface ActiveRender {
   startedAt: number;
   /** Waiting for another render (any tab) to finish; Manim hasn't started yet. */
   queued?: boolean;
+  /** Place in the server's render queue (1 = next), when the server reports it. */
+  queuePosition?: number;
+  /** The server sends typed "queued"/"started" events, so only "started" ends the wait. */
+  queueEvents?: boolean;
 }
 
 export interface RenderOutput {
@@ -66,6 +70,8 @@ interface ServerEvent {
   kind?: OutputKind;
   is_temp_download?: boolean;
   success?: boolean;
+  /** "queued" events: place in the render queue, 1 = next. */
+  position?: number;
 }
 
 interface Options {
@@ -74,8 +80,13 @@ interface Options {
   onFinished: (outcome: RenderOutcome) => void;
 }
 
-/** The server's notice that a render waits for the render slot. */
+/**
+ * The legacy info line for a queued render. Servers since #10 also send typed
+ * "queued" and "started" events; the prefix is kept for older servers.
+ */
 export const QUEUED_MESSAGE_PREFIX = "Waiting for another render";
+/** Servers that don't confirm a queued cancel within this time are taken at their word. */
+export const QUEUED_CANCEL_FALLBACK_MS = 3000;
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 const CONNECT_TIMEOUT_MS = 8000;
@@ -135,10 +146,16 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
       // Events from a render we already gave up on.
       if (event.render_id != null && event.render_id !== render?.id) return;
 
-      // Queued until the server says anything else about this render (the "$ manim" line, logs...).
       if (render && event.render_id === render.id) {
-        const queued = event.type === "info" && (event.message ?? "").startsWith(QUEUED_MESSAGE_PREFIX);
-        if (queued !== Boolean(render.queued)) updateActive({ ...render, queued });
+        if (event.type === "queued") {
+          updateActive({ ...render, queued: true, queuePosition: event.position || undefined, queueEvents: true });
+        } else if (event.type === "info" && (event.message ?? "").startsWith(QUEUED_MESSAGE_PREFIX)) {
+          // Legacy queue notice (also sent after "queued", for older clients).
+          if (!render.queued) updateActive({ ...render, queued: true });
+        } else if (render.queued && (event.type === "started" || (!render.queueEvents && event.type !== "result"))) {
+          // "started", or for older servers anything else about this render (the "$ manim" line...).
+          updateActive({ ...render, queued: false, queuePosition: undefined });
+        }
       }
 
       switch (event.type) {
@@ -183,6 +200,8 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           }
           break;
         case "result":
+          // A render cancelled while queued gets only a result; say what happened.
+          if (render?.queued && event.status === "cancelled") log("warning", "Cancelled before it started.");
           finish(Boolean(event.success), event.status ?? "unknown");
           break;
       }
@@ -323,12 +342,16 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     setStopping(true);
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN && queueRef.current.length === 0) {
-      socket.send(JSON.stringify({ type: "cancel" }));
-      // Nothing has run yet: drop it now. The server removes it from the queue, and
-      // anything it still sends for this render is ignored by its id.
+      socket.send(JSON.stringify({ type: "cancel", id: render.id }));
       if (render.queued) {
-        callbacks.current.log("warning", "Cancelled before it started.");
-        finish(false, "cancelled");
+        // The server drops it from the queue and answers with one "cancelled" result.
+        // Fallback for servers that never answer: finish locally; a late result is
+        // then ignored by its id, so nothing is logged or toasted twice.
+        setTimeout(() => {
+          if (activeRef.current?.id !== render.id) return;
+          callbacks.current.log("warning", "Cancelled before it started.");
+          finish(false, "cancelled");
+        }, QUEUED_CANCEL_FALLBACK_MS);
       }
     } else {
       queueRef.current = [];
