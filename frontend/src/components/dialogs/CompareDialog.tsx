@@ -36,8 +36,11 @@ interface ComparePaneProps {
 
 function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata, onTimeUpdate, onEnded }: ComparePaneProps) {
   const video = videos.find((item) => item.path === path);
+  // 16:9 until the video reports its real size (portrait or square renders keep their shape).
+  const [ratio, setRatio] = useState<{ path: string; value: number } | null>(null);
+  const aspect = ratio?.path === path ? ratio.value : 16 / 9;
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
       <Select value={path} onValueChange={onChange}>
         <SelectTrigger aria-label={`Video ${side}`} className="h-8">
           <span className="flex min-w-0 items-center gap-2">
@@ -55,7 +58,10 @@ function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata,
           ))}
         </SelectContent>
       </Select>
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-line bg-black">
+      <div
+        className="flex max-h-[calc(100dvh-15rem)] w-full items-center justify-center overflow-hidden rounded-lg border border-line bg-black"
+        style={{ aspectRatio: String(aspect) }}
+      >
         {video && (
           <video
             ref={videoRef}
@@ -64,10 +70,16 @@ function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata,
             muted
             playsInline
             preload="auto"
-            onLoadedMetadata={onLoadedMetadata}
+            onLoadedMetadata={(event) => {
+              const element = event.currentTarget;
+              if (element.videoWidth > 0 && element.videoHeight > 0) {
+                setRatio({ path: video.path, value: element.videoWidth / element.videoHeight });
+              }
+              onLoadedMetadata();
+            }}
             onTimeUpdate={onTimeUpdate}
             onEnded={onEnded}
-            className="max-h-full max-w-full"
+            className="size-full object-contain"
           />
         )}
       </div>
@@ -144,7 +156,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
 
   return (
     <>
-      <div className="flex min-h-0 flex-1 gap-3">
+      <div className="flex min-h-0 items-start gap-3">
         <ComparePane
           side="A"
           path={pathA}
@@ -194,7 +206,10 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
 export function CompareDialog({ open, onOpenChange, videos }: CompareDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(760px,calc(100dvh-2rem))] max-w-6xl">
+      <DialogContent
+        // Sized so two 16:9 panes, the pickers and the transport all fit in the viewport without stretching the panes.
+        className="max-w-[min(72rem,calc((100dvh-15rem)*32/9+3.25rem))]"
+      >
         <DialogHeader>
           <DialogTitle>Compare renders</DialogTitle>
           <DialogDescription>Two renders, played in lockstep. Pick any pair from your workspace.</DialogDescription>

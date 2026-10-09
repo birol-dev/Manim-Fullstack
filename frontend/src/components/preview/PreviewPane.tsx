@@ -94,10 +94,12 @@ function RenderingOverlay({
           {detail}
         </p>
       </div>
-      <Button size="sm" onClick={onCancel} disabled={stopping}>
-        <Square className="fill-current" />
-        {stopping ? "Stopping…" : "Cancel"}
-      </Button>
+      <Tooltip content={stopping ? "Stopping the render…" : "Cancel render"} side="top" wrap>
+        <Button size="sm" onClick={onCancel} disabled={stopping}>
+          <Square className="fill-current" />
+          {stopping ? "Stopping…" : "Cancel"}
+        </Button>
+      </Tooltip>
     </div>
   );
 }

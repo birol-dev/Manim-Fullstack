@@ -1,6 +1,7 @@
 import { FilePlus2, Replace } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { SCENE_TEMPLATES, type SceneTemplate } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import { SidebarPanel } from "./SidebarPanel";
@@ -21,11 +22,11 @@ export function TemplatesPanel({ latexAvailable, canReplace, onCreateFrom, onRep
       <ul className="flex flex-col gap-2">
         {SCENE_TEMPLATES.map((template) => (
           <li key={template.id} className="min-w-0 overflow-hidden rounded-lg border border-line bg-raised/40 p-3 transition-colors hover:border-line-strong">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <h3 className="truncate text-[13px] font-medium text-fg">{template.title}</h3>
+            <div className="mb-1 flex items-start justify-between gap-2">
+              <h3 className="min-w-0 text-[13px] font-medium leading-snug text-balance text-fg">{template.title}</h3>
               <span
                 className={cn(
-                  "shrink-0 rounded px-1.5 py-px text-2xs font-medium",
+                  "mt-px shrink-0 rounded px-1.5 py-px text-2xs font-medium",
                   template.needsLatex && !latexAvailable ? "bg-warning-soft text-warning" : "bg-overlay text-fg-muted",
                 )}
                 title={template.needsLatex && !latexAvailable ? "Needs a LaTeX install to render" : undefined}
@@ -34,15 +35,19 @@ export function TemplatesPanel({ latexAvailable, canReplace, onCreateFrom, onRep
               </span>
             </div>
             <p className="mb-3 break-words text-xs leading-relaxed text-fg-muted">{template.description}</p>
-            <div className="flex gap-1.5">
-              <Button size="xs" onClick={() => onCreateFrom(template)}>
-                <FilePlus2 />
-                New file
-              </Button>
-              <Button size="xs" variant="ghost" disabled={!canReplace} onClick={() => onReplaceWith(template)}>
-                <Replace />
-                Replace current
-              </Button>
+            <div className="flex flex-wrap gap-1.5">
+              <Tooltip content={`New file from “${template.title}”`}>
+                <Button size="xs" onClick={() => onCreateFrom(template)}>
+                  <FilePlus2 />
+                  New file
+                </Button>
+              </Tooltip>
+              <Tooltip content={canReplace ? "Replace the open editor's code with this template" : "Open a script first to replace its code"} wrap>
+                <Button size="xs" variant="ghost" disabled={!canReplace} onClick={() => onReplaceWith(template)}>
+                  <Replace />
+                  Replace current
+                </Button>
+              </Tooltip>
             </div>
           </li>
         ))}

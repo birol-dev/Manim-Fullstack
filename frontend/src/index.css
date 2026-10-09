@@ -125,6 +125,14 @@
     animation: var(--animate-progress-stripes);
   }
 
+  /* Code that wraps only at token boundaries (pair with <CodeText>, which adds <wbr>).
+     Identifiers are never split unless one alone is wider than its box. */
+  .code-wrap {
+    word-break: normal;
+    overflow-wrap: break-word;
+    hyphens: none;
+  }
+
   /* Hatched fill used for wait() steps in the timeline. */
   .hatched {
     background-image: repeating-linear-gradient(

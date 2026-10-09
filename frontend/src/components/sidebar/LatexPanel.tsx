@@ -8,19 +8,10 @@ import { Textarea } from "@/components/ui/input";
 import { Callout, Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { pythonString } from "@/lib/format";
+import { friendlyKatex } from "@/lib/katex";
 import { LATEX_TEMPLATES } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import { SidebarPanel } from "./SidebarPanel";
-
-function friendlyKatex(message: string): string {
-  const cleaned = message.replace(/^KaTeX parse error:\s*/i, "");
-  const match = cleaned.match(/Expected ('[^']*'|"[^"]*"), got ('[^']*'|"[^"]*")/i);
-  if (!match) return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
-  const expected = match[1];
-  const got = match[2].replace(/['"]/g, "");
-  const found = got === "EOF" ? "the end of the formula" : got;
-  return `Check the formula: expected ${expected}, but found ${found}.`;
-}
 
 function renderFormula(math: string, displayMode: boolean): { html: string; error: string | null } {
   try {
