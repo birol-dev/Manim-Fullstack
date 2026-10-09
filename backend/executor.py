@@ -16,6 +16,9 @@ import platform
 import re
 import signal
 import subprocess
+import sys
+import sysconfig
+import tempfile
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
 IMAGE_EXTENSIONS = (".png", ".gif")
@@ -36,6 +39,7 @@ BRACKET_PROGRESS_PATTERN = re.compile(r"\[\s*(\d{1,3})%\]")
 FILE_READY_PATTERN = re.compile(
     r"File ready at:?\s+(?:'(?P<single>[^']+)'|\"(?P<double>[^\"]+)\"|(?P<bare>\S+))"
 )
+FILE_READY_LEAD = re.compile(r"File ready at:?$")
 # Rich log rows end with a right-aligned "module.py:123" column; it is noise in the UI.
 RICH_SOURCE_COLUMN = re.compile(r"\s{2,}[\w.-]+\.py:\d+$")
 RICH_LEVEL_ONLY = re.compile(r"^(?:\[[^\]]*\]\s+)?(?:DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
@@ -68,6 +72,14 @@ def media_rel_path(abs_path: str) -> str:
     return os.path.basename(abs_path)
 
 
+def keep_box_width(original: str, shortened: str) -> str:
+    """Pad a shortened boxed Rich traceback line so its right border still lines up."""
+    removed = len(original) - len(shortened)
+    if removed > 0 and shortened.endswith(("│", "┃")):
+        return shortened[:-1] + " " * removed + shortened[-1]
+    return shortened
+
+
 def output_kind(path: str) -> str:
     """Return ``"image"`` or ``"video"`` for a rendered output path."""
     return "image" if path.lower().endswith(IMAGE_EXTENSIONS) else "video"
@@ -87,30 +99,46 @@ class ManimExecutor:
         self._pending_file_ready = None
         self._latex_warned = False
         self._last_progress = None
+        self._previous_outputs = {}
+        self._redaction = None
 
     @property
     def is_running(self) -> bool:
         return self.current_process is not None and self.current_process.returncode is None
 
-    def _find_latest_render(self, script_name: str, scene_name: str):
+    def _find_latest_render(self, script_name: str, scene_name: str, previous=None):
         """Locate the newest output for *script_name*/*scene_name* on disk.
 
         Used when the "File ready at" line could not be parsed from stdout.
         Videos are preferred; static scenes (no animations) produce an image instead.
+        Files listed in *previous* (path -> stat signature, taken before Manim
+        started) are skipped unless they changed, so a run that wrote nothing
+        never reports an earlier run's video.
         """
-        script_stem = os.path.splitext(script_name)[0]
-        media_dir = os.path.join(self.workspace_dir, "media")
-        for subdir, extensions in (("videos", VIDEO_EXTENSIONS), ("images", IMAGE_EXTENSIONS)):
-            root_dir = os.path.join(media_dir, subdir, script_stem)
-            latest = self._newest_matching_file(root_dir, scene_name, extensions)
-            if latest:
-                return latest
+        for path, signature in self._output_candidates(script_name, scene_name):
+            if previous is not None and previous.get(path) == signature:
+                continue
+            return path
         return None
 
+    def _output_snapshot(self, script_name: str, scene_name: str) -> dict:
+        """Stat signatures of the outputs that already exist for this script and scene."""
+        return dict(self._output_candidates(script_name, scene_name))
+
+    def _output_candidates(self, script_name: str, scene_name: str):
+        """(path, signature) pairs, newest first; videos before images."""
+        script_stem = os.path.splitext(script_name)[0]
+        media_dir = os.path.join(self.workspace_dir, "media")
+        found = []
+        for subdir, extensions in (("videos", VIDEO_EXTENSIONS), ("images", IMAGE_EXTENSIONS)):
+            root_dir = os.path.join(media_dir, subdir, script_stem)
+            found.extend(self._matching_files(root_dir, scene_name, extensions))
+        return found
+
     @staticmethod
-    def _newest_matching_file(root_dir: str, scene_name: str, extensions):
+    def _matching_files(root_dir: str, scene_name: str, extensions):
         if not os.path.isdir(root_dir):
-            return None
+            return []
         candidates = []
         try:
             for root, _dirs, files in os.walk(root_dir):
@@ -125,21 +153,28 @@ class ManimExecutor:
                         continue
                     full_path = os.path.join(root, name)
                     try:
-                        candidates.append((os.path.getmtime(full_path), full_path))
+                        info = os.stat(full_path)
                     except OSError:
                         continue
+                    candidates.append((info.st_mtime_ns, full_path, (info.st_mtime_ns, info.st_size, info.st_ino)))
         except OSError:
-            return None
-        if not candidates:
-            return None
-        return max(candidates)[1]
+            return []
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [(path, signature) for _mtime, path, signature in candidates]
+
+    @classmethod
+    def _newest_matching_file(cls, root_dir: str, scene_name: str, extensions):
+        matches = cls._matching_files(root_dir, scene_name, extensions)
+        return matches[0][0] if matches else None
 
     _to_media_rel_path = staticmethod(media_rel_path)
 
     @staticmethod
     def build_args(script_name, scene_name, quality, use_opengl):
         """Manim CLI arguments (everything after the executable)."""
-        args = [script_name, scene_name, f"-q{quality}" if quality in ("l", "m", "h", "k") else "-qm"]
+        # A script named "-ql.py" would be parsed as an option; "./-ql.py" is a path.
+        script_arg = f"./{script_name}" if script_name.startswith("-") else script_name
+        args = [script_arg, scene_name, f"-q{quality}" if quality in ("l", "m", "h", "k") else "-qm"]
         if use_opengl:
             # File output is the default. --write_to_movie was removed in Manim 0.22
             # and makes the OpenGL renderer fail on every current release.
@@ -188,6 +223,8 @@ class ManimExecutor:
         self._latex_warned = False
         self._last_progress = None
         self.current_process = None
+        # Outputs that exist before Manim starts; the disk-scan fallback ignores them.
+        self._previous_outputs = self._output_snapshot(script_name, scene_name)
 
         prefix = list(manim_path) if isinstance(manim_path, (list, tuple)) else [manim_path]
         args = self.build_args(script_name, scene_name, quality, use_opengl)
@@ -250,7 +287,7 @@ class ManimExecutor:
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
             if not self._last_file_ready:
-                latest = self._find_latest_render(script_name, scene_name)
+                latest = self._find_latest_render(script_name, scene_name, self._previous_outputs)
                 if latest:
                     await self._emit_file_ready(latest, log_callback)
 
@@ -347,11 +384,69 @@ class ManimExecutor:
         if pending:
             await self._handle_line(pending, stream_name, log_callback)
 
+    def _redaction_rules(self):
+        """(compiled pattern, replacement lookup) for host paths hidden from the browser.
+
+        The workspace prefix and its separator are removed, so paths come out
+        relative ("scene.py:5", "media/videos/..."); site-packages, the standard
+        library, and the virtualenv root become ``<site-packages>``,
+        ``<python-lib>``, and ``<venv>``; the temp dir ``<tmp>``; and the home
+        directory ``~``. Both separator styles are matched; nothing else in the
+        line is touched, so ``\\frac`` or ``C:\\Users`` typed by the user survive.
+        """
+        if self._redaction is not None:
+            return self._redaction
+        paths = sysconfig.get_paths()
+        candidates = [(self.workspace_dir, "")]
+        candidates += [(paths.get(key), "<site-packages>") for key in ("purelib", "platlib")]
+        candidates += [(paths.get(key), "<python-lib>") for key in ("stdlib", "platstdlib")]
+        if sys.prefix != sys.base_prefix:
+            candidates.append((sys.prefix, "<venv>"))  # a virtualenv's own root, never /usr
+        candidates += [(tempfile.gettempdir(), "<tmp>"), (os.path.expanduser("~"), "~")]
+        fold = os.path.normcase("A") == "a"  # case-insensitive paths (Windows)
+        lookup = {}
+        with_separator = set()
+        for raw, replacement in candidates:
+            if not raw:
+                continue
+            path = os.path.abspath(raw).rstrip("\\/")
+            # "/" or "C:" would match far too much.
+            if len(path.replace("\\", "/").strip("/")) <= 2:
+                continue
+            # Windows output can use either separator; POSIX paths only have "/".
+            for variant in {path, path.replace("\\", "/")}:
+                key = variant.lower() if fold else variant
+                lookup.setdefault(key, replacement)
+                if replacement == "":
+                    # "<workspace>/scene.py" becomes "scene.py", not "/scene.py".
+                    for sep in {os.sep, "/"}:
+                        with_separator.add(key + sep)
+                        lookup.setdefault(key + sep, "")
+        if not lookup:
+            self._redaction = (None, lookup)
+            return self._redaction
+
+        def alternation(keys):
+            return "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+
+        plain = [key for key in lookup if key not in with_separator]
+        whole = rf"(?:{alternation(plain)})(?![\w.-])"
+        if with_separator:
+            whole = rf"(?:{alternation(with_separator)})|{whole}"
+        # A prefix only counts as a whole path: "/home/box" must not eat "/home/boxer",
+        # and "/workspace" must not match inside "/srv/workspace".
+        pattern = re.compile(rf"(?<![\w.\-/\\])(?:{whole})", re.IGNORECASE if fold else 0)
+        self._redaction = (pattern, lookup)
+        return self._redaction
+
     def _redact_paths(self, line: str) -> str:
-        """Hide the workspace's absolute path in log lines sent to the browser."""
-        workspace = os.path.abspath(self.workspace_dir)
-        redacted = line.replace(workspace, "").replace(workspace.replace("\\", "/"), "")
-        return redacted.replace("\\", "/")
+        """Hide host paths (workspace, Python install, temp, home) in log lines sent to the browser."""
+        pattern, lookup = self._redaction_rules()
+        if pattern is None:
+            return line
+        fold = os.path.normcase("A") == "a"
+        redacted = pattern.sub(lambda match: lookup[match.group(0).lower() if fold else match.group(0)], line)
+        return keep_box_width(line, redacted)
 
     async def _handle_line(self, raw_line: str, stream_name: str, log_callback):
         line = ANSI_PATTERN.sub("", raw_line).rstrip()
@@ -359,7 +454,8 @@ class ManimExecutor:
             # A wrapped "File ready at" path continues on the next physical line.
             pending = self._pending_file_ready
             self._pending_file_ready = None
-            if pending[-1].isspace() or line[:1].isspace():
+            # Lines are right-stripped, so a break right after "File ready at" lost its space.
+            if line[:1].isspace() or FILE_READY_LEAD.search(pending):
                 line = f"{pending.rstrip()} {line.lstrip()}"
             else:
                 line = pending + line.lstrip()
