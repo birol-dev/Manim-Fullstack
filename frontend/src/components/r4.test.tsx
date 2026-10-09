@@ -118,6 +118,26 @@ describe("timeline focus and Tab stops (item 4, extra b)", () => {
   });
 });
 
+describe("alternative branch steps (extra f)", () => {
+  const branch: AnimationStep[] = [
+    { type: "play", label: "d.animate.shift(RIGHT * 0.5)", line: 9, duration: 0.3, loop_line: 7, repeat: 4, estimated: true, alternative: true },
+    { type: "play", label: "d.animate.shift(UP * 0.5)", line: 11, duration: 0.3, loop_line: 7, repeat: 4, estimated: true },
+  ];
+
+  it("are dimmed, say alt and drop the ×N badge", () => {
+    render(<TimelineView scene="BranchScene" steps={branch} activeIndex={null} onJumpToLine={() => {}} />);
+    const [alt, counted] = screen.getAllByRole("option");
+    expect(alt).toHaveAttribute("data-alternative", "true");
+    expect(alt).toHaveTextContent("alt");
+    expect(alt).not.toHaveTextContent("×4");
+    expect(alt.className).toContain("bg-transparent");
+    expect(alt.getAttribute("aria-label")).toContain("not counted in the totals");
+    expect(counted).not.toHaveAttribute("data-alternative");
+    expect(counted).toHaveTextContent("×4");
+    expect(counted).not.toHaveTextContent(/\balt\b/);
+  });
+});
+
 describe("console queued line follows the live position (item 3)", () => {
   const logs: LogEntry[] = [
     { id: 1, level: "command", text: "$ manim qa_visual.py CircleToSquare -qm" },

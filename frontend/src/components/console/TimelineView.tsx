@@ -4,7 +4,7 @@ import { ListVideo, Repeat } from "lucide-react";
 import { CodeText } from "@/components/ui/code-text";
 import { EmptyState } from "@/components/ui/panel";
 import { formatDuration } from "@/lib/format";
-import { longestSegment, repeatLabel, stepMetaWidth, stepSeconds, timelineTotal } from "@/lib/timeline";
+import { isAlternative, longestSegment, repeatLabel, stepMetaWidth, stepSeconds, timelineTotal } from "@/lib/timeline";
 import type { AnimationStep } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,8 @@ function stepTitle(step: AnimationStep): string {
     typeof step.loop_line === "number"
       ? ` · in the loop on line ${step.loop_line}${typeof step.repeat === "number" ? `, runs ${step.repeat}×` : ", repeat count known only at runtime"}`
       : "";
-  return `Line ${step.line}: ${call}${loop}`;
+  const alternative = isAlternative(step) ? " · other branch of an if/match: not counted in the totals" : "";
+  return `Line ${step.line}: ${call}${loop}${alternative}`;
 }
 
 /**
@@ -130,7 +131,9 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
           const seconds = stepSeconds(step);
           const label = isPlay ? step.label : step.label.replace(/^Wait /, "");
           const isActive = activeIndex === index;
-          const repeat = repeatLabel(step);
+          // A branch that isn't counted (another branch of its if/match runs instead): dimmed, "alt", no ×N.
+          const alternative = isAlternative(step);
+          const repeat = alternative ? null : repeatLabel(step);
           const durationText =
             typeof step.duration === "number" ? formatDuration(seconds) : isPlay ? "1s" : String(step.duration ?? "1s");
           return (
@@ -138,6 +141,7 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
               <div
                 role="option"
                 data-step-index={index}
+                data-alternative={alternative ? "true" : undefined}
                 tabIndex={index === current ? 0 : -1}
                 aria-selected={index === current}
                 aria-current={isActive ? "step" : undefined}
@@ -150,21 +154,29 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
                 title={stepTitle(step)}
                 className={cn(
                   "flex w-full cursor-pointer flex-col gap-1 rounded-md border px-2.5 py-1.5 text-left transition-colors focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent",
-                  isPlay
-                    ? "border-accent/25 bg-accent-soft hover:border-accent/60"
-                    : "hatched border-dashed border-line-strong hover:border-fg-subtle",
+                  // Dimmed with muted colours rather than opacity, so its text still meets 4.5:1.
+                  alternative
+                    ? "border-dashed border-line-strong bg-transparent hover:border-fg-subtle"
+                    : isPlay
+                      ? "border-accent/25 bg-accent-soft hover:border-accent/60"
+                      : "hatched border-dashed border-line-strong hover:border-fg-subtle",
                   isActive && "border-accent ring-1 ring-accent",
                 )}
               >
                 {/* One meta row (kind · duration … loop · line) keeps cards ~20 px shorter, so they fit a short console. */}
                 <span className="flex items-center justify-between gap-2 text-2xs tabular-nums text-fg-subtle">
                   <span className="min-w-0 truncate">
-                    <span className={cn("font-medium", isPlay ? "text-accent" : "text-fg-muted")}>{isPlay ? "play" : "wait"}</span>
+                    <span className={cn("font-medium", isPlay && !alternative ? "text-accent" : "text-fg-muted")}>{isPlay ? "play" : "wait"}</span>
                     {" · "}
                     {step.estimated && typeof step.duration === "number" ? "≈ " : ""}
                     {durationText}
                   </span>
                   <span className="flex shrink-0 items-center gap-1.5">
+                    {alternative && (
+                      <span className="rounded border border-line-strong px-1 font-medium text-fg-muted" aria-hidden>
+                        alt
+                      </span>
+                    )}
                     {repeat && (
                       <span
                         className="inline-flex items-center gap-0.5 rounded bg-overlay px-1 font-medium text-fg-muted"
@@ -177,7 +189,12 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
                     <span>L{step.line}</span>
                   </span>
                 </span>
-                <span className="code-wrap line-clamp-3 whitespace-normal font-mono text-[11.5px] leading-snug text-fg">
+                <span
+                  className={cn(
+                    "code-wrap line-clamp-3 whitespace-normal font-mono text-[11.5px] leading-snug",
+                    alternative ? "text-fg-muted" : "text-fg",
+                  )}
+                >
                   <CodeText text={label} />
                 </span>
               </div>

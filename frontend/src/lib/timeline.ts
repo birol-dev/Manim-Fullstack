@@ -208,8 +208,13 @@ export function codeBreakSegments(text: string): string[] {
 export function stepMetaWidth(step: AnimationStep, durationText: string): number {
   const META_CHAR_PX = 6.2;
   const kind = `${step.type === "play" ? "play" : "wait"} · ${step.estimated && typeof step.duration === "number" ? "≈ " : ""}${durationText}`;
-  const repeat = repeatLabel(step);
-  const badge = repeat ? 4 + 10 + 2 + repeat.length * META_CHAR_PX + 6 : 0; // padding, icon, gap, text, gap
+  // An alternative branch shows an "alt" chip instead of the ×N badge.
+  const repeat = isAlternative(step) ? null : repeatLabel(step);
+  const badge = isAlternative(step)
+    ? 4 + 3 * META_CHAR_PX + 2 + 6 // padding, "alt", border, gap
+    : repeat
+      ? 4 + 10 + 2 + repeat.length * META_CHAR_PX + 6 // padding, icon, gap, text, gap
+      : 0;
   const line = `L${step.line}`.length * META_CHAR_PX;
   return Math.ceil(kind.length * META_CHAR_PX + 8 + badge + line + 22); // + row gap + card padding/border
 }

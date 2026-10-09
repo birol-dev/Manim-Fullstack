@@ -204,6 +204,9 @@ export function PreviewPane(props: PreviewPaneProps) {
           )
         ) : failed ? (
           <EmptyState
+            // The failure toast sits top-right over this pane (TOAST_TOP_PX, at most ~90 px tall); start the
+            // card below it so the toast never covers it, even on a 640 px tall window.
+            className="pt-24"
             icon={<XCircle className="text-danger" />}
             title="Render failed"
             description="Manim stopped with an error. The console shows the traceback; click a line reference to jump to it."
