@@ -18,7 +18,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
-from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
+from executor import OUTPUT_EXTENSIONS, ManimExecutor, keep_box_width, media_rel_path, output_kind
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
@@ -1203,8 +1203,10 @@ async def websocket_render(websocket: WebSocket):
             if temp_stem and isinstance(outbound.get("message"), str):
                 # Show the user's filename instead of the scratch copy in tracebacks. Media
                 # folder names are rewritten too when the output is moved there afterwards.
-                message = outbound["message"].replace(script_name, filename)
-                outbound["message"] = message.replace(temp_stem, target_stem) if relocate else message
+                original = outbound["message"]
+                message = original.replace(script_name, filename)
+                message = message.replace(temp_stem, target_stem) if relocate else message
+                outbound["message"] = keep_box_width(original, message)
 
             if outbound.get("type") == "file_ready" and abs_path:
                 if relocate:

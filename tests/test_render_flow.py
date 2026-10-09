@@ -331,3 +331,25 @@ def test_unexpected_socket_error_stops_the_render_and_reports(monkeypatch):
     asyncio.run(main.websocket_render(websocket))
     sent = websocket.send_json.await_args.args[0]
     assert sent["type"] == "error" and "Server WebSocket error" in sent["message"]
+
+
+def test_scratch_name_swap_keeps_traceback_box_width(client, tmp_path):
+    """Swapping _temp_run_xxxxxxxx.py for the user's shorter name keeps Rich's right border aligned."""
+    (tmp_path / "media").mkdir()
+
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+        await log_callback({"type": "log", "message": f"│ {script_name}:5 in construct" + " " * 8 + "│"})
+        return {"success": False, "status": "failed"}
+
+    instance = MagicMock()
+    instance.execute = AsyncMock(side_effect=execute)
+    instance.cancel = AsyncMock()
+    with patch.object(main, "WORKSPACE_DIR", str(tmp_path)), patch.object(
+        main, "MEDIA_DIR", str(tmp_path / "media")
+    ), patch.object(main, "ManimExecutor", return_value=instance):
+        with client.websocket_connect("/api/render") as ws:
+            ws.send_json(start("box", filename="ne.py", code=SCENE))
+            received = drain(ws, "box")
+    line = next(m["message"] for m in received if m["type"] == "log")
+    assert line.startswith("│ ne.py:5 in construct") and line.endswith("│")
+    assert len(line) == len("│ _temp_run_12345678.py:5 in construct" + " " * 8 + "│")

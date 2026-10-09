@@ -72,6 +72,14 @@ def media_rel_path(abs_path: str) -> str:
     return os.path.basename(abs_path)
 
 
+def keep_box_width(original: str, shortened: str) -> str:
+    """Pad a shortened boxed Rich traceback line so its right border still lines up."""
+    removed = len(original) - len(shortened)
+    if removed > 0 and shortened.endswith(("│", "┃")):
+        return shortened[:-1] + " " * removed + shortened[-1]
+    return shortened
+
+
 def output_kind(path: str) -> str:
     """Return ``"image"`` or ``"video"`` for a rendered output path."""
     return "image" if path.lower().endswith(IMAGE_EXTENSIONS) else "video"
@@ -379,8 +387,9 @@ class ManimExecutor:
     def _redaction_rules(self):
         """(compiled pattern, replacement lookup) for host paths hidden from the browser.
 
-        The workspace is removed (tracebacks show "/scene.py:5"); site-packages,
-        the standard library, and the virtualenv root become ``<site-packages>``,
+        The workspace prefix and its separator are removed, so paths come out
+        relative ("scene.py:5", "media/videos/..."); site-packages, the standard
+        library, and the virtualenv root become ``<site-packages>``,
         ``<python-lib>``, and ``<venv>``; the temp dir ``<tmp>``; and the home
         directory ``~``. Both separator styles are matched; nothing else in the
         line is touched, so ``\\frac`` or ``C:\\Users`` typed by the user survive.
@@ -396,6 +405,7 @@ class ManimExecutor:
         candidates += [(tempfile.gettempdir(), "<tmp>"), (os.path.expanduser("~"), "~")]
         fold = os.path.normcase("A") == "a"  # case-insensitive paths (Windows)
         lookup = {}
+        with_separator = set()
         for raw, replacement in candidates:
             if not raw:
                 continue
@@ -407,13 +417,25 @@ class ManimExecutor:
             for variant in {path, path.replace("\\", "/")}:
                 key = variant.lower() if fold else variant
                 lookup.setdefault(key, replacement)
+                if replacement == "":
+                    # "<workspace>/scene.py" becomes "scene.py", not "/scene.py".
+                    for sep in {os.sep, "/"}:
+                        with_separator.add(key + sep)
+                        lookup.setdefault(key + sep, "")
         if not lookup:
             self._redaction = (None, lookup)
             return self._redaction
-        alternatives = "|".join(re.escape(key) for key in sorted(lookup, key=len, reverse=True))
+
+        def alternation(keys):
+            return "|".join(re.escape(key) for key in sorted(keys, key=len, reverse=True))
+
+        plain = [key for key in lookup if key not in with_separator]
+        whole = rf"(?:{alternation(plain)})(?![\w.-])"
+        if with_separator:
+            whole = rf"(?:{alternation(with_separator)})|{whole}"
         # A prefix only counts as a whole path: "/home/box" must not eat "/home/boxer",
         # and "/workspace" must not match inside "/srv/workspace".
-        pattern = re.compile(rf"(?<![\w.\-/\\])(?:{alternatives})(?![\w.-])", re.IGNORECASE if fold else 0)
+        pattern = re.compile(rf"(?<![\w.\-/\\])(?:{whole})", re.IGNORECASE if fold else 0)
         self._redaction = (pattern, lookup)
         return self._redaction
 
@@ -423,7 +445,8 @@ class ManimExecutor:
         if pattern is None:
             return line
         fold = os.path.normcase("A") == "a"
-        return pattern.sub(lambda match: lookup[match.group(0).lower() if fold else match.group(0)], line)
+        redacted = pattern.sub(lambda match: lookup[match.group(0).lower() if fold else match.group(0)], line)
+        return keep_box_width(line, redacted)
 
     async def _handle_line(self, raw_line: str, stream_name: str, log_callback):
         line = ANSI_PATTERN.sub("", raw_line).rstrip()
