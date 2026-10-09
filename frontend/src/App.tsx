@@ -30,7 +30,8 @@ import { SaveConflictError, useWorkspace, type SaveOptions } from "@/hooks/useWo
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE, getMaxCodeBytes, renderBlockReason, utf8ByteLength } from "@/lib/constants";
 import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
-import { workPanelSizes } from "@/lib/layout";
+import { horizontalDefaults, TOAST_TOP_PX, workPanelSizes } from "@/lib/layout";
+import { cn } from "@/lib/utils";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
 import { overallPercent, risingPercent } from "@/lib/progress";
@@ -71,13 +72,16 @@ function triggerDownload(url: string, filename: string) {
 }
 
 function ResizeHandle({ direction }: { direction: "horizontal" | "vertical" }) {
+  // A 1 px line, with a 3 px accent bar and a grip on keyboard focus / drag, so the focused
+  // handle is as easy to see as any other focus ring (it was only the 1 px line turning blue).
   return (
     <Separator
-      className={
-        direction === "horizontal"
-          ? "relative w-px bg-line outline-none transition-colors data-[separator=active]:bg-accent data-[separator=focus]:bg-accent data-[separator=hover]:bg-accent/60"
-          : "relative h-px bg-line outline-none transition-colors data-[separator=active]:bg-accent data-[separator=focus]:bg-accent data-[separator=hover]:bg-accent/60"
-      }
+      // Styles in index.css (.resize-handle): a 1 px line, plus a 3 px accent bar with a grip on focus / drag.
+      className={cn(
+        "resize-handle relative z-10 bg-line outline-none transition-colors data-[separator=hover]:bg-accent/60 data-[separator=active]:bg-accent data-[separator=focus]:bg-accent",
+        direction === "horizontal" ? "w-px" : "h-px",
+      )}
+      data-direction={direction}
     />
   );
 }
@@ -121,8 +125,9 @@ export default function App() {
   const [logsFile, setLogsFile] = useState<string | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
-  const [bottomPx, setBottomPx] = useState<number | null>(null);
   const workSizes = workPanelSizes(useViewportHeight());
+  // Read once: these are only the first-run defaults (react-resizable-panels keeps dragged sizes).
+  const [horizontal] = useState(() => horizontalDefaults(typeof window === "undefined" ? 1440 : window.innerWidth));
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [newFile, setNewFile] = useState<(NewFileRequest & { code?: string }) | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -527,6 +532,7 @@ export default function App() {
       useOpenGL: setUseOpenGL,
       loopPreview: setLoopPreview,
       editorFontSize: setEditorFontSize,
+      quality: setQuality,
     };
     setters[key](value);
   };
@@ -715,7 +721,7 @@ export default function App() {
       case "settings":
         return (
           <SettingsPanel
-            settings={{ storageMode, autoSave, downloadOnly, useOpenGL, loopPreview, editorFontSize }}
+            settings={{ storageMode, autoSave, downloadOnly, useOpenGL, loopPreview, editorFontSize, quality }}
             openGLSupported={openGLSupported}
             onChange={changeSetting}
           />
@@ -746,7 +752,7 @@ export default function App() {
             <Panel
               id="sidebar"
               panelRef={sidebarPanelRef}
-              defaultSize="240px"
+              defaultSize={`${horizontal.sidebarPx}px`}
               minSize="200px"
               maxSize="320px"
               collapsible
@@ -791,7 +797,7 @@ export default function App() {
                       />
                     </Panel>
                     <ResizeHandle direction="horizontal" />
-                    <Panel id="preview" defaultSize="42%" minSize="260px">
+                    <Panel id="preview" defaultSize={`${horizontal.previewPercent}%`} minSize="260px">
                       <PreviewPane
                         preview={preview}
                         active={ownRender}
@@ -821,14 +827,13 @@ export default function App() {
                   id="bottom"
                   panelRef={bottomPanelRef}
                   defaultSize={`${workSizes.bottomDefaultPx}px`}
-                  minSize="120px"
+                  minSize={`${workSizes.bottomMinPx}px`}
                   maxSize="60%"
                   collapsible
                   collapsedSize="36px"
                   groupResizeBehavior="preserve-pixel-size"
                   onResize={(size) => {
                     setBottomCollapsed(size.inPixels <= 40);
-                    setBottomPx(size.inPixels);
                   }}
                 >
                   <BottomPanel
@@ -852,6 +857,8 @@ export default function App() {
                     activeStep={activeStep}
                     renderPercent={ownRender ? renderPercent : null}
                     onJumpToLine={jumpToLine}
+                    queuePosition={session.active?.queued ? (session.active.queuePosition ?? null) : null}
+                    timelineKey={workspace.activeFile}
                   />
                 </Panel>
               </Group>
@@ -891,9 +898,10 @@ export default function App() {
       />
       <Toaster
         theme="dark"
-        position="bottom-right"
-        // Above the console/timeline panel, so an error toast never covers the traceback it points to.
-        offset={{ bottom: bottomPx === null ? 36 : Math.round(bottomPx) + 24 + 12, right: 16 }}
+        // Top right, just under the preview header: clear of the preview's path footer, the console
+        // tab bar and the traceback an error toast points to (and of the Render failed card's button).
+        position="top-right"
+        offset={{ top: TOAST_TOP_PX, right: 16 }}
         toastOptions={{
           classNames: {
             toast: "!bg-overlay !border-line-strong !text-fg !shadow-popover !rounded-lg !text-[13px]",

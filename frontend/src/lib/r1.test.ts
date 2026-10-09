@@ -95,10 +95,11 @@ describe("timeline", () => {
     const label = "Write(title), Create(circle)";
     const segments = codeBreakSegments(label);
     expect(segments.join("")).toBe(label);
-    expect(segments).toEqual(["Write(", "title), ", "Create(", "circle)"]);
+    // Round 4: short comma-free calls stay whole ("Write(title)").
+    expect(segments).toEqual(["Write(title), ", "Create(circle)"]);
     // No segment starts with a lone comma and identifiers stay whole.
     expect(segments.some((segment) => segment.startsWith(","))).toBe(false);
-    expect(codeBreakSegments("img.animate.shift(LEFT * 2)")).toEqual(["img.", "animate.", "shift(", "LEFT ", "* ", "2)"]);
+    expect(codeBreakSegments("img.animate.shift(LEFT * 2)")).toEqual(["img.", "animate.", "shift(LEFT * 2)"]);
     expect(codeBreakSegments("TransformMatchingTex(eq1, eq2)")).toEqual(["TransformMatchingTex(", "eq1, ", "eq2)"]);
     expect(codeBreakSegments("Circle(color=BLUE, radius=0.5)")).toEqual(["Circle(", "color=", "BLUE, ", "radius=", "0.5)"]);
     expect(codeBreakSegments("x == y")).toEqual(["x == ", "y"]);

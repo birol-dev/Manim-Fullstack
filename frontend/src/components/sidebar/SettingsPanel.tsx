@@ -5,7 +5,8 @@ import { Section } from "@/components/ui/panel";
 import { Segmented } from "@/components/ui/segmented";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import type { StorageMode } from "@/lib/types";
+import { QUALITY_OPTIONS } from "@/lib/constants";
+import type { Quality, StorageMode } from "@/lib/types";
 import { SidebarPanel } from "./SidebarPanel";
 
 export interface Settings {
@@ -15,6 +16,8 @@ export interface Settings {
   useOpenGL: boolean;
   loopPreview: boolean;
   editorFontSize: number;
+  /** One render quality for every file (the toolbar's Quality picker changes the same setting). */
+  quality: Quality;
 }
 
 interface SettingsPanelProps {
@@ -84,6 +87,28 @@ export function SettingsPanel({ settings, openGLSupported, onChange }: SettingsP
 
         <Section title="Rendering">
           <div className="flex flex-col">
+            <div className="flex items-start justify-between gap-3 px-1 py-1.5">
+              <div className="min-w-0">
+                <label htmlFor="render-quality" className="text-xs font-medium text-fg">
+                  Render quality
+                </label>
+                <p id="render-quality-description" className="mt-0.5 text-2xs leading-relaxed text-fg-subtle">
+                  Applies to all files. The Quality picker above the editor changes this same setting.
+                </p>
+              </div>
+              <Select value={settings.quality} onValueChange={(value) => onChange("quality", value as Quality)}>
+                <SelectTrigger id="render-quality" aria-describedby="render-quality-description" className="mt-0.5 w-[88px] shrink-0 gap-1 px-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {QUALITY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label} · {option.detail.split(" · ")[0]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <ToggleRow
               label="Save before rendering"
               description="Write the editor to disk first. When off, the unsaved buffer is rendered and the file is left alone."

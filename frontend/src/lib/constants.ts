@@ -7,6 +7,18 @@ export const QUALITY_OPTIONS: ReadonlyArray<{ value: Quality; label: string; det
   { value: "k", label: "4K", detail: "2160p · 60 fps" },
 ];
 
+/** Compact toolbar label: "720p" (the full label and fps stay in the menu and tooltip). */
+export function qualityShortLabel(quality: Quality): string {
+  const option = QUALITY_OPTIONS.find((item) => item.value === quality);
+  return option ? option.detail.split(" · ")[0] : quality;
+}
+
+/** The toolbar tooltip. Quality is one setting for every file, and says so. */
+export function qualityTooltip(quality: Quality): string {
+  const option = QUALITY_OPTIONS.find((item) => item.value === quality);
+  return option ? `Quality (all files): ${option.label} · ${option.detail}` : "Render quality (all files)";
+}
+
 export const QUALITY_FOR_PROFILE: Record<string, Quality> = {
   eco: "l",
   balanced: "m",

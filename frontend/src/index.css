@@ -125,6 +125,12 @@
     animation: var(--animate-progress-stripes);
   }
 
+  /* Default button of a dialog opened with the mouse (ConfirmDialog focusWithRing). */
+  [data-autofocus-ring]:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+
   /* Code that wraps only at token boundaries (pair with <CodeText>, which adds <wbr>).
      Identifiers are never split unless one alone is wider than its box. */
   .code-wrap {
@@ -165,4 +171,51 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * Toasts sit at the top right, under the preview header (App.tsx). Sonner slides a top toast
+ * in and out by its full height, which crossed the preview header and top bar; a short fade
+ * and nudge keeps it inside its own spot the whole time.
+ */
+[data-sonner-toast][data-y-position="top"][data-mounted="false"] {
+  --y: translateY(-8px);
+}
+[data-sonner-toast][data-y-position="top"][data-removed="true"][data-front="true"][data-swipe-out="false"] {
+  --y: translateY(-8px);
+}
+
+/*
+ * Resize handles (App.tsx). The focused or dragged handle gets a 3 px accent bar with a dark grip
+ * in the middle, as visible as the other focus rings (it was only the 1 px line turning blue).
+ */
+.resize-handle::after,
+.resize-handle::before {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.resize-handle::after {
+  border-radius: 9999px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 1px rgb(88 196 221 / 0.35);
+}
+.resize-handle::before {
+  z-index: 1;
+  border-radius: 9999px;
+  background: var(--color-accent-fg);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+.resize-handle[data-direction="horizontal"]::after { top: 0; bottom: 0; left: -1px; width: 3px; }
+.resize-handle[data-direction="horizontal"]::before { width: 1px; height: 2rem; }
+.resize-handle[data-direction="vertical"]::after { left: 0; right: 0; top: -1px; height: 3px; }
+.resize-handle[data-direction="vertical"]::before { height: 1px; width: 2rem; }
+.resize-handle[data-separator="focus"]::after,
+.resize-handle[data-separator="active"]::after,
+.resize-handle[data-separator="focus"]::before {
+  opacity: 1;
 }

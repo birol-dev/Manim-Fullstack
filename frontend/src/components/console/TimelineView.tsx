@@ -4,7 +4,7 @@ import { ListVideo, Repeat } from "lucide-react";
 import { CodeText } from "@/components/ui/code-text";
 import { EmptyState } from "@/components/ui/panel";
 import { formatDuration } from "@/lib/format";
-import { longestSegment, repeatLabel, stepSeconds, timelineTotal } from "@/lib/timeline";
+import { longestSegment, repeatLabel, stepMetaWidth, stepSeconds, timelineTotal } from "@/lib/timeline";
 import type { AnimationStep } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -36,12 +36,14 @@ function stepTitle(step: AnimationStep): string {
  * Card width: time-proportional, but never narrower than its longest token,
  * and wide enough that a typical label fits in about two lines (short cards).
  */
-function stepWidth(step: AnimationStep, label: string): number {
+function stepWidth(step: AnimationStep, label: string, durationText: string): number {
   const byTime = stepSeconds(step) * PX_PER_SECOND;
+  // The meta row ("wait · 0.2s  ×2  L12") never truncates.
+  const byMeta = stepMetaWidth(step, durationText);
   const byToken = longestSegment(label) * CHAR_PX + CARD_PADDING_PX;
   // Half the label plus slack for token-boundary wrapping, so a typical call fits two lines (short consoles).
   const byLines = (Math.ceil(label.length / 2) + 6) * CHAR_PX + CARD_PADDING_PX;
-  return Math.round(Math.min(MAX_BLOCK_PX, Math.max(MIN_BLOCK_PX, byTime, byToken, Math.min(byLines, 260))));
+  return Math.round(Math.min(MAX_BLOCK_PX, Math.max(MIN_BLOCK_PX, byTime, byToken, byMeta, Math.min(byLines, 260))));
 }
 
 const NEXT_KEYS = ["ArrowRight", "ArrowDown"];
@@ -132,7 +134,7 @@ export function TimelineView({ scene, steps, activeIndex, onJumpToLine }: Timeli
           const durationText =
             typeof step.duration === "number" ? formatDuration(seconds) : isPlay ? "1s" : String(step.duration ?? "1s");
           return (
-            <div key={`${step.line}-${index}`} className="flex shrink-0" style={{ width: stepWidth(step, label) }}>
+            <div key={`${step.line}-${index}`} className="flex shrink-0" style={{ width: stepWidth(step, label, durationText) }}>
               <div
                 role="option"
                 data-step-index={index}

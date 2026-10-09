@@ -1,10 +1,14 @@
-import { ChevronDown, ChevronUp, Eraser, FileCode2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronDown, ChevronUp, Copy, Eraser, FileCode2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { LogEntry } from "@/hooks/useLogs";
+import { consoleCopyText, latestQueuedLineId } from "@/lib/logs";
+import { stripBoxDrawing } from "@/lib/traceback";
 import type { AnimationStep } from "@/lib/types";
 import { ConsoleView } from "./ConsoleView";
 import { TimelineView } from "./TimelineView";
@@ -28,6 +32,24 @@ interface BottomPanelProps {
   /** Overall render progress, or null when idle. */
   renderPercent: number | null;
   onJumpToLine: (line: number) => void;
+  /** Live queue position of the open file's waiting render, for the console's queued line. */
+  queuePosition?: number | null;
+  /** Changes when another file opens: the timeline forgets the card it had focused. */
+  timelineKey?: string | null;
+}
+
+/** Copy the whole console as plain text (Rich's box drawing removed, line markers kept). */
+async function copyConsole(logs: LogEntry[]) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
+    await navigator.clipboard.writeText(consoleCopyText(logs, stripBoxDrawing));
+    toast.success("Console output copied", { id: "console-copied" });
+  } catch {
+    toast.error("Couldn't copy the console output", {
+      id: "console-copied",
+      description: "Select the lines and press Ctrl+C instead.",
+    });
+  }
 }
 
 function CountBadge({ count, tone = "neutral" }: { count: number; tone?: "neutral" | "danger" }) {
@@ -75,6 +97,14 @@ function OtherFileChip({ file, onOpen }: { file: string; onOpen: (name: string) 
 
 export function BottomPanel(props: BottomPanelProps) {
   const errorCount = props.logs.filter((entry) => entry.level === "error").length;
+  // The latest "Waiting for another render… (position N in queue)" line follows the live position
+  // (and keeps the last one it saw once the render starts), like the overlay and the status bar.
+  const { logs, queuePosition } = props;
+  const queueLineId = useMemo(() => latestQueuedLineId(logs), [logs]);
+  const [liveQueueLine, setLiveQueueLine] = useState<{ id: number; position: number } | null>(null);
+  if (queuePosition && queueLineId !== null && (liveQueueLine?.id !== queueLineId || liveQueueLine.position !== queuePosition)) {
+    setLiveQueueLine({ id: queueLineId, position: queuePosition });
+  }
 
   return (
     <Tabs
@@ -101,6 +131,13 @@ export function BottomPanel(props: BottomPanelProps) {
             </div>
           )}
           {props.tab === "console" && props.logs.length > 0 && (
+            <Tooltip content="Copy console output">
+              <Button variant="ghost" size="icon-xs" aria-label="Copy console output" onClick={() => void copyConsole(props.logs)}>
+                <Copy />
+              </Button>
+            </Tooltip>
+          )}
+          {props.tab === "console" && props.logs.length > 0 && (
             <Tooltip content="Clear console">
               <Button variant="ghost" size="icon-xs" aria-label="Clear console" onClick={props.onClearLogs}>
                 <Eraser />
@@ -125,10 +162,12 @@ export function BottomPanel(props: BottomPanelProps) {
           logs={props.logs}
           linkFiles={props.linkFiles}
           onJumpToLine={props.onJumpToLine}
+          liveQueueLine={liveQueueLine}
         />
       </TabsContent>
-      <TabsContent value="timeline" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <TimelineView scene={props.scene} steps={props.steps} activeIndex={props.activeStep} onJumpToLine={props.onJumpToLine} />
+      {/* Not a Tab stop itself: the step list inside is (one stop, arrows move), so Tab goes tab -> list. */}
+      <TabsContent value="timeline" tabIndex={-1} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <TimelineView key={props.timelineKey ?? ""} scene={props.scene} steps={props.steps} activeIndex={props.activeStep} onJumpToLine={props.onJumpToLine} />
       </TabsContent>
     </Tabs>
   );

@@ -53,6 +53,12 @@ export function useMinimumStopping<T extends Stoppable>(
     [],
   );
 
+  // Another render took over: the held frame is done for good. Without this, that render
+  // finishing inside the hold window showed the old "Stopping…" again (a re-flash).
+  if (held && active && active.id !== held.id) {
+    setHeld(null);
+    return { active, stopping };
+  }
   if (held && (!active || active.id === held.id)) return { active: held, stopping: true };
   return { active, stopping };
 }

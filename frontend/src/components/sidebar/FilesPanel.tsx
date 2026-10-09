@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Columns2, Download, FileCode2, Film, Globe, ImageIcon, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { FileNameText } from "@/components/ui/code-text";
 import { Callout, EmptyState, Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { apiUrl, errorMessage } from "@/lib/api";
@@ -324,9 +325,9 @@ export function FilesPanel(props: FilesPanelProps) {
                 const active = item.path === previewPath;
                 const tabIndex = item.path === mediaRoving.focusKey ? 0 : -1;
                 const Icon = item.type === "image" ? ImageIcon : Film;
-                const meta = [item.quality, item.script && `${item.script}.py`, formatRelativeTime(item.modified)]
-                  .filter(Boolean)
-                  .join(" · ");
+                // "720p30 · just now" stays together; the script name follows, or wraps to its own line.
+                const when = [item.quality, formatRelativeTime(item.modified)].filter(Boolean).join(" · ");
+                const script = item.script ? `${item.script}.py` : null;
                 return (
                   <li
                     key={item.path}
@@ -355,9 +356,20 @@ export function FilesPanel(props: FilesPanelProps) {
                     >
                       <Icon className={cn("size-3.5 shrink-0", active ? "text-accent" : "text-fg-subtle")} />
                       <span className="min-w-0">
-                        <span className={cn("block truncate text-xs text-fg", active && "font-medium")}>{item.scene}</span>
-                        {/* 12px fg-muted: >= 6.5:1 on every row background (fg-subtle 11px was 4.1:1 on the selected row). */}
-                        <span className="block truncate text-xs text-fg-muted">{meta}</span>
+                        {/* Wraps at camelCase / "_" steps instead of "CircleToSqu…" in a narrow sidebar. */}
+                        <span className={cn("code-wrap block text-xs text-fg", active && "font-medium")}>
+                          <FileNameText name={item.scene} />
+                        </span>
+                        {/* 12px fg-muted: >= 6.5:1 on every row background (fg-subtle 11px was 4.1:1 on the selected row).
+                            The script name wraps under the quality instead of being cut ("720p30 · qa_…"). */}
+                        <span className="flex flex-wrap gap-x-2 text-xs text-fg-muted">
+                          <span className="whitespace-nowrap">{when}</span>
+                          {script && (
+                            <span className="code-wrap min-w-0">
+                              <FileNameText name={script} />
+                            </span>
+                          )}
+                        </span>
                       </span>
                     </button>
                     <RowActions>

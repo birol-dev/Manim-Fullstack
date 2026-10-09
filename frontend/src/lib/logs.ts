@@ -70,3 +70,30 @@ export function findErrorLocation(texts: readonly string[], filenames: readonly 
   }
   return { line, message };
 }
+
+/**
+ * The server's queued notice ("Waiting for another render to finish… (position 2 in queue)")
+ * with the live *position*. The line is logged once; later "queued" events only move the overlay
+ * and status bar, so the console showed a stale position.
+ */
+export function withQueuePosition(text: string, position: number | null | undefined): string {
+  if (!position) return text;
+  const live = `(position ${position} in queue)`;
+  return /\(position \d+ in queue\)/.test(text) ? text.replace(/\(position \d+ in queue\)/, live) : `${text} ${live}`;
+}
+
+/** Console text for the Copy button: every line, without Rich's box drawing. */
+export function consoleCopyText(lines: ReadonlyArray<{ text: string }>, strip: (text: string) => string): string {
+  return strip(lines.map((line) => line.text).join("\n"));
+}
+
+/** Prefix of the server's queued notice (kept in sync with useRenderSession's QUEUED_MESSAGE_PREFIX). */
+const QUEUED_NOTICE = "Waiting for another render";
+
+/** Id of the latest queued notice in the console, or null. */
+export function latestQueuedLineId(lines: ReadonlyArray<{ id: number; level: string; text: string }>): number | null {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index].level === "info" && lines[index].text.startsWith(QUEUED_NOTICE)) return lines[index].id;
+  }
+  return null;
+}

@@ -138,16 +138,50 @@ export function stepIndexForAnimation(steps: readonly AnimationStep[], animation
   return order.length ? order[order.length - 1] : steps.length - 1;
 }
 
+const OPENERS: Record<string, string> = { "(": ")", "[": "]", "{": "}" };
+/** Bracket groups up to this many characters inside stay on one line ("shift(RIGHT * 0.5)"). */
+export const SHORT_GROUP_CHARS = 16;
+
+/**
+ * End index of the short, comma-free bracket group opening at *start*, or -1.
+ * "(RIGHT * 0.5)" qualifies; "(c, undefined_name)" and long groups don't (they
+ * wrap after their commas and spaces as before).
+ */
+function shortGroupEnd(text: string, start: number): number {
+  const stack = [OPENERS[text[start]]];
+  for (let index = start + 1; index < text.length && index - start - 1 <= SHORT_GROUP_CHARS; index += 1) {
+    const char = text[index];
+    if (OPENERS[char]) stack.push(OPENERS[char]);
+    else if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) return index - start - 1 <= SHORT_GROUP_CHARS ? index : -1;
+    } else if (char === "," && stack.length === 1) return -1;
+    else if (char === '"' || char === "'") return -1;
+  }
+  return -1;
+}
+
 /**
  * Split code into segments that may wrap *after* each one, so text breaks
  * between tokens (after "(", ",", ".", "=", spaces) instead of inside an
- * identifier. Joining the segments gives back the input.
+ * identifier, and never inside a short call's arguments: "dot.animate.shift(RIGHT * 0.5)"
+ * wraps as "dot.animate." / "shift(RIGHT * 0.5)", not "shift(" / "RIGHT * 0.5)".
+ * Joining the segments gives back the input.
  */
 export function codeBreakSegments(text: string): string[] {
   const segments: string[] = [];
   let current = "";
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
+    if (OPENERS[char]) {
+      const end = shortGroupEnd(text, index);
+      if (end > index) {
+        current += text.slice(index, end + 1);
+        index = end;
+        if (index + 1 >= text.length) break;
+        continue;
+      }
+    }
     current += char;
     const next = text[index + 1];
     if (next === undefined) break;
@@ -165,6 +199,19 @@ export function codeBreakSegments(text: string): string[] {
   }
   if (current) segments.push(current);
   return segments;
+}
+
+/**
+ * Width a timeline card's meta row needs ("wait · 0.2s", the ×2 badge, "L12"), in px,
+ * so it never truncates to "wai…". 11 px Inter is ~6.2 px a character.
+ */
+export function stepMetaWidth(step: AnimationStep, durationText: string): number {
+  const META_CHAR_PX = 6.2;
+  const kind = `${step.type === "play" ? "play" : "wait"} · ${step.estimated && typeof step.duration === "number" ? "≈ " : ""}${durationText}`;
+  const repeat = repeatLabel(step);
+  const badge = repeat ? 4 + 10 + 2 + repeat.length * META_CHAR_PX + 6 : 0; // padding, icon, gap, text, gap
+  const line = `L${step.line}`.length * META_CHAR_PX;
+  return Math.ceil(kind.length * META_CHAR_PX + 8 + badge + line + 22); // + row gap + card padding/border
 }
 
 /** Width in characters of the longest unbreakable run in *text*. */
