@@ -93,7 +93,7 @@ class Deck(Slide):
 '''
     anims = get_scene_animations(code)
     assert anims["Aliased"] == [
-        {"type": "play", "label": "Write(t)", "line": 8, "duration": 2.0, "estimated": True, "repeat": 2, "loop_line": 7}
+        {"type": "play", "label": "Write(t)", "line": 8, "duration": 2.0, "estimated": True, "repeat": 2, "loop_line": 7, "loops": [[7, 8, 2]]}
     ]
     assert anims["Nested"] == [{"type": "play", "label": "FadeIn(Text('x'))", "line": 13, "duration": 3.0}]
     assert anims["Deck"][0]["repeat"] is None and anims["Deck"][0]["loop_line"] == 17
