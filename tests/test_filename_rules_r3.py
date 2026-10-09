@@ -185,3 +185,52 @@ def test_rename_fixes_an_nfd_legacy_name(client, root):
     assert res.status_code == 200, res.text
     assert res.json()["new_name"] == NFC_CAFE
     assert _names(root) == [NFC_CAFE]
+
+
+# --------------------------------------------------------------------------- #
+# Round 4: every Unicode space counts as a space; U+2028/U+2029 are invisible
+# --------------------------------------------------------------------------- #
+
+
+def test_whitespace_list_is_exactly_python_isspace():
+    import sys
+    import unicodedata
+
+    from workspace_paths import WHITESPACE_CHARS
+
+    expected = {
+        chr(code)
+        for code in range(sys.maxunicode + 1)
+        if chr(code).isspace() or unicodedata.category(chr(code)) == "Zs"
+    }
+    assert set(WHITESPACE_CHARS) == expected
+    assert FIXTURE["whitespace_chars"] == [f"U+{ord(ch):04X}" for ch in WHITESPACE_CHARS]
+
+
+@pytest.mark.parametrize("code", FIXTURE["whitespace_chars"])
+def test_every_unicode_space_is_a_space(code):
+    import unicodedata
+
+    ch = chr(int(code[2:], 16))
+    assert _validate(f"{ch}x.py") is not None
+    assert _validate(f"x{ch}.py") is not None
+    assert _validate(f"x.py{ch}") is not None
+    assert to_script_name(f"x{ch}").endswith(unicodedata.normalize("NFC", ch))  # left alone, so it is refused
+
+
+def test_fixture_covers_the_round4_cases():
+    names = {v["name"] for v in FIXTURE["direct_names"]} | {v["script_name"] for v in FIXTURE["vectors"]}
+    for needed in ["\u00a0x.py", "x\u00a0.py", "x\u3000.py", "CON\u2028.x.py", "a\u2029b.py"]:
+        assert needed in names
+        assert _validate(needed) is not None
+    assert _validate("CON\u2028.x.py") == "Filename cannot contain control or invisible characters."
+    # A space inside the stem is still fine.
+    assert _validate("a\u00a0b.py") is None and _validate("a\u3000b.py") is None
+
+
+def test_existing_files_with_a_space_lookalike_stay_reachable(root):
+    ws = root
+    (ws / "old\u00a0.py").write_text("x = 1\n")
+    assert main.get_file_content("old\u00a0.py")["code"] == "x = 1\n"
+    status = main.rename_file(main.RenameRequest(old_name="old\u00a0.py", new_name="old.py"))
+    assert (ws / "old.py").exists() and status

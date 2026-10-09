@@ -314,6 +314,33 @@ def _repeat_of(loops: tuple) -> Optional[int]:
     return total
 
 
+def _is_irrefutable(case: "ast.match_case") -> bool:
+    """``case _:`` or ``case name:`` without a guard always matches."""
+    pattern = case.pattern
+    while isinstance(pattern, ast.MatchAs) and pattern.pattern is not None:
+        pattern = pattern.pattern
+    if isinstance(pattern, ast.MatchOr):
+        return case.guard is None and any(
+            isinstance(alt, ast.MatchAs) and alt.pattern is None for alt in pattern.patterns
+        )
+    return case.guard is None and isinstance(pattern, ast.MatchAs) and pattern.pattern is None
+
+
+def _runs_per_pass(branch_steps: List[dict], depth: int) -> int:
+    """Animation runs of one branch per pass of the enclosing loop: each counted step
+    times the loops inside the branch (unknown counts as one). Steps already marked as
+    an alternative of a nested branch don't count."""
+    total = 0
+    for step in branch_steps:
+        if step.get("alternative"):
+            continue
+        runs = 1
+        for _, _, count in step.get("loops", ())[depth:]:
+            runs *= count if isinstance(count, int) and count >= 0 else 1
+        total += runs
+    return total
+
+
 def _collect_steps(construct: ast.AST) -> List[dict]:
     """play/wait calls in source order, tagged with the loops that repeat them.
 
@@ -326,12 +353,50 @@ def _collect_steps(construct: ast.AST) -> List[dict]:
     count. ``while`` loops, loops over variables and comprehension clauses with ``if``
     are marked as repeating an unknown number of times (``repeat: None``).
     Comprehensions (``[self.play(x) for x in (a, b)]``) count as loops.
+
+    Branches inside a loop (``if``/``elif``/``else``, ``match``/``case``, an ``if``
+    without ``else``) run one at a time, so only one branch is counted per pass:
+    the one with the most animation runs (the first on a tie). Its steps get
+    ``estimated: True``; the steps of the other branches get ``estimated: True``
+    and ``alternative: True`` and are left out of the totals and the execution
+    order. Outside loops every branch is listed and counted as before.
     """
     texts = _collect_texts(construct)
     steps: List[dict] = []
 
+    def visit_branches(child: ast.AST, loops: tuple) -> None:
+        if isinstance(child, ast.If):
+            visit_expr(child.test, loops)
+            # An elif is an If inside orelse, so it is handled (max'ed) recursively.
+            branches = [child.body, child.orelse]
+        else:  # ast.Match
+            visit_expr(child.subject, loops)
+            branches = []
+            for case in child.cases:
+                if case.guard is not None:
+                    visit_expr(case.guard, loops)
+                branches.append(case.body)
+            if not any(_is_irrefutable(case) for case in child.cases):
+                branches.append([])  # no case matched
+        collected = []
+        for body in branches:
+            start = len(steps)
+            for stmt in body:
+                visit_stmt(stmt, loops)
+            collected.append(steps[start:])
+        weights = [_runs_per_pass(branch, len(loops)) for branch in collected]
+        chosen = weights.index(max(weights))
+        for index, branch in enumerate(collected):
+            for step in branch:
+                step["estimated"] = True
+                if index != chosen:
+                    step["alternative"] = True
+
     def visit(node: ast.AST, loops: tuple) -> None:
         for child in ast.iter_child_nodes(node):
+            if loops and isinstance(child, (ast.If, ast.Match)):
+                visit_branches(child, loops)
+                continue
             if isinstance(child, (ast.For, ast.AsyncFor, ast.While)):
                 # The loop header (iterable / condition) runs once; only the body repeats.
                 header = child.iter if isinstance(child, (ast.For, ast.AsyncFor)) else child.test

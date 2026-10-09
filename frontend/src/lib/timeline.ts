@@ -5,6 +5,11 @@ export function stepSeconds(step: AnimationStep): number {
   return typeof step.duration === "number" && step.duration > 0 ? step.duration : 1;
 }
 
+/** True when the step is a branch the parser doesn't count (another branch of that if/match runs instead). */
+export function isAlternative(step: AnimationStep): boolean {
+  return step.alternative === true;
+}
+
 /** True when the step sits inside a loop. */
 export function isLooped(step: AnimationStep): boolean {
   return typeof step.loop_line === "number";
@@ -48,6 +53,10 @@ export function timelineTotal(steps: readonly AnimationStep[]): TimelineTotal {
   let estimated = false;
   let unknownLoops = false;
   for (const step of steps) {
+    if (isAlternative(step)) {
+      estimated = true;
+      continue;
+    }
     // An unknown outer loop still multiplies by its known inner loops (per outer pass); the "+" says it's open-ended.
     const count = knownRuns(step);
     seconds += stepSeconds(step) * count;
@@ -62,7 +71,7 @@ export function timelineTotal(steps: readonly AnimationStep[]): TimelineTotal {
 
 /** Animation count Manim will report, counting loop repetitions (unknown loops count once). */
 export function expandedStepCount(steps: readonly AnimationStep[]): number {
-  return steps.reduce((sum, step) => sum + stepRuns(step), 0);
+  return steps.reduce((sum, step) => sum + (isAlternative(step) ? 0 : stepRuns(step)), 0);
 }
 
 /**
@@ -70,6 +79,8 @@ export function expandedStepCount(steps: readonly AnimationStep[]): number {
  * a body [a, b] repeated 3 times gives a, b, a, b, a, b (not a, a, a, b, b, b).
  * Uses each step's `loops` chain from the parser; a loop with an unknown count runs
  * once here, and a step from an older server without `loops` repeats in place.
+ * Steps of a branch the parser doesn't count (`alternative`) are skipped: per pass
+ * only the counted branch of an if/elif/else or match/case runs here.
  * Stops after *limit* entries so huge literal loops stay cheap.
  */
 export function executionOrder(steps: readonly AnimationStep[], limit = Number.POSITIVE_INFINITY): number[] {
@@ -110,7 +121,7 @@ export function executionOrder(steps: readonly AnimationStep[], limit = Number.P
   };
 
   expand(
-    steps.map((_, index) => index),
+    steps.map((_, index) => index).filter((index) => !isAlternative(steps[index])),
     0,
     out,
     limit,

@@ -52,24 +52,29 @@ All endpoints return JSON. Errors use FastAPI's `{"detail": "..."}` shape.
 | `GET /api/health` (`/api/status`) | — | `{status, service, version}` |
 | `GET /api/diagnostics` | — | Profile, hardware, `platform`, `python_version`, `max_code_bytes` (the server's `MANIM_MAX_CODE_BYTES`; the frontend uses it for its size check and falls back to 2 MB), and `dependencies` (`manim`, `ffmpeg`, `latex`, `dvisvgm` paths or `"Not Found"`, plus `latex_available`). |
 | `GET /api/files` | — | `{scripts, assets, media}`. On first setup only, seeds `example.py` into an empty workspace and writes `workspace/.composer-initialized`; deleting `example.py` later is permanent. Also removes download-only outputs nobody fetched within `MANIM_TEMP_DOWNLOAD_TTL` seconds. Media items: `name, size, type ("video"\|"image"), url, path, script, scene, quality, modified`, newest first. |
-| `GET /api/file-content` | `?filename=` | `{filename, code, version, scenes, animations, syntax_error?}`. Works for existing files whose names the [file name rules](#file-names) now forbid. |
+| `GET /api/file-content` | `?filename=` | `{filename, code, version, scenes, animations, syntax_error?}`. Works for existing files whose names the [file name rules](#file-names) now forbid. 403 when the server may not read the file (e.g. mode 0000). |
 | `POST /api/parse-code` | `{code}` | `{scenes, animations, syntax_error?}` without touching disk. `syntax_error` is `{message, line, column}` when the code doesn't parse. |
 | `POST /api/save` | `{filename, code, base_version?, create_only?}` | `{success, filename, message, version, scenes, animations, syntax_error?}`. `filename` is the name actually stored (see [Saving and versions](#saving-and-versions)). |
 | `POST /api/rename` | `{old_name, new_name}` | `{success, old_name, new_name, message}`; handles case-only renames. `new_name` is normalized like a save name and follows the [file name rules](#file-names). 400 when `new_name` is invalid or another file already has exactly that name, 404 when `old_name` doesn't exist, 409 when another file differs from `new_name` only by letter case or Unicode form. `old_name` may be a legacy name the rules now forbid. |
-| `DELETE /api/scripts` | `?filename=` | Deletes a script |
-| `POST /api/upload-asset` | multipart `file`, `?overwrite=` | `{filename, url, replaced}`; images, SVG, audio, and fonts up to 50 MB. If the name exists the server answers 409 ("Confirm to replace it…"); send the upload again with `overwrite=true` to replace it. `replaced` is true only when a file was actually overwritten. |
+| `DELETE /api/scripts` | `?filename=` | `{success, filename}`. Deletes a script; 404 when it doesn't exist, **409** while a save or rename of that name is in progress, or when a rename created that name after the delete request arrived (try again). For a [link entry](#links-in-the-workspace) that points outside the workspace or nowhere, removes the link itself (`link_removed: true`), never its target. |
+| `POST /api/upload-asset` | multipart `file`, `?overwrite=` | `{filename, url, replaced}`; images, SVG, audio, and fonts up to 50 MB. If the name exists the server answers 409 ("Confirm to replace it…"); send the upload again with `overwrite=true` to replace it. Without `overwrite` the file is created exclusively, so of several uploads racing for one new name exactly one wins and the rest get 409. `replaced` is true only when a file was actually overwritten. 403 when the existing file is read-only. The upload is written to `assets/<name>.uploading-<hex>` first and moved into place when complete; those partial files are never listed or served, and the startup cleanup removes leftovers (`MANIM_UPLOAD_PARTIAL_AGE`). |
 | `DELETE /api/assets` | `?filename=` | Deletes an upload |
 | `DELETE /api/media` | `?path=` (relative to `workspace/media`) | Deletes a render and its cached chunks |
 | `GET /api/download-temp` | `?path=` | Serves a download-only render once, then deletes it |
 | `POST /api/install-manim` \| `-latex` \| `-ffmpeg` | — | Starts `pip install manim` or a `winget` install in the background. Refused (403) in containers or with `MANIM_ALLOW_INSTALLS=0`. |
 
-`animations` maps scene names to steps: `{type: "play" | "wait", label, line, duration?, estimated?, repeat?, loop_line?,
-loops?}`. `duration` is a number of seconds when it is a literal, otherwise the expression's source text; `estimated`
-marks Manim's default used as a guess. Steps inside `for`/`while` loops or comprehensions (`[self.play(x) for x in
+`animations` maps scene names to steps: `{type: "play" | "wait", label, line, duration?, estimated?, alternative?, repeat?,
+loop_line?, loops?}`. `duration` is a number of seconds when it is a literal, otherwise the expression's source text; `estimated`
+marks Manim's default used as a guess, or a step in a branch inside a loop (below). Steps inside `for`/`while` loops or comprehensions (`[self.play(x) for x in
 (a, b)]`) also carry `repeat` (total runs: the product of the enclosing loop counts, so a `range(0)` anywhere gives 0;
 `null` when a count is only known at runtime, e.g. a `while` loop, a loop over a variable, or a comprehension with
 `if`), `loop_line` (the outermost loop), and `loops`: `[[line, column, count|null], ...]` from the outermost loop
 inward. The UI uses `loops` to replay a loop body in execution order (`a, b, a, b, …`) when mapping progress to steps.
+Inside a loop, only one branch of an `if`/`elif`/`else` or `match`/`case` runs per pass, so only one is counted: the
+branch with the most animation runs (nested branches and inner loops included; the first on a tie; an `if` without
+`else` or a `match` without `case _` also has an empty branch). All steps in those branches get `estimated: true`, and
+the steps of the branches not counted also get `alternative: true`: they stay in the list (source order) but the UI
+leaves them out of the total, the animation count and the execution order. Branches outside loops are all counted.
 Scenes defined inside `if`/`try`/`with`/loop/`match`-`case` blocks at module level are found too.
 
 ### Saving and versions
@@ -81,6 +86,9 @@ Scenes defined inside `if`/`try`/`with`/loop/`match`-`case` blocks at module lev
 - `create_only: true` (New script dialogs) never overwrites: **409** `"<name> already exists."`.
 - **409** also when another file differs only by letter case or Unicode normalization
   (`'Intro.py' already exists. File names that differ only by case are not allowed.`).
+- **403** `"This file is read-only; change its permissions to save it."` when the existing file is not writable by the
+  server (no owner-write bit, or `os.access(W_OK)` fails); the file is left untouched and its permissions are never
+  changed. Unreadable files (mode 0000) get the same 403 instead of a 500.
 - **400** for an invalid name (`Invalid script filename: <reason>`), or `Rename this file to save or render it:
   <reason>` when the file already exists under a name the rules now forbid. **413** when the UTF-8 code exceeds
   `MANIM_MAX_CODE_BYTES`.
@@ -152,8 +160,14 @@ The server executes arbitrary Python, so it has to make sure only the user's own
   `MANIM_ALLOW_LAN=1`, or origins in `MANIM_ALLOWED_ORIGINS`. A page on any other localhost port is refused.
   Requests without an `Origin` (curl, scripts) pass this check.
   CORS headers are granted by the same policy.
-- **Host:** the `Host` header must be a loopback name, an IP address, or the host of an allowed origin. This blocks
-  DNS rebinding, where a hostile domain resolves to `127.0.0.1` and then makes same-origin requests without `Origin`.
+- **Host:** the `Host` header must be a loopback name, an IP address (with `MANIM_ALLOW_LAN=1`), or the host of an
+  allowed origin. This blocks DNS rebinding, where a hostile domain resolves to `127.0.0.1` and then makes same-origin
+  requests without `Origin`. It is parsed strictly (`origins.parse_host_header`): `name[:port]` or `[IPv6][:port]`,
+  where the port is 1–65535 in ASCII digits and nothing follows it. `127.0.0.1:8100.evil.com`, `localhost:abc`,
+  `localhost:0`, `127.0.0.1:`, `[::1]:`, an empty Host, spaces, user info, paths and non-ASCII names get 403. A
+  request with no Host header at all (HTTP/1.0) passes. Names are case-insensitive (`LOCALHOST:8100` is fine).
+- **Request bodies:** besides the size caps, a body that stalls for `MANIM_BODY_TIMEOUT` seconds (default 30) or takes
+  longer than `MANIM_BODY_DEADLINE` in total (default 120, 5 × for uploads) is answered with 408.
 - File names go through `safe_basename` / `safe_join`; media deletion is limited to `videos/` and `images/` and
   refuses `..` segments.
 - Events never carry `abs_path`. In Manim's log lines the workspace prefix is removed (paths are shown relative to
@@ -188,9 +202,29 @@ Names being created (save, rename target, upload, render `filename`) must:
   so `café.py` NFC vs NFD collide, `straße.py` and `STRASSE.py` don't);
 - not start with `_temp_run_` (any case) for scripts; that prefix is reserved for scratch renders.
 
+"Space" means any Unicode space (Python's `str.isspace()`: NBSP, U+2000–U+200A, U+202F, U+205F, U+3000, …),
+so `\u00a0x.py` and `x\u3000.py` are refused for new names; spaces inside the name are fine. U+2028/U+2029 (line and
+paragraph separators) count as invisible characters.
+
 Existing files with older, looser names (`-old.py`, `x .py`, `COM¹.py`, an NFD name) can still be listed, opened, renamed, and
 deleted. Saving or rendering one answers `Rename this file to save or render it: <reason>` (400 / a rejected render),
 and the UI shows that message. Invalid names get a 400 with the reason and never echo a host path.
+
+### Links in the workspace
+
+`GET /api/files` lists a script that is a symbolic link pointing outside the workspace with `outside: true`, and a
+link whose target doesn't exist with `broken: true` (size 0). Such entries can't be opened, saved, renamed or
+rendered (a render answers an `error` event and a `rejected` result, without reading the file); the UI shows them
+greyed out with only a Delete button, and `DELETE /api/scripts` removes the link itself, never the file it points to.
+Links to files inside the workspace behave like the file.
+
+### Startup cleanup
+
+Once the server has bound its port, it removes scratch renders and leftover save temp files older than
+`MANIM_SWEEP_MIN_AGE`, and interrupted uploads older than `MANIM_UPLOAD_PARTIAL_AGE`. "Bound" is checked with
+psutil; if psutil can't list sockets (missing, or AccessDenied as on macOS without root), the server scans its own
+file descriptors on Linux; if neither works it logs a warning and sweeps 5 s after startup, unless the server has
+already shut down (a second instance on a busy port exits before that and never sweeps).
 
 ## Frontend (`frontend/src/`)
 

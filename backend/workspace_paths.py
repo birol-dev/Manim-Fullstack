@@ -55,6 +55,21 @@ TEMP_SCRIPT_PREFIX = "_temp_run_"
 
 SCRIPT_SUFFIX = ".py"
 
+# Characters that count as a space for the "starts / ends with a space" and
+# "space before .py" rules: exactly what str.isspace() accepts, which covers all
+# of Unicode category Zs (NBSP U+00A0, U+1680, U+2000-U+200A, U+202F, U+205F,
+# U+3000) plus ASCII whitespace, U+0085 and U+2028/U+2029. Spelled out so the
+# frontend (WHITESPACE in frontend/src/lib/format.ts) can use the same list.
+WHITESPACE_CHARS = (
+    "\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680"
+    + "".join(chr(code) for code in range(0x2000, 0x200B))
+    + "\u2028\u2029\u202f\u205f\u3000"
+)
+
+
+def _ends_with_space_or_dot(name: str) -> bool:
+    return bool(name) and (name[-1] == "." or name[-1] in WHITESPACE_CHARS)
+
 # COM1 / LPT1 written with any Unicode digit (COM¹, LPT², ＣＯＭ１, COM١) after NFKC.
 _DEVICE_WITH_DIGIT = re.compile(r"(?:COM|LPT)\d")
 
@@ -68,7 +83,7 @@ def _is_reserved_device_name(name: str, *, nfkc: bool = False) -> bool:
     """
     if nfkc:
         name = unicodedata.normalize("NFKC", name)
-    base = name.split(".", 1)[0].rstrip(" ").upper()
+    base = name.split(".", 1)[0].rstrip(WHITESPACE_CHARS if nfkc else " ").upper()
     return base in WINDOWS_RESERVED_NAMES or bool(_DEVICE_WITH_DIGIT.fullmatch(base))
 
 
@@ -92,7 +107,7 @@ def to_script_name(raw: str) -> str:
     Mirrors toScriptName() in the frontend (which additionally trims what was typed).
     """
     name = unicodedata.normalize("NFC", str(raw))
-    if name.endswith((".", " ")):
+    if _ends_with_space_or_dot(name):
         return name
     if name.lower().endswith(SCRIPT_SUFFIX):
         return name[: -len(SCRIPT_SUFFIX)] + SCRIPT_SUFFIX
@@ -100,9 +115,10 @@ def to_script_name(raw: str) -> str:
 
 
 def _has_control_or_format_char(name: str) -> bool:
-    """Control characters (newline, tab, DEL, ...) and invisible format characters
-    such as U+202E (right-to-left override, used to disguise extensions)."""
-    return any(unicodedata.category(ch) in ("Cc", "Cf") for ch in name)
+    """Control characters (newline, tab, DEL, ...), invisible format characters
+    such as U+202E (right-to-left override, used to disguise extensions), and the
+    line / paragraph separators U+2028 and U+2029."""
+    return any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in name)
 
 
 def safe_basename(
@@ -164,12 +180,16 @@ def validate_new_filename(
     upload, render). Adds rules that only matter for new names, so files that
     already exist with a legacy name can still be opened, renamed, or deleted."""
     name = safe_basename(filename, required_suffix=required_suffix)
+    if name[0] in WHITESPACE_CHARS or name[-1] in WHITESPACE_CHARS:
+        # Any Unicode space (NBSP, U+3000, ...), not only " ". Only for new names,
+        # so an existing file named like that can still be opened and renamed.
+        raise UnsafePathError("Filename cannot start or end with a dot or space.")
     if name != unicodedata.normalize("NFC", name):
         raise UnsafePathError("Filename must use the standard Unicode form (NFC).")
     if _is_reserved_device_name(name, nfkc=True):
         raise UnsafePathError(f"Filename '{name}' is a reserved device name.")
     stem = name[: -len(required_suffix)] if required_suffix else os.path.splitext(name)[0]
-    if stem != stem.rstrip(". "):
+    if stem != stem.rstrip("." + WHITESPACE_CHARS):
         raise UnsafePathError("Filename cannot end with a dot or space before the extension.")
     if name.startswith("-"):
         raise UnsafePathError("Filename cannot start with a dash.")
