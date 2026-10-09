@@ -229,7 +229,7 @@ def test_save_file_endpoint_success_and_errors(client, tmp_path):
         res_unsafe = client.post("/api/save", json={"filename": "../evil.py", "code": "pass"})
         assert res_unsafe.status_code == 400
 
-        with patch("builtins.open", side_effect=OSError("Disk write error")):
+        with patch.object(main, "atomic_write", side_effect=OSError("Disk write error")):
             res_err = client.post("/api/save", json=payload)
             assert res_err.status_code == 500
 
@@ -257,7 +257,7 @@ def test_rename_file_endpoint_success_and_errors(client, tmp_path):
         res_unsafe = client.post("/api/rename", json={"old_name": "../old.py", "new_name": "new.py"})
         assert res_unsafe.status_code == 400
 
-        with patch("os.rename", side_effect=OSError("Rename error")):
+        with patch.object(main, "rename_no_replace", side_effect=OSError("Rename error")):
             res_500 = client.post("/api/rename", json={"old_name": "NEW.py", "new_name": "brand_new.py"})
             assert res_500.status_code == 500
 
@@ -487,7 +487,7 @@ def test_websocket_render_lifecycle_success(client, tmp_path):
         with patch.object(main, "MEDIA_DIR", str(media_dir)):
             (tmp_path / "script.py").write_text("class MyScene(Scene): pass", encoding="utf-8")
 
-            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
                 await log_callback({
                     "type": "file_ready",
                     "abs_path": str(media_dir / "MyScene.mp4"),
@@ -531,7 +531,7 @@ def test_websocket_render_with_download_only_and_temp_code(client, tmp_path):
 
     with patch.object(main, "WORKSPACE_DIR", str(tmp_path)):
         with patch.object(main, "MEDIA_DIR", str(media_dir)):
-            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
                 stem = script_name[:-3]
                 await log_callback({"type": "log", "message": f"Traceback in /w/{script_name}:3; output in videos/{stem}/"})
                 await log_callback({
@@ -610,7 +610,7 @@ def test_websocket_render_cancellation(client, tmp_path):
         with patch.object(main, "MEDIA_DIR", str(media_dir)):
             (tmp_path / "cancel_scene.py").write_text("class CancelScene(Scene): pass", encoding="utf-8")
 
-            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+            async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
                 await log_callback({"type": "status", "status": "cancelled", "message": "Cancelled"})
                 return {"success": False, "status": "cancelled"}
 
@@ -791,7 +791,7 @@ def test_sweep_temp_renders(ws_dirs):
     temp_video_dir = media / "videos" / "_temp_run_deadbeef"
     _write(temp_video_dir / "480p15" / "S.mp4")
     keep = _write(media / "videos" / "demo" / "480p15" / "S.mp4")
-    main._sweep_temp_renders()
+    main._sweep_temp_renders(min_age=0)
     assert not scratch.exists()
     assert not temp_video_dir.exists()
     assert keep.exists()
@@ -828,9 +828,10 @@ def _drain_until_result(ws, limit=20):
 
 
 def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
+    """Names Manim's config can't hold ("{", "}") still use the move-after-render path."""
     root, media, _ = ws_dirs
 
-    async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def mock_execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         stem = script_name[:-3]
         assert stem.startswith(main.TEMP_PREFIX)
         out = _write(media / "videos" / stem / "480p15" / f"{scene_name}.mp4", "frames")
@@ -849,7 +850,7 @@ def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
                 ws.send_json({
                     "type": "start",
                     "id": 7,
-                    "filename": "demo.py",
+                    "filename": "de{mo}.py",
                     "scene": "Intro",
                     "quality": "l",
                     "code": "class Intro(Scene):\n    pass\n",
@@ -858,13 +859,13 @@ def test_unsaved_render_is_relocated_and_ids_echoed(client, ws_dirs):
 
     assert all(m.get("render_id") == 7 for m in received)
     log = next(m for m in received if m["type"] == "log")
-    assert main.TEMP_PREFIX not in log["message"] and "demo.py" in log["message"]
+    assert main.TEMP_PREFIX not in log["message"] and "de{mo}.py" in log["message"]
     ready = [m for m in received if m["type"] == "file_ready"]
     assert len(ready) == 1
-    assert ready[0]["url"] == "/media/videos/demo/480p15/Intro.mp4"
+    assert ready[0]["url"] == "/media/videos/de%7Bmo%7D/480p15/Intro.mp4"
     assert ready[0]["kind"] == "video"
     assert "abs_path" not in ready[0]
-    assert (media / "videos" / "demo" / "480p15" / "Intro.mp4").read_text() == "frames"
+    assert (media / "videos" / "de{mo}" / "480p15" / "Intro.mp4").read_text() == "frames"
     assert [p.name for p in root.iterdir() if p.name.startswith(main.TEMP_PREFIX)] == []
     assert not any(p.name.startswith(main.TEMP_PREFIX) for p in (media / "videos").iterdir())
 
@@ -874,7 +875,7 @@ def _blocking_executor():
     import asyncio
     stop = asyncio.Event()
 
-    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         await stop.wait()
         return {"success": False, "status": "cancelled"}
 
@@ -903,14 +904,14 @@ def test_scratch_file_failure_still_sends_one_result(client, ws_dirs):
     real_open = open
 
     def failing_open(path, mode="r", *args, **kwargs):
-        if main.TEMP_PREFIX in str(path) and "w" in mode:
+        if main.TEMP_PREFIX in str(path) and ("w" in mode or "x" in mode):
             raise OSError("disk full")
         return real_open(path, mode, *args, **kwargs)
 
     with patch.object(main, "get_binary_paths", return_value=MOCK_BINARIES):
         with patch("builtins.open", side_effect=failing_open):
             with client.websocket_connect("/api/render") as ws:
-                ws.send_json({"type": "start", "id": "f", "filename": "x.py", "scene": "S", "code": "pass"})
+                ws.send_json({"type": "start", "id": "f", "filename": "x.py", "scene": "S", "code": "class S(Scene):\n    pass\n"})
                 received = _drain_until_result(ws)
 
     assert [m["type"] for m in received] == ["error", "result"]
@@ -935,7 +936,7 @@ def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
     _write(root / "s.py", "class S(Scene):\n    pass\n")
     real_relocate = main._relocate_temp_output
 
-    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback):
+    async def execute(manim_path, script_name, scene_name, quality, use_opengl, log_callback, **_kwargs):
         out = _write(media / "videos" / script_name[:-3] / "480p15" / "S.mp4")
         await log_callback({"type": "file_ready", "abs_path": str(out), "rel_path": "media/x", "filename": "S.mp4"})
         return {"success": True, "status": "success"}
@@ -955,7 +956,7 @@ def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
             ws.send_json({
                 "type": "start",
                 "id": "z",
-                "filename": "s.py",
+                "filename": "s{1}.py",
                 "scene": "S",
                 "code": "class S(Scene):\n    pass\n",
             })
@@ -964,7 +965,7 @@ def test_cancel_after_manim_finished_keeps_the_output(client, ws_dirs):
             received = _drain_until_result(ws)
 
     assert received[-1]["status"] == "success", received
-    assert any(m["type"] == "file_ready" and m["url"] == "/media/videos/s/480p15/S.mp4" for m in received)
+    assert any(m["type"] == "file_ready" and m["url"] == "/media/videos/s%7B1%7D/480p15/S.mp4" for m in received)
 
 
 def test_deeply_nested_code_parses_without_crashing(client):
