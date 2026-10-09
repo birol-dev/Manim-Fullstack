@@ -11,6 +11,8 @@ interface StatusBarProps {
   backend: BackendStatus;
   connection: ConnectionState;
   active: ActiveRender | null;
+  /** The open file; a render of another file says which file it is. */
+  activeFile?: string | null;
   /** Overall progress of the active render (0–100), if known. */
   renderPercent: number | null;
   lastOutcome: RenderOutcome | null;
@@ -50,16 +52,20 @@ function ConnectionIndicator({ backend, connection }: Pick<StatusBarProps, "back
 
 function RenderIndicator({
   active,
+  activeFile,
   renderPercent,
   lastOutcome,
   onShowConsole,
-}: Pick<StatusBarProps, "active" | "renderPercent" | "lastOutcome" | "onShowConsole">) {
+}: Pick<StatusBarProps, "active" | "activeFile" | "renderPercent" | "lastOutcome" | "onShowConsole">) {
   if (active) {
-    const percent = active.progress ? renderPercent : null;
+    const percent = active.progress && !active.queued ? renderPercent : null;
+    const elsewhere = activeFile !== undefined && active.request.filename !== activeFile;
     return (
       <Item className="text-fg">
         <Loader2 className="animate-spin text-accent" />
         {active.queued ? "Queued" : "Rendering"} {active.request.scene}
+        {elsewhere && <span className="text-fg-muted">({active.request.filename})</span>}
+        {active.queued && active.queuePosition ? <span className="text-fg-muted">· position {active.queuePosition}</span> : null}
         {percent !== null && <span className="tabular-nums text-fg-muted">{percent}%</span>}
       </Item>
     );
@@ -92,6 +98,7 @@ export function StatusBar(props: StatusBarProps) {
         <ConnectionIndicator backend={props.backend} connection={props.connection} />
         <RenderIndicator
           active={props.active}
+          activeFile={props.activeFile}
           renderPercent={props.renderPercent}
           lastOutcome={props.lastOutcome}
           onShowConsole={props.onShowConsole}

@@ -28,7 +28,7 @@ import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOut
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { SaveConflictError, useWorkspace } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
-import { MOD_KEY, QUALITY_FOR_PROFILE } from "@/lib/constants";
+import { MOD_KEY, QUALITY_FOR_PROFILE, getMaxCodeBytes, renderBlockReason, utf8ByteLength } from "@/lib/constants";
 import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
 import { workPanelSizes } from "@/lib/layout";
 import { findErrorLocation } from "@/lib/logs";
@@ -37,12 +37,13 @@ import { overallPercent, risingPercent } from "@/lib/progress";
 import { expandedStepCount, stepIndexForAnimation } from "@/lib/timeline";
 import { STORAGE_KEYS } from "@/lib/storage";
 import { newSceneCode, type SceneTemplate } from "@/lib/templates";
-import type { AssetFile, MediaFile, ParseResult, PreviewItem, Quality, StorageMode, WorkspaceFiles } from "@/lib/types";
+import type { AnimationStep, AssetFile, MediaFile, ParseResult, PreviewItem, Quality, StorageMode, WorkspaceFiles } from "@/lib/types";
 
 // KaTeX is only needed by this panel.
 const LatexPanel = lazy(() => import("@/components/sidebar/LatexPanel").then((module) => ({ default: module.LatexPanel })));
 
 const AUTO_RENDER_DELAY_MS = 1500;
+const NO_STEPS: AnimationStep[] = [];
 const SETUP_SHOWN_KEY = "mc.setupShown";
 
 function uniqueName(base: string, existing: string[]): string {
@@ -122,6 +123,7 @@ export default function App() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [renderSteps, setRenderSteps] = useState<{ id: string; steps: AnimationStep[] } | null>(null);
 
   const sidebarPanelRef = usePanelRef();
   const bottomPanelRef = usePanelRef();
@@ -266,6 +268,7 @@ export default function App() {
               title: `${name} no longer exists`,
               description: "It was renamed or deleted in another tab or program. Your text is still in the editor.",
               confirmLabel: "Recreate file",
+              conflict: true,
               onConfirm: () => saveRef.current({ force: true }),
             }
           : {
@@ -274,6 +277,7 @@ export default function App() {
                 "It was saved somewhere else after you opened it. Reload it to get that version (your unsaved edits here are dropped), or overwrite it with yours.",
               confirmLabel: "Overwrite",
               tone: "danger",
+              conflict: true,
               secondaryLabel: "Reload theirs",
               onConfirm: () => saveRef.current({ force: true }),
               onSecondary: () => workspace.reloadFromDisk(),
@@ -294,6 +298,13 @@ export default function App() {
       let parsed: ParseResult | null;
       let code: string | undefined;
       const buffer = workspace.code;
+      // Checked on the buffer itself: a file opened from disk carries its parse result,
+      // so nothing else measures it before Manim would render the copy on disk.
+      const tooLarge = renderBlockReason({ codeBytes: utf8ByteLength(buffer), maxCodeBytes: getMaxCodeBytes(), syntaxError: null });
+      if (tooLarge) {
+        toast.error("Can't render this script", { id: "render-blocked", description: tooLarge });
+        return;
+      }
       try {
         if (storageMode === "disk" && autoSave) {
           // Check first: a render refused for a syntax error must not write the broken buffer to disk.
@@ -333,7 +344,10 @@ export default function App() {
       clearLogs();
       setLogsFile(filename);
       lastRenderedCode.current = buffer;
-      session.start({ filename, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
+      const id = session.start({ filename, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
+      // The steps of the code being rendered, for its progress and timeline highlight,
+      // whatever file is open (or edited) while it runs.
+      if (id) setRenderSteps({ id, steps: parsed?.animations[scene] ?? workspace.animations[scene] ?? [] });
     } finally {
       startingRef.current = false;
     }
@@ -368,6 +382,18 @@ export default function App() {
   useEffect(() => {
     saveRef.current = save;
   });
+
+  // A save-conflict dialog is the one place to decide; toasts about the same outside
+  // change would sit above it and offer competing actions. Hold them while it's open.
+  const conflictOpen = confirm?.conflict === true;
+  const { holdExternalNotices } = workspace;
+  useEffect(() => {
+    holdExternalNotices(conflictOpen);
+    if (conflictOpen) {
+      toast.dismiss("external-change");
+      toast.dismiss("save-error");
+    }
+  }, [conflictOpen, holdExternalNotices]);
 
   // A syntax-error toast is stale once the error is fixed.
   const hasSyntaxError = workspace.syntaxError !== null;
@@ -463,7 +489,9 @@ export default function App() {
   };
 
   const insertCode = (code: string, mode: InsertMode) => {
-    if (!editorRef.current?.insertText(code, mode)) toast.error("Open a script to insert code into.");
+    const result = editorRef.current?.insertText(code, mode);
+    if (!result) toast.error("Open a script to insert code into.");
+    else if (typeof result === "object") toast.error("Couldn't insert the code here", { id: "insert-refused", description: result.refused });
   };
 
   const jumpToLine = (line: number) => revealLine(line);
@@ -499,6 +527,8 @@ export default function App() {
           : "The file is removed from the workspace folder. Its renders are kept. This can't be undone.",
       confirmLabel: "Delete",
       tone: "danger",
+      // The deleted row is gone: continue from the Scripts list's current row.
+      fallbackFocus: () => document.querySelector<HTMLElement>('ul[aria-label="Scripts"] [data-roving-item][tabindex="0"]')?.focus(),
       onConfirm: async () => {
         await workspace.deleteFile(name);
         // Nothing about the deleted file should linger in the preview or status bar.
@@ -519,6 +549,7 @@ export default function App() {
       description: `${item.scene}${item.quality ? ` (${item.quality})` : ""} will be removed from workspace/media.`,
       confirmLabel: "Delete",
       tone: "danger",
+      fallbackFocus: () => document.querySelector<HTMLElement>('ul[aria-label="Renders"] [data-roving-item][tabindex="0"]')?.focus(),
       onConfirm: async () => {
         await workspace.deleteMedia(item);
         if (previewRef.current?.mediaPath === item.path) showPreview(null);
@@ -547,7 +578,15 @@ export default function App() {
   };
 
   const activeSteps = workspace.animations[workspace.selectedScene] ?? [];
-  const renderingSteps = session.active ? (workspace.animations[session.active.request.scene] ?? []) : [];
+  // Render state belongs to its job (file + scene + render id): another file, even one
+  // with a scene of the same name, shows none of its overlay, progress, or highlight.
+  const renderingSteps = session.active && renderSteps?.id === session.active.id ? renderSteps.steps : NO_STEPS;
+  // From the displayed render, so a quick cancel's "Stopping…" stays up (useMinimumStopping).
+  const shown = shownRender.active;
+  const ownRender = shown && shown.request.filename === workspace.activeFile ? shown : null;
+  const otherRender = shown && !ownRender ? shown : null;
+  const sceneSteps = workspace.animations[workspace.selectedScene];
+  const sameSteps = useMemo(() => JSON.stringify(sceneSteps ?? []) === JSON.stringify(renderingSteps), [sceneSteps, renderingSteps]);
   const [percentFloor, setPercentFloor] = useState<{ id: string; value: number } | null>(null);
   const rawPercent = session.active ? overallPercent(session.active, expandedStepCount(renderingSteps)) : null;
   let renderPercent: number | null = null;
@@ -560,10 +599,16 @@ export default function App() {
     if (previous !== next) setPercentFloor({ id: session.active.id, value: next });
   }
   const activeStep =
-    session.active && session.active.request.scene === workspace.selectedScene
-      ? stepIndexForAnimation(activeSteps, session.active.progress?.animation)
+    ownRender && ownRender.request.scene === workspace.selectedScene && sameSteps
+      ? stepIndexForAnimation(renderingSteps, ownRender.progress?.animation)
       : null;
   const canRender = online && Boolean(workspace.activeFile) && !session.active;
+  // Why Render (and Ctrl+Enter) won't run this buffer, shown on the button.
+  const maxCodeBytes = diagnostics.data?.max_code_bytes ?? getMaxCodeBytes();
+  const codeBytes = useMemo(() => utf8ByteLength(workspace.code), [workspace.code]);
+  const renderBlocked = workspace.activeFile ? renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: workspace.syntaxError }) : null;
+  // Outcome of the open file's last render (the status bar and preview don't show another file's).
+  const ownOutcome = lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null;
 
   // The tab title shows unsaved changes and render progress, even in a background tab.
   const activeFileName = workspace.activeFile;
@@ -709,6 +754,7 @@ export default function App() {
                         active={shownRender.active}
                         latexAvailable={latexAvailable}
                         canRender={canRender}
+                        renderBlocked={renderBlocked}
                         fontSize={editorFontSize}
                         syntaxError={workspace.syntaxError}
                         stopping={shownRender.stopping}
@@ -728,13 +774,16 @@ export default function App() {
                     <Panel id="preview" defaultSize="42%" minSize="260px">
                       <PreviewPane
                         preview={preview}
-                        active={shownRender.active}
+                        active={ownRender}
+                        otherRender={otherRender}
+                        onOpenFile={openFile}
                         stopping={shownRender.stopping}
                         stepCount={expandedStepCount(renderingSteps)}
-                        lastOutcome={lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null}
+                        lastOutcome={ownOutcome}
                         loop={loopPreview}
                         selectedScene={workspace.selectedScene}
                         canRender={canRender}
+                        renderBlocked={renderBlocked}
                         canCompare={videos.length > 1}
                         onRender={() => void startRender()}
                         onCancel={session.cancel}
@@ -781,7 +830,7 @@ export default function App() {
                     scene={workspace.selectedScene}
                     steps={activeSteps}
                     activeStep={activeStep}
-                    renderPercent={renderPercent}
+                    renderPercent={ownRender ? renderPercent : null}
                     onJumpToLine={jumpToLine}
                   />
                 </Panel>
@@ -794,8 +843,9 @@ export default function App() {
           backend={diagnostics.status}
           connection={session.connection}
           active={session.active}
+          activeFile={workspace.activeFile}
           renderPercent={renderPercent}
-          lastOutcome={lastOutcome}
+          lastOutcome={ownOutcome}
           storageMode={storageMode}
           cursor={workspace.activeFile ? cursor : null}
           diagnostics={diagnostics.data}

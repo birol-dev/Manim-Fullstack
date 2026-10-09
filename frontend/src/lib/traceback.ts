@@ -32,8 +32,28 @@ const RICH_START = /^╭─+.*Traceback \(most recent call last\)/;
 const RICH_END = /^╰─+/;
 /** A Rich frame header: "│ /path/to/file.py:123 in render  │" (may wrap onto the next row). */
 const RICH_FRAME = /^│\s+(?:[A-Za-z]:)?[^\s│]*\.py(?::\d*)?(?:\s|$)/;
-/** Rich code row: "│ ❱ 7 │ code │" or "│   6 │ code │". */
-const RICH_CODE = /^│\s+(❱)?\s*(\d+)\s+│/;
+/**
+ * Rich code row: "│ ❱ 7 │   code │", "│   6 │   code │", or, for a line with no
+ * indentation (Rich only draws the "│" guide for indented code), "│   2 class A(Scene): │".
+ * Layout: the box edge, a space, the ❱ marker or a space, then the right-aligned
+ * line number. A wrapped frame header tail ("│ 2 in render") has no marker column,
+ * so it doesn't match.
+ */
+const RICH_CODE = /^│ (❱|\s)\s*(\d+)(?: │| |$)/;
+
+export interface RichCodeRow {
+  line: number;
+  failing: boolean;
+  /** Length of the gutter (box edge, marker, number, and the indent guide when present). */
+  gutter: number;
+}
+
+/** Parse a Rich traceback code row, or null when *text* isn't one. */
+export function parseRichCodeRow(text: string): RichCodeRow | null {
+  const match = RICH_CODE.exec(text);
+  if (!match) return null;
+  return { line: Number(match[2]), failing: match[1] === "❱", gutter: match[0].length };
+}
 /**
  * Installed packages: never the user's script, even when a file shares its name
  * (manim/scene/scene.py). Covers raw paths and the server's redacted forms
@@ -83,22 +103,73 @@ function frameRows<T extends ConsoleLine>(frames: Frame<T>[]): ConsoleRow<T>[] {
     }
     flushHidden();
     frame.entries.forEach((entry, position) => {
-      const code = RICH_CODE.exec(entry.text);
-      const own = code ? Number(code[2]) : null;
+      const code = position === 0 ? null : parseRichCodeRow(entry.text);
       const blank = !entry.text.replace(/[│\s]/g, "");
       rows.push({
         kind: "line",
         entry,
         // Code rows jump to their own line; the header and plain-Python code rows to the frame's line.
-        line: blank ? null : (own ?? frame.line),
+        line: blank ? null : (code?.line ?? frame.line),
         userFrame: true,
-        failing: Boolean(code?.[1]),
+        failing: Boolean(code?.failing),
         header: position === 0,
       });
     });
   }
   flushHidden();
   return rows;
+}
+
+interface Segment<T extends ConsoleLine> {
+  rows: ConsoleRow<T>[];
+  /** Index just past the segment. */
+  next: number;
+  /**
+   * More output can't change these rows: a plain line, or a traceback whose end
+   * was seen. A traceback still streaming in is regrouped when lines arrive.
+   */
+  closed: boolean;
+}
+
+/** Group the segment starting at *index*: one plain line, or a whole traceback. */
+function groupSegment<T extends ConsoleLine>(logs: readonly T[], index: number, linkFiles: readonly string[]): Segment<T> {
+  const entry = logs[index];
+  const rich = RICH_START.test(entry.text);
+  const plain = PY_START.test(entry.text.trimStart());
+  if (!rich && !plain) return { rows: [lineRow(entry, linkFiles)], next: index + 1, closed: true };
+
+  const rows: ConsoleRow<T>[] = [lineRow(entry, linkFiles)];
+  let cursor = index + 1;
+  const frames: Frame<T>[] = [];
+  const preamble: T[] = [];
+  let closed = false;
+  while (cursor < logs.length) {
+    const current = logs[cursor];
+    const text = current.text;
+    if (rich ? RICH_END.test(text) : !/^\s/.test(text)) {
+      closed = true; // plain: the unindented error line ends it
+      break;
+    }
+    const isHeader = rich ? RICH_FRAME.test(text) && !RICH_CODE.test(text) : PY_FRAME.test(text);
+    if (isHeader) {
+      const line = findLineReference(rich ? joinWrappedHeader(text, logs[cursor + 1]?.text) : text, linkFiles);
+      const user = line !== null && !LIBRARY_PATH.test(text);
+      frames.push({ entries: [current], user, line: user ? line : null });
+    } else if (frames.length > 0) {
+      frames[frames.length - 1].entries.push(current);
+    } else {
+      preamble.push(current);
+    }
+    cursor += 1;
+  }
+  preamble.forEach((item) => rows.push(lineRow(item, linkFiles)));
+  // Only collapse when there is a user frame to show; otherwise every frame is a hint.
+  if (frames.some((frame) => frame.user)) {
+    rows.push(...frameRows(frames));
+  } else {
+    for (const frame of frames) frame.entries.forEach((item) => rows.push(lineRow(item, linkFiles)));
+  }
+  return { rows, next: cursor, closed };
 }
 
 /**
@@ -110,44 +181,10 @@ function frameRows<T extends ConsoleLine>(frames: Frame<T>[]): ConsoleRow<T>[] {
  */
 export function groupConsoleRows<T extends ConsoleLine>(logs: readonly T[], linkFiles: readonly string[]): ConsoleRow<T>[] {
   const rows: ConsoleRow<T>[] = [];
-  let index = 0;
-  while (index < logs.length) {
-    const entry = logs[index];
-    const rich = RICH_START.test(entry.text);
-    const plain = PY_START.test(entry.text.trimStart());
-    if (!rich && !plain) {
-      rows.push(lineRow(entry, linkFiles));
-      index += 1;
-      continue;
-    }
-
-    rows.push(lineRow(entry, linkFiles));
-    index += 1;
-    const frames: Frame<T>[] = [];
-    const preamble: T[] = [];
-    while (index < logs.length) {
-      const current = logs[index];
-      const text = current.text;
-      if (rich ? RICH_END.test(text) : !/^\s/.test(text)) break; // plain: the unindented error line ends it
-      const isHeader = rich ? RICH_FRAME.test(text) && !RICH_CODE.test(text) : PY_FRAME.test(text);
-      if (isHeader) {
-        const line = findLineReference(rich ? joinWrappedHeader(text, logs[index + 1]?.text) : text, linkFiles);
-        const user = line !== null && !LIBRARY_PATH.test(text);
-        frames.push({ entries: [current], user, line: user ? line : null });
-      } else if (frames.length > 0) {
-        frames[frames.length - 1].entries.push(current);
-      } else {
-        preamble.push(current);
-      }
-      index += 1;
-    }
-    preamble.forEach((item) => rows.push(lineRow(item, linkFiles)));
-    // Only collapse when there is a user frame to show; otherwise every frame is a hint.
-    if (frames.some((frame) => frame.user)) {
-      rows.push(...frameRows(frames));
-    } else {
-      for (const frame of frames) frame.entries.forEach((item) => rows.push(lineRow(item, linkFiles)));
-    }
+  for (let index = 0; index < logs.length; ) {
+    const segment = groupSegment(logs, index, linkFiles);
+    rows.push(...segment.rows);
+    index = segment.next;
   }
   return rows;
 }
@@ -185,4 +222,67 @@ export function stripBoxDrawing(text: string): string {
   while (out.length && !out[0].trim()) out.shift();
   while (out.length && !out[out.length - 1].trim()) out.pop();
   return out.join("\n");
+}
+
+interface CachedSegment<T extends ConsoleLine> {
+  firstId: number;
+  lastId: number;
+  length: number;
+  rows: ConsoleRow<T>[];
+}
+
+/**
+ * groupConsoleRows for a log that grows at the end (and drops lines at the
+ * front once it is full). Closed segments are reused, so a new line costs one
+ * segment's work instead of a pass over the whole log (up to 2,000 lines).
+ * Gives the same rows as groupConsoleRows.
+ */
+export function createConsoleGrouper<T extends ConsoleLine>() {
+  let segments: CachedSegment<T>[] = [];
+  let linkKey = "";
+  let scanned = 0;
+
+  return {
+    group(logs: readonly T[], linkFiles: readonly string[]): ConsoleRow<T>[] {
+      scanned = 0;
+      const key = linkFiles.join("\n");
+      if (key !== linkKey) {
+        segments = [];
+        linkKey = key;
+      }
+      // Lines dropped at the front: forget segments that lost lines (a cut traceback regroups as plain lines).
+      const firstId = logs[0]?.id;
+      let drop = 0;
+      while (drop < segments.length && (firstId === undefined || segments[drop].firstId < firstId)) drop += 1;
+      if (drop > 0) segments = segments.slice(drop);
+
+      // Keep cached segments while they line up with the log.
+      const kept: CachedSegment<T>[] = [];
+      let index = 0;
+      for (const segment of segments) {
+        const last = index + segment.length - 1;
+        if (logs[index]?.id !== segment.firstId || logs[last]?.id !== segment.lastId) break;
+        kept.push(segment);
+        index += segment.length;
+      }
+      segments = kept;
+
+      while (index < logs.length) {
+        const segment = groupSegment(logs, index, linkFiles);
+        scanned += segment.next - index;
+        if (segment.closed) {
+          segments.push({ firstId: logs[index].id, lastId: logs[segment.next - 1].id, length: segment.next - index, rows: segment.rows });
+          index = segment.next;
+          continue;
+        }
+        // A traceback still streaming: show it, but group it again next time.
+        return segments.flatMap((cached) => cached.rows).concat(segment.rows);
+      }
+      return segments.flatMap((cached) => cached.rows);
+    },
+    /** Lines grouped by the last call (for tests). */
+    get scanned() {
+      return scanned;
+    },
+  };
 }

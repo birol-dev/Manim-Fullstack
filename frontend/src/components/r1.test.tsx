@@ -136,3 +136,41 @@ describe("Tooltip", () => {
     expect(wrapper).toHaveAttribute("data-state");
   });
 });
+
+describe("ConsoleView expanded groups (R3 #9)", () => {
+  it("forgets which groups were open once the console is cleared or a new render starts", async () => {
+    const { rerender } = render(<ConsoleView logs={TRACEBACK} linkFiles={["scene.py"]} onJumpToLine={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /1 library frame hidden/ }));
+    expect(screen.getByText(/site-packages/)).toBeInTheDocument();
+    // Cleared, then the same traceback again from a new render (new ids).
+    rerender(<ConsoleView logs={[]} linkFiles={["scene.py"]} onJumpToLine={() => {}} />);
+    const again = TRACEBACK.map((entry) => ({ ...entry, id: entry.id + 100 }));
+    rerender(<ConsoleView logs={again} linkFiles={["scene.py"]} onJumpToLine={() => {}} />);
+    expect(screen.getByRole("button", { name: /1 library frame hidden/ })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/site-packages/)).toBeNull();
+  });
+
+  it("keeps an open group open while older lines are trimmed off the front", async () => {
+    const lead: LogEntry[] = [{ id: 1, level: "info", text: "INFO start" }];
+    const logs = [...lead, ...TRACEBACK.map((entry) => ({ ...entry, id: entry.id + 1 }))];
+    const { rerender } = render(<ConsoleView logs={logs} linkFiles={["scene.py"]} onJumpToLine={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: /1 library frame hidden/ }));
+    rerender(<ConsoleView logs={logs.slice(1)} linkFiles={["scene.py"]} onJumpToLine={() => {}} />);
+    expect(screen.getByRole("button", { name: /Hide 1 library frame/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("jumps from an unguided row to its own line", async () => {
+    const onJump = vi.fn();
+    const logs: LogEntry[] = [
+      "╭─────────── Traceback (most recent call last) ───────────╮",
+      "│ scene.py:6 in construct                                  │",
+      "│   4 class ErrScene(Scene):                               │",
+      "│ ❱ 6 │   │   self.play(Foo())                             │",
+      "╰──────────────────────────────────────────────────────────╯",
+      "NameError: name 'Foo' is not defined",
+    ].map((text, index) => ({ id: index + 1, level: "stderr", text }));
+    render(<ConsoleView logs={logs} linkFiles={["scene.py"]} onJumpToLine={onJump} />);
+    await userEvent.click(screen.getByText(/class ErrScene/));
+    expect(onJump).toHaveBeenLastCalledWith(4);
+  });
+});

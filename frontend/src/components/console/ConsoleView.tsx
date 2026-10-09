@@ -4,7 +4,7 @@ import { ChevronRight, CornerDownRight, Terminal } from "lucide-react";
 import { EmptyState } from "@/components/ui/panel";
 import type { LogEntry, LogLevel } from "@/hooks/useLogs";
 import { findLineReferenceMatch, type LineReference } from "@/lib/logs";
-import { groupConsoleRows, stripBoxDrawing } from "@/lib/traceback";
+import { createConsoleGrouper, parseRichCodeRow, stripBoxDrawing } from "@/lib/traceback";
 import { cn } from "@/lib/utils";
 
 const LEVEL_STYLES: Record<LogLevel, string> = {
@@ -17,8 +17,7 @@ const LEVEL_STYLES: Record<LogLevel, string> = {
   stderr: "text-fg-subtle",
 };
 
-/** Rich code row inside a traceback box: "│ ❱ 7 │ code │" (gutter = everything up to the second "│"). */
-const RICH_CODE_GUTTER = /^│\s+(?:❱\s*)?\d+\s+│/;
+const EMPTY_SET: ReadonlySet<number> = new Set();
 
 interface ConsoleViewProps {
   logs: LogEntry[];
@@ -46,8 +45,9 @@ function linkRange(text: string, line: number, userFrame: boolean, linkFiles: st
   const reference = findLineReferenceMatch(text, linkFiles);
   if (reference) return reference;
   if (!userFrame) return null;
-  const gutter = RICH_CODE_GUTTER.exec(text);
-  const start = gutter ? gutter[0].length : text.length - text.trimStart().length;
+  // Rich code rows: skip the box edge, marker, line number and indent guide.
+  const code = parseRichCodeRow(text);
+  const start = code ? code.gutter : text.length - text.trimStart().length;
   const body = text.slice(start).replace(/\s*│?\s*$/, "");
   if (!body.trim()) return null;
   const lead = body.length - body.trimStart().length;
@@ -127,8 +127,20 @@ function LogLine({
 export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set());
-  const rows = useMemo(() => groupConsoleRows(logs, linkFiles), [logs, linkFiles]);
+  // Which "N library frames hidden" groups are open, by the id of their first entry.
+  // Log ids only ever grow, so groups from before the oldest line still shown (a
+  // cleared console, a new render, or lines trimmed off the front) no longer count
+  // and are dropped; groups still on screen stay open while the log trims.
+  const firstId = logs[0]?.id ?? Number.POSITIVE_INFINITY;
+  const [expandedIds, setExpanded] = useState<ReadonlySet<number>>(EMPTY_SET);
+  const expanded = useMemo(() => {
+    let stale = false;
+    for (const id of expandedIds) if (id < firstId) stale = true;
+    return stale ? new Set([...expandedIds].filter((id) => id >= firstId)) : expandedIds;
+  }, [expandedIds, firstId]);
+  // Regroups only what changed since the last render (new lines, a traceback still streaming in).
+  const [grouper] = useState(() => createConsoleGrouper<LogEntry>());
+  const rows = useMemo(() => grouper.group(logs, linkFiles), [grouper, logs, linkFiles]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -193,8 +205,8 @@ export function ConsoleView({ logs, linkFiles, onJumpToLine }: ConsoleViewProps)
               type="button"
               aria-expanded={open}
               onClick={() =>
-                setExpanded((previous) => {
-                  const next = new Set(previous);
+                setExpanded(() => {
+                  const next = new Set(expanded);
                   if (open) next.delete(row.id);
                   else next.add(row.id);
                   return next;
