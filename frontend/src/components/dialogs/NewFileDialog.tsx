@@ -22,20 +22,22 @@ interface NewFileDialogProps {
 
 function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProps & { request: NewFileRequest }) {
   const [value, setValue] = useState(request.suggestedName);
-  const [error, setError] = useState<string | null>(null);
+  // Checked while typing, with the same rule and wording as renaming in the Files panel.
+  const [serverError, setServerError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const name = toScriptName(value);
+  const problem = value.trim() ? validateScriptName(name, existing) : null;
+  const error = serverError ?? problem;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    const problem = validateScriptName(name, existing);
-    if (problem) return setError(problem);
+    if (problem || !value.trim() || busy) return;
     setBusy(true);
     try {
       await onCreate(name);
       onClose();
     } catch (err) {
-      setError(errorMessage(err, "Couldn't create the file."));
+      setServerError(errorMessage(err, "Couldn't create the file."));
       setBusy(false);
     }
   };
@@ -52,7 +54,7 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
         label="File name"
         htmlFor="new-file-name"
         error={error}
-        hint={value.trim() && !value.trim().toLowerCase().endsWith(".py") ? `Will be saved as ${name}` : undefined}
+        hint={value.trim() && name !== value.trim() ? `Will be saved as ${name}` : undefined}
       >
         <Input
           id="new-file-name"
@@ -63,7 +65,7 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
           onFocus={(event) => event.currentTarget.setSelectionRange(0, value.replace(/\.py$/i, "").length)}
           onChange={(event) => {
             setValue(dedupeExtension(event.target.value));
-            setError(null);
+            setServerError(null);
           }}
           className="h-8 font-mono"
           spellCheck={false}
@@ -74,7 +76,7 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button type="submit" variant="primary" disabled={busy || !value.trim()}>
+        <Button type="submit" variant="primary" disabled={busy || !value.trim() || problem !== null}>
           Create
         </Button>
       </DialogFooter>
