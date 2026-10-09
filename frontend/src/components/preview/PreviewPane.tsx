@@ -1,4 +1,4 @@
-import { Columns2, Download, ExternalLink, Film, History, Play, Square, XCircle } from "lucide-react";
+import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Play, Square, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
@@ -14,6 +14,8 @@ interface PreviewPaneProps {
   /** Number of play()/wait() calls in the scene being rendered, when known. */
   stepCount: number;
   lastOutcome: RenderOutcome | null;
+  /** Cancel was requested and the render hasn't stopped yet. */
+  stopping?: boolean;
   loop: boolean;
   selectedScene: string;
   canRender: boolean;
@@ -51,11 +53,25 @@ function ProgressRing({ percent }: { percent: number | null }) {
   );
 }
 
-function RenderingOverlay({ active, stepCount, onCancel }: { active: ActiveRender; stepCount: number; onCancel: () => void }) {
+function RenderingOverlay({
+  active,
+  stepCount,
+  stopping,
+  onCancel,
+}: {
+  active: ActiveRender;
+  stepCount: number;
+  stopping: boolean;
+  onCancel: () => void;
+}) {
   const progress = active.progress;
-  const percent = overallPercent(active, stepCount);
+  const percent = active.queued ? null : overallPercent(active, stepCount);
   let detail = "Starting Manim…";
-  if (progress?.animation !== undefined) {
+  if (stopping) {
+    detail = active.queued ? "Leaving the queue…" : "Stopping Manim…";
+  } else if (active.queued) {
+    detail = "Waiting for another render to finish…";
+  } else if (progress?.animation !== undefined) {
     const total = Math.max(stepCount, progress.animation + 1);
     detail = `Animation ${progress.animation + 1} of ${total}${progress.label ? ` · ${progress.label}` : ""}`;
   } else if (progress) {
@@ -70,14 +86,17 @@ function RenderingOverlay({ active, stepCount, onCancel }: { active: ActiveRende
     >
       <ProgressRing percent={percent} />
       <div className="flex max-w-full flex-col gap-1">
-        <p className="text-[13px] font-medium text-fg">Rendering {active.request.scene}</p>
+        <p className="text-[13px] font-medium text-fg">
+          {active.queued ? "Queued" : "Rendering"} {active.request.scene}
+          {active.queued && active.queuePosition ? ` · position ${active.queuePosition}` : ""}
+        </p>
         <p className="max-w-80 truncate font-mono text-2xs text-fg-muted" title={detail}>
           {detail}
         </p>
       </div>
-      <Button size="sm" onClick={onCancel}>
+      <Button size="sm" onClick={onCancel} disabled={stopping}>
         <Square className="fill-current" />
-        Cancel
+        {stopping ? "Stopping…" : "Cancel"}
       </Button>
     </div>
   );
@@ -86,13 +105,22 @@ function RenderingOverlay({ active, stepCount, onCancel }: { active: ActiveRende
 export function PreviewPane(props: PreviewPaneProps) {
   const { preview, active, lastOutcome } = props;
   const failed = lastOutcome && !lastOutcome.success && lastOutcome.status !== "cancelled";
+  // Manim writes a PNG instead of a video when a scene never calls play() or wait().
+  const still = preview?.kind === "image";
 
   return (
     <section aria-label="Preview" className="flex h-full min-h-0 flex-col bg-surface">
       <PaneHeader className="h-10 justify-between pr-1.5">
         <div className="flex min-w-0 items-center gap-2">
           <PaneTitle>Preview</PaneTitle>
-          {preview && <span className="truncate text-xs text-fg-muted">{preview.title}</span>}
+          {/* While rendering, the header names the job, not the clip behind the overlay. */}
+          {active ? (
+            <span className="truncate text-xs text-fg-muted">
+              {active.request.scene} · {active.queued ? "queued" : "rendering"}
+            </span>
+          ) : (
+            preview && <span className="truncate text-xs text-fg-muted">{preview.title}</span>
+          )}
         </div>
         <div className="flex items-center gap-0.5">
           {props.canCompare && (
@@ -102,7 +130,7 @@ export function PreviewPane(props: PreviewPaneProps) {
               </Button>
             </Tooltip>
           )}
-          {preview && (
+          {preview && !active && (
             <>
               <Tooltip content="Open in new tab">
                 <Button asChild variant="ghost" size="icon-sm">
@@ -169,19 +197,32 @@ export function PreviewPane(props: PreviewPaneProps) {
           />
         )}
 
-        {preview?.stale && !active && (
-          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2 bg-warning-soft px-3 py-1.5 text-xs font-medium text-warning">
-            <History className="size-3.5 shrink-0" />
-            Out of date — the last render didn't replace this preview
+        {preview && !active && (preview.stale || still) && (
+          <div className="absolute inset-x-0 top-0 z-10 flex flex-col">
+            {preview.stale && (
+              <div className="flex items-center justify-center gap-2 bg-warning-soft px-3 py-1.5 text-xs font-medium text-warning">
+                <History className="size-3.5 shrink-0" />
+                Out of date — the last render didn't replace this preview
+              </div>
+            )}
+            {still && (
+              <div role="note" className="flex items-center justify-center gap-2 bg-accent-soft px-3 py-1.5 text-center text-xs font-medium text-accent">
+                <ImageIcon className="size-3.5 shrink-0" />
+                {preview.title} has no animations, so Manim saved a still image
+              </div>
+            )}
           </div>
         )}
 
-        {active && <RenderingOverlay active={active} stepCount={props.stepCount} onCancel={props.onCancel} />}
+        {active && (
+          <RenderingOverlay active={active} stepCount={props.stepCount} stopping={Boolean(props.stopping)} onCancel={props.onCancel} />
+        )}
       </div>
 
       {preview && (
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line px-3">
           {preview.stale && <span className="shrink-0 text-2xs font-medium text-warning">Out of date</span>}
+          {still && <span className="shrink-0 text-2xs font-medium text-accent">Still image</span>}
           <span className="truncate font-mono text-2xs text-fg-subtle select-text" title={preview.location}>
             {preview.location}
           </span>
