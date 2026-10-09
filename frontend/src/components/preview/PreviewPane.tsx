@@ -110,6 +110,12 @@ function RenderingOverlay({
   );
 }
 
+/** "a/b/c.mp4" -> { dir: "a/b/", file: "c.mp4" } (the footer keeps the file name visible). */
+function splitPath(location: string): { dir: string; file: string } {
+  const cut = Math.max(location.lastIndexOf("/"), location.lastIndexOf("\\")) + 1;
+  return { dir: location.slice(0, cut), file: location.slice(cut) };
+}
+
 /** Save *url* under *name* without leaving the page (the hidden link never takes focus). */
 function downloadFile(url: string, name?: string) {
   const link = document.createElement("a");
@@ -144,13 +150,6 @@ export function PreviewPane(props: PreviewPaneProps) {
           )}
         </div>
         <div className="flex items-center gap-0.5">
-          {props.canCompare && (
-            <Tooltip content="Compare renders side by side">
-              <Button variant="ghost" size="icon-sm" aria-label="Compare renders" onClick={props.onCompare}>
-                <Columns2 />
-              </Button>
-            </Tooltip>
-          )}
           {preview && !active && (
             <>
               {/* Real buttons (not links): Safari and macOS skip links on Tab by default. */}
@@ -170,6 +169,14 @@ export function PreviewPane(props: PreviewPaneProps) {
                 </Button>
               </Tooltip>
             </>
+          )}
+          {/* Last in the header (and the Tab order): Esc from the editor lands on Open in new tab. */}
+          {props.canCompare && (
+            <Tooltip content="Compare renders side by side">
+              <Button variant="ghost" size="icon-sm" aria-label="Compare renders" onClick={props.onCompare}>
+                <Columns2 />
+              </Button>
+            </Tooltip>
           )}
         </div>
       </PaneHeader>
@@ -197,6 +204,9 @@ export function PreviewPane(props: PreviewPaneProps) {
           )
         ) : failed ? (
           <EmptyState
+            // The failure toast sits top-right over this pane (TOAST_TOP_PX, at most ~90 px tall); start the
+            // card below it so the toast never covers it, even on a 640 px tall window.
+            className="pt-24"
             icon={<XCircle className="text-danger" />}
             title="Render failed"
             description="Manim stopped with an error. The console shows the traceback; click a line reference to jump to it."
@@ -299,8 +309,10 @@ export function PreviewPane(props: PreviewPaneProps) {
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line px-3">
           {preview.stale && <span className="shrink-0 text-2xs font-medium text-warning">Out of date</span>}
           {still && <span className="shrink-0 text-2xs font-medium text-accent">Still image</span>}
-          <span className="truncate font-mono text-xs text-fg-muted select-text" title={preview.location}>
-            {preview.location}
+          {/* The folder truncates first, the file name stays whole; the full path is in the tooltip. */}
+          <span className="flex min-w-0 font-mono text-xs text-fg-muted select-text" title={preview.location}>
+            <span className="min-w-0 truncate">{splitPath(preview.location).dir}</span>
+            <span className="shrink-0">{splitPath(preview.location).file}</span>
           </span>
         </div>
       )}

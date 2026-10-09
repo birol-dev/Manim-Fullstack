@@ -6,10 +6,10 @@ import type { SyntaxErrorInfo } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/panel";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender } from "@/hooks/useRenderSession";
-import { MOD_KEY, QUALITY_OPTIONS } from "@/lib/constants";
+import { MOD_KEY, QUALITY_OPTIONS, qualityShortLabel, qualityTooltip } from "@/lib/constants";
 import type { Quality } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { CodeEditorHandle } from "./types";
@@ -23,6 +23,8 @@ const USES_LATEX =
 // Select value for "Other scene…" (can't clash with a Python class name).
 const OTHER_SCENE = " other";
 const CLASS_NAME = /^[A-Za-z_]\w*$/;
+/** Button bottom to toolbar edge (6 px) + the reason row (29 px) + a gap. */
+const BLOCKED_TOOLTIP_OFFSET_PX = 41;
 
 /**
  * Scene picker. The list holds the scenes the parser can prove; "Other scene…"
@@ -54,7 +56,8 @@ function ScenePicker({
   const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
   const valid = CLASS_NAME.test(draft.trim());
   // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
-  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[400px]:max-w-32 @max-[400px]:min-w-[5.5rem]";
+  // Narrowed only below 340 px: from 430 px down the toolbar wraps, so the controls have a full row.
+  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[340px]:max-w-32 @max-[340px]:min-w-[5.5rem]";
 
   if (typing) {
     const commit = (keyboard = false) => {
@@ -85,7 +88,7 @@ function ScenePicker({
           }
         }}
         onBlur={() => commit()}
-        className={cn("h-7 w-36 font-mono text-xs @max-[400px]:w-28", className)}
+        className={cn("h-7 w-36 font-mono text-xs @max-[340px]:w-28", className)}
       />
     );
   }
@@ -155,7 +158,6 @@ interface EditorPaneProps {
 export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function EditorPane(props, ref) {
   const { activeFile, code, isDirty, scenes, selectedScene, quality, active } = props;
   const rendering = active !== null;
-  const qualityOption = QUALITY_OPTIONS.find((option) => option.value === quality);
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
   // Only when Render would otherwise be available (not while rendering, offline, ...).
   const blocked = props.canRender && props.renderBlocked ? props.renderBlocked : null;
@@ -163,9 +165,10 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
 
   return (
     <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
-      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2">
+      {/* Below ~430 px (the 50/50 split at 1024) the file name gets its own row instead of being truncated. */}
+      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2 @max-[430px]:h-auto @max-[430px]:flex-wrap @max-[430px]:gap-y-0 @max-[430px]:pb-1.5">
         {activeFile && (
-          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg">
+          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg @max-[430px]:h-8 @max-[430px]:basis-full">
             <FileCode2 className="size-3.5 shrink-0 text-accent @max-[460px]:hidden" />
             <span className="min-w-[2.5rem] truncate font-medium" title={activeFile}>
               {activeFile}
@@ -174,7 +177,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <Tooltip
             content={!activeFile ? "Save (no script open)" : isDirty ? "Save" : "Saved (no unsaved changes)"}
             shortcut={`${MOD_KEY}+S`}
@@ -213,22 +216,27 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
             onSceneChange={props.onSceneChange}
           />
 
+          {/* One quality for every file (a global preference since the first UI; see Settings > Rendering). */}
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
             {/* wrap: merged onto the trigger, the tooltip's data-state ("closed") would replace the Select's ("open"). */}
-            <Tooltip content={qualityOption ? `Quality: ${qualityOption.label} · ${qualityOption.detail}` : "Render quality"} wrap>
-              <SelectTrigger aria-label="Quality" className="w-[78px] shrink-0">
-                <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
+            <Tooltip content={qualityTooltip(quality)} wrap>
+              {/* 78 px with tighter padding: "1080p" / "2160p" fit (they showed as "108…"). */}
+              <SelectTrigger aria-label="Quality" aria-description="Applies to all files" className="w-[78px] shrink-0 gap-1 px-2">
+                <SelectValue>{qualityShortLabel(quality)}</SelectValue>
               </SelectTrigger>
             </Tooltip>
             <SelectContent align="end">
-              {QUALITY_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span className="flex w-36 items-center justify-between gap-3">
-                    {option.label}
-                    <span className="text-2xs text-fg-subtle">{option.detail}</span>
-                  </span>
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                <SelectLabel className="px-2 pb-1 pt-1 text-2xs font-normal text-fg-subtle">Quality for all files</SelectLabel>
+                {QUALITY_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    <span className="flex w-36 items-center justify-between gap-3">
+                      {option.label}
+                      <span className="text-2xs text-fg-subtle">{option.detail}</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
 
@@ -247,7 +255,16 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               </Button>
             </Tooltip>
           ) : (
-            <Tooltip key="render" content={blocked ?? "Render scene"} shortcut={blocked ? undefined : `${MOD_KEY}+Enter`} wrap>
+            <Tooltip
+              key="render"
+              content={blocked ?? "Render scene"}
+              shortcut={blocked ? undefined : `${MOD_KEY}+Enter`}
+              wrap
+              // A blocked Render always has its reason row under the toolbar: open below that row and
+              // end at the button's right edge, so the hint covers neither the row nor the Preview header.
+              align={blocked ? "end" : undefined}
+              sideOffset={blocked ? BLOCKED_TOOLTIP_OFFSET_PX : undefined}
+            >
               <Button
                 variant="primary"
                 size="sm"
