@@ -34,8 +34,12 @@ const RICH_END = /^╰─+/;
 const RICH_FRAME = /^│\s+(?:[A-Za-z]:)?[^\s│]*\.py(?::\d*)?(?:\s|$)/;
 /** Rich code row: "│ ❱ 7 │ code │" or "│   6 │ code │". */
 const RICH_CODE = /^│\s+(❱)?\s*(\d+)\s+│/;
-/** Installed packages: never the user's script, even when a file shares its name (manim/scene/scene.py). */
-const LIBRARY_PATH = /site-packages|dist-packages|[\\/]lib[\\/]python\d/;
+/**
+ * Installed packages: never the user's script, even when a file shares its name
+ * (manim/scene/scene.py). Covers raw paths and the server's redacted forms
+ * ("<site-packages>/manim/...", "<python-lib>/...", "<venv>/...").
+ */
+const LIBRARY_PATH = /site-packages|dist-packages|[\\/]lib[\\/]python\d|<python-lib>|<venv>/;
 const PY_START = /^Traceback \(most recent call last\):/;
 const PY_FRAME = /^\s+File "([^"]+)", line (\d+)/;
 
