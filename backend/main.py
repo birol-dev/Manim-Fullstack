@@ -39,7 +39,16 @@ from file_ops import (
     read_bytes,
     rename_no_replace,
 )
-from executor import OUTPUT_EXTENSIONS, ManimExecutor, keep_box_width, media_rel_path, output_kind, redact_host_paths
+from executor import (
+    OUTPUT_EXTENSIONS,
+    STAGE_PREFIX,
+    ManimExecutor,
+    keep_box_width,
+    media_file_is_complete,
+    media_rel_path,
+    output_kind,
+    redact_host_paths,
+)
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
@@ -527,7 +536,10 @@ def _sweep_temp_renders(min_age: Optional[float] = None) -> None:
         except OSError:
             continue
         for entry in entries:
-            if not entry.name.startswith(TEMP_PREFIX) or entry.name in _active_temp_stems:
+            if not entry.name.startswith(TEMP_PREFIX):
+                _sweep_stale_stages(entry, cutoff)
+                continue
+            if entry.name in _active_temp_stems:
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False) and _newest_mtime(entry.path) < cutoff:
@@ -555,6 +567,30 @@ def _sweep_upload_partials(min_age: Optional[float] = None) -> None:
         try:
             if entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < cutoff:
                 os.remove(entry.path)
+        except OSError:
+            pass
+
+
+def _sweep_stale_stages(stem_entry, cutoff: float) -> None:
+    """Remove ``<stem>/.~run-*`` output staging folders of renders that never finished.
+
+    A live render of this process keeps its own staging folder fresh (and removes
+    it when it ends), so only folders untouched since *cutoff* go.
+    """
+    try:
+        if not stem_entry.is_dir(follow_symlinks=False):
+            return
+        children = list(os.scandir(stem_entry.path))
+    except OSError:
+        return
+    for child in children:
+        if not child.name.startswith(STAGE_PREFIX):
+            continue
+        if TEMP_PREFIX + child.name[len(STAGE_PREFIX):] in _active_temp_stems:
+            continue
+        try:
+            if child.is_dir(follow_symlinks=False) and _newest_mtime(child.path) < cutoff:
+                shutil.rmtree(child.path, ignore_errors=True)
         except OSError:
             pass
 
@@ -773,10 +809,20 @@ def _list_media() -> list:
             continue
         for root, dirs, files in os.walk(root_dir):
             # Prune scratch output and Manim's per-animation chunks.
-            dirs[:] = [d for d in dirs if d != "partial_movie_files" and not d.startswith(TEMP_PREFIX)]
+            # Prune scratch output, Manim's per-animation chunks, and renders still
+            # being written (per-run staging folders).
+            dirs[:] = [
+                d for d in dirs
+                if d != "partial_movie_files" and not d.startswith((TEMP_PREFIX, STAGE_PREFIX))
+            ]
             for name in files:
                 if name.lower().endswith(OUTPUT_EXTENSIONS):
-                    item = _media_item(os.path.join(root, name))
+                    path = os.path.join(root, name)
+                    # A broken file (an interrupted render from an older version, a
+                    # copy that never finished) is not offered as a render.
+                    if not media_file_is_complete(path):
+                        continue
+                    item = _media_item(path)
                     if item:
                         media.append(item)
     return sorted(media, key=lambda item: item["modified"], reverse=True)
@@ -923,6 +969,22 @@ class SaveRequest(BaseModel):
     create_only: bool = False
 
 
+def _save_target(path: str) -> str:
+    """The file a save of *path* writes: *path* itself, or a symlink's real target.
+
+    The target must stay inside the workspace and be a ``.py`` file; a link that
+    points outside or nowhere is refused rather than replaced by a regular file.
+    """
+    if not os.path.islink(path):
+        return path
+    target = os.path.realpath(path)
+    if not os.path.isfile(target) or not is_within_directory(target, WORKSPACE_DIR):
+        raise HTTPException(status_code=400, detail="This link points outside the workspace or to nothing; it can't be saved.")
+    if not target.lower().endswith(".py"):
+        raise HTTPException(status_code=400, detail="This link doesn't point to a Python script.")
+    return target
+
+
 @app.post("/api/save")
 def save_file(req: SaveRequest):
     """Write a script and return its parsed scenes and new version.
@@ -934,8 +996,13 @@ def save_file(req: SaveRequest):
     """
     _ensure_code_within_limit(req.code)
     data = _utf8(req.code, "Code")
-    filename, filepath = _new_script_path(req.filename)
-    with locked(filepath):
+    filename, link_path = _new_script_path(req.filename)
+    # A symlink to another script inside the workspace is saved through: the real
+    # file is replaced atomically and the link stays a link.
+    filepath = _save_target(link_path)
+    with locked(link_path, filepath):
+        if os.path.islink(link_path) and _save_target(link_path) != filepath:
+            raise HTTPException(status_code=409, detail="This file was renamed or deleted outside this tab.")
         if not req.create_only:
             try:
                 ensure_writable(filepath)
@@ -1618,15 +1685,24 @@ def _config_safe_stem(stem: str) -> bool:
     return bool(stem) and not any(ch in stem for ch in "{}\r\n") and stem == stem.strip()
 
 
-def _output_config(target_stem: str) -> str:
-    """Per-run Manim config: write the scratch copy's output under *target_stem*."""
+def _output_config(target_stem: str, stage: Optional[str] = None) -> str:
+    """Per-run Manim config: write the scratch copy's output under *target_stem*.
+
+    With *stage*, final outputs go to ``<stem>/<stage>/`` first and the executor
+    moves them over the real ones only after a successful, complete render. The
+    per-animation cache stays in the usual ``<stem>/<quality>/partial_movie_files``.
+    """
     folder = target_stem.replace("%", "%%")
-    return (
-        "# Written by Manim Composer for one render; removed when it ends.\n"
-        "[CLI]\n"
-        f"video_dir = {{media_dir}}/videos/{folder}/{{quality}}\n"
-        f"images_dir = {{media_dir}}/images/{folder}\n"
-    )
+    out = folder + "/" + stage if stage else folder
+    lines = [
+        "# Written by Manim Composer for one render; removed when it ends.",
+        "[CLI]",
+        f"video_dir = {{media_dir}}/videos/{out}/{{quality}}",
+        f"images_dir = {{media_dir}}/images/{out}",
+    ]
+    if stage:
+        lines.append(f"partial_movie_dir = {{media_dir}}/videos/{folder}/{{quality}}/partial_movie_files/{{scene_name}}")
+    return "\n".join(lines) + "\n"
 
 
 class _RenderRequestError(ValueError):
@@ -1698,6 +1774,23 @@ def _clean_render_id(value):
 def _echo_id(value):
     cleaned = _clean_render_id(value)
     return None if cleaned is _INVALID_ID else cleaned
+
+
+# '"id": "abc"' or '"id": 12' near the start of a message that isn't valid JSON (or
+# is too large to parse): enough to tie the error to the render it was meant for.
+_ID_SNIFF = re.compile(r'"id"\s*:\s*("(?:[^"\\\r\n]|\\.){0,%d}"|-?\d{1,18}(?![\d.eE]))' % (MAX_RENDER_ID_CHARS * 6))
+ID_SNIFF_CHARS = 64 * 1024
+
+
+def _sniff_render_id(data: str):
+    """Best-effort render id from a raw message that couldn't be parsed; None if unknown."""
+    match = _ID_SNIFF.search(data[:ID_SNIFF_CHARS])
+    if not match:
+        return None
+    try:
+        return _echo_id(json.loads(match.group(1)))
+    except (ValueError, RecursionError):
+        return None
 
 
 _TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
@@ -1865,6 +1958,7 @@ async def websocket_render(websocket: WebSocket):
         temp_stem: Optional[str] = None
         output_stem: Optional[str] = None
         extra_args: List[str] = []
+        stage: Optional[str] = None
         relocate = False
         held_output: List[str] = []
         result: dict = {"success": False, "status": "error"}
@@ -1878,6 +1972,9 @@ async def websocket_render(websocket: WebSocket):
                 original = outbound["message"]
                 message = original.replace(script_name, filename)
                 message = message.replace(temp_stem, target_stem) if relocate else message
+                if stage:
+                    # Outputs are announced at their real place; hide the staging folder.
+                    message = message.replace("/" + stage, "").replace("\\" + stage, "")
                 outbound["message"] = keep_box_width(original, message)
 
             if outbound.get("type") == "file_ready" and abs_path:
@@ -1959,7 +2056,10 @@ async def websocket_render(websocket: WebSocket):
                 # folder, so Manim's partial-movie cache keeps working.
                 config_name = f"{temp_stem}.cfg"
                 temp_config = os.path.join(WORKSPACE_DIR, config_name)
-                await asyncio.to_thread(_write_new_file, temp_config, _output_config(target_stem))
+                # Outputs are staged per run so a failed or cancelled render never
+                # replaces the previous good video.
+                stage = STAGE_PREFIX + temp_stem[len(TEMP_PREFIX):]
+                await asyncio.to_thread(_write_new_file, temp_config, _output_config(target_stem, stage))
                 extra_args = ["--config_file", config_name]
                 output_stem = target_stem
             else:
@@ -2018,6 +2118,7 @@ async def websocket_render(websocket: WebSocket):
                     log_callback=log_callback,
                     output_stem=output_stem,
                     extra_args=extra_args,
+                    stage=stage,
                 )
             finally:
                 slots.release()
@@ -2055,7 +2156,8 @@ async def websocket_render(websocket: WebSocket):
             if isinstance(parsed, dict):
                 render_id, is_start = _echo_id(parsed.get("id")), parsed.get("type") == "start"
         except (ValueError, RecursionError):
-            pass
+            render_id = _sniff_render_id(data)
+            is_start = bool(re.search(r'"type"\s*:\s*"start"', data[:ID_SNIFF_CHARS]))
         await send({
             "type": "error",
             "render_id": render_id,
@@ -2073,10 +2175,11 @@ async def websocket_render(websocket: WebSocket):
             try:
                 message = json.loads(data)
             except (ValueError, RecursionError):
-                await send({"type": "error", "message": "Invalid JSON message."})
+                # Not a render's error unless the broken message names one.
+                await send({"type": "error", "render_id": _sniff_render_id(data), "message": "Invalid JSON message."})
                 continue
             if not isinstance(message, dict):
-                await send({"type": "error", "message": "Message payload must be a JSON object."})
+                await send({"type": "error", "render_id": None, "message": "Message payload must be a JSON object."})
                 continue
 
             msg_type = message.get("type")
@@ -2129,8 +2232,9 @@ async def websocket_render(websocket: WebSocket):
     except WebSocketDisconnect:
         await stop_current_render("disconnected")
     except Exception as e:
+        failed_id = current.render_id if current is not None else None
         await stop_current_render("error")
-        await send({"type": "error", "message": f"Server WebSocket error: {e}"})
+        await send({"type": "error", "render_id": failed_id, "message": f"Server WebSocket error: {e}"})
 
 
 # Serve the built frontend (index.html + static files). /assets is handled above.
