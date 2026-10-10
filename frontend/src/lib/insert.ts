@@ -329,7 +329,7 @@ function planUnchecked(lines: readonly string[], infos: readonly LineInfo[], cur
   let scopeFrom: number;
   let indent: string;
 
-  if (info && (text.trim() || info.continues || info.open)) {
+  if (info && !info.trivia && (text.trim() || info.continues || info.open)) {
     const statement = statementAround(infos, line);
     const last = infos[statement.end - 1];
     if (last.open) {
@@ -345,15 +345,29 @@ function planUnchecked(lines: readonly string[], infos: readonly LineInfo[], cur
     plan = { line: statement.end, replace: false, text: indentBlock(block, indent, unit) };
     scopeFrom = statement.end;
   } else {
+    // A blank line, or a comment-only line: the indentation comes from the code above,
+    // since a comment's own indentation can be anything (deeper than any open block).
     indent = "";
-    for (let above = line - 1; above >= 1; above -= 1) {
+    let above = line - 1;
+    for (; above >= 1; above -= 1) {
       if (infos[above - 1].trivia || !lines[above - 1].trim()) continue;
       const statement = statementAround(infos, above);
       indent = leading(lines[statement.start - 1]) + (infos[statement.end - 1].lastCode === ":" ? unit : "");
       break;
     }
-    plan = { line, replace: true, text: indentBlock(block, indent, unit) };
-    scopeFrom = line - 1;
+    const comment = Boolean(info?.trivia && text.trim());
+    if (comment) indent = commentIndent(lines, infos, above, leading(text), indent);
+    // A comment line is kept: the block goes below it.
+    plan = comment ? { line, replace: false, text: indentBlock(block, indent, unit) } : { line, replace: true, text: indentBlock(block, indent, unit) };
+    scopeFrom = comment ? line : line - 1;
+  }
+
+  // Never between a decorator and the def/class it decorates: go above the decorators.
+  const decorators = decoratorChainBefore(lines, infos, plan.replace ? plan.line - 1 : plan.line);
+  if (decorators !== null) {
+    indent = leading(lines[decorators - 1]);
+    plan = { line: decorators - 1, replace: false, text: indentBlock(block, indent, unit) };
+    scopeFrom = decorators - 1;
   }
 
   if (enclosingScope(lines, infos, scopeFrom, indent) === "def") return plan;
@@ -363,6 +377,17 @@ function planUnchecked(lines: readonly string[], infos: readonly LineInfo[], cur
   const end = blockEnd(lines, infos, construct);
   let bodyIndent = leading(lines[construct - 1]) + unit;
   const headerEnd = statementAround(infos, construct).end;
+  if (end === headerEnd && infos[headerEnd - 1].lastCode !== ":") {
+    // `def construct(self): self.wait()` on one line: its body can't grow below it.
+    // Split it into a header and an indented body, then add the block.
+    const split = headerEnd === construct ? splitOneLineDef(lines[construct - 1]) : null;
+    if (!split) return { refused: "construct() is written on one line. Put its body on its own line, then insert again." };
+    return {
+      line: construct,
+      replace: true,
+      text: `${split.header}\n${bodyIndent}${split.body}\n${indentBlock(block, bodyIndent, unit)}`,
+    };
+  }
   for (let inner = headerEnd + 1; inner <= end; inner += 1) {
     if (!infos[inner - 1].trivia && !infos[inner - 1].continues && lines[inner - 1].trim()) {
       bodyIndent = leading(lines[inner - 1]);
@@ -370,6 +395,76 @@ function planUnchecked(lines: readonly string[], infos: readonly LineInfo[], cur
     }
   }
   return { line: end, replace: false, text: indentBlock(block, bodyIndent, unit) };
+}
+
+/**
+ * If the statement that ends at or above line *before* (1-based; blank and comment lines
+ * skipped) is a decorator, the first line of its chain of decorators; otherwise null.
+ */
+function decoratorChainBefore(lines: readonly string[], infos: readonly LineInfo[], before: number): number | null {
+  let first: number | null = null;
+  for (let line = Math.min(before, lines.length); line >= 1; line -= 1) {
+    if (infos[line - 1].trivia || !lines[line - 1].trim()) continue;
+    const start = statementAround(infos, line).start;
+    if (!lines[start - 1].trimStart().startsWith("@")) break;
+    first = start;
+    line = start;
+  }
+  return first;
+}
+
+/**
+ * Indentation for code below a comment-only line: the comment's own when that is a
+ * level the code can be at there (the block above, or one it closes), else *fallback*
+ * (the indentation of code following the statement on line *above*).
+ */
+function commentIndent(lines: readonly string[], infos: readonly LineInfo[], above: number, own: string, fallback: string): string {
+  if (above < 1) return "";
+  const width = indentWidth(own);
+  if (width === indentWidth(fallback)) return own;
+  if (width > indentWidth(fallback)) return fallback;
+  // Shallower: valid only if it closes back to a block level that is open above.
+  let limit = indentWidth(lines[above - 1]);
+  for (let line = above; line >= 1; line -= 1) {
+    const info = infos[line - 1];
+    if (info.trivia || info.continues || !lines[line - 1].trim()) continue;
+    const level = indentWidth(lines[line - 1]);
+    if (level > limit) continue;
+    if (level === width) return leading(lines[line - 1]);
+    if (level < width) break;
+    limit = level;
+  }
+  return fallback;
+}
+
+/**
+ * "    def construct(self): self.wait()" -> header "    def construct(self):" and body
+ * "self.wait()": split at the first colon outside brackets and strings. Null when
+ * there is no such colon.
+ */
+function splitOneLineDef(line: string): { header: string; body: string } | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote) {
+      if (char === "\\") index += 1;
+      else if (line.startsWith(quote, index)) {
+        index += quote.length - 1;
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "#") return null;
+    if (char === "'" || char === '"') quote = line.startsWith(char.repeat(3), index) ? char.repeat(3) : char;
+    else if ("([{".includes(char)) depth += 1;
+    else if (")]}".includes(char)) depth -= 1;
+    else if (char === ":" && depth === 0) {
+      const body = line.slice(index + 1).trim();
+      return body ? { header: line.slice(0, index + 1).trimEnd(), body } : null;
+    }
+  }
+  return null;
 }
 
 export function isInsertRefusal(plan: BlockInsertPlan | BlockInsertRefusal): plan is BlockInsertRefusal {

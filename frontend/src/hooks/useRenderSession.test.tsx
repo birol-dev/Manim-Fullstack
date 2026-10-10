@@ -74,10 +74,50 @@ describe("useRenderSession", () => {
     expect(result.current.active).not.toBeNull();
     expect(onFinished).not.toHaveBeenCalled();
 
-    // Errors that aren't tied to a render end it immediately.
-    act(() => socket.emit({ type: "error", message: "Server WebSocket error" }));
-    expect(log).toHaveBeenCalledWith("error", "Server WebSocket error");
-    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ success: false, status: "error" }));
+    // The server names the render an error belongs to (#18); one with no render_id is about a
+    // malformed message or the connection, so it is logged and the running render goes on.
+    act(() => socket.emit({ type: "error", render_id: null, message: "Message payload must be a JSON object." }));
+    expect(log).toHaveBeenCalledWith("error", "Message payload must be a JSON object.");
+    expect(result.current.active).not.toBeNull();
+    expect(onFinished).not.toHaveBeenCalled();
+  });
+
+  it("attaches error events to the render their render_id names", async () => {
+    const { result, onFinished, log } = setup();
+    await flush();
+    let first: string | null = null;
+    act(() => {
+      first = result.current.start(REQUEST);
+    });
+    const socket = FakeWebSocket.latest();
+
+    // Another render's error: not logged, doesn't end this one.
+    act(() => socket.emit({ type: "error", render_id: "someone-else", message: "Render execution error: other" }));
+    expect(log).not.toHaveBeenCalledWith("error", "Render execution error: other");
+    expect(result.current.active?.id).toBe(first);
+
+    // This render's error is logged; its result (always sent after it) ends the render.
+    act(() => socket.emit({ type: "error", render_id: first, message: "Python script not found." }));
+    expect(log).toHaveBeenCalledWith("error", "Python script not found.");
+    expect(result.current.active).not.toBeNull();
+    act(() => socket.emit({ type: "result", render_id: first, success: false, status: "rejected" }));
+    expect(onFinished).toHaveBeenCalledWith(expect.objectContaining({ id: first, success: false, status: "rejected" }));
+
+    // The socket failing as that render stopped: the error names it after its result. Still its log.
+    act(() => socket.emit({ type: "error", render_id: first, message: "Server WebSocket error: boom" }));
+    expect(log).toHaveBeenCalledWith("error", "Server WebSocket error: boom");
+
+    // Once a newer render runs, a late error from the old one isn't mixed into the new log.
+    let second: string | null = null;
+    act(() => {
+      second = result.current.start(REQUEST);
+    });
+    expect(second).not.toBe(first);
+    log.mockClear();
+    act(() => socket.emit({ type: "error", render_id: first, message: "late" }));
+    expect(log).not.toHaveBeenCalled();
+    expect(result.current.active?.id).toBe(second);
+    expect(onFinished).toHaveBeenCalledTimes(1);
   });
 
   it("cancels over the socket, or locally when disconnected", async () => {

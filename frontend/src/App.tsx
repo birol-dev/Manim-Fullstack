@@ -24,7 +24,7 @@ import { isInstalled, useDiagnostics } from "@/hooks/useDiagnostics";
 import { useLogs } from "@/hooks/useLogs";
 import { useMinimumStopping } from "@/hooks/useMinimumStopping";
 import { usePersistentState } from "@/hooks/usePersistentState";
-import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOutput } from "@/hooks/useRenderSession";
+import { useRenderSession, type ActiveRender, type RenderOutcome, type RenderOutput, type RenderRequest } from "@/hooks/useRenderSession";
 import { useViewportHeight } from "@/hooks/useViewportHeight";
 import { SaveConflictError, useWorkspace, type SaveOptions } from "@/hooks/useWorkspace";
 import { apiUrl, errorMessage } from "@/lib/api";
@@ -34,6 +34,7 @@ import { horizontalDefaults, TOAST_TOP_PX, workPanelSizes } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
+import { forgetRenderOrigin, recordRenderOrigin, renameRenderOrigins } from "@/lib/renderOrigins";
 import { overallPercent, risingPercent } from "@/lib/progress";
 import { expandedStepCount, stepIndexForAnimation } from "@/lib/timeline";
 import { STORAGE_KEYS } from "@/lib/storage";
@@ -44,12 +45,23 @@ import type { AnimationStep, AssetFile, MediaFile, ParseResult, PreviewItem, Qua
 const LatexPanel = lazy(() => import("@/components/sidebar/LatexPanel").then((module) => ({ default: module.LatexPanel })));
 
 const AUTO_RENDER_DELAY_MS = 1500;
+const NO_LOGS: never[] = [];
 const NO_STEPS: AnimationStep[] = [];
 const SETUP_SHOWN_KEY = "mc.setupShown";
 
 /** Why this file can't start a render while *running* (another file's job) is in progress. */
-function busyReason(running: ActiveRender): string {
-  return `${running.queued ? "Waiting to render" : "Rendering"} ${running.request.scene} from ${running.request.filename}. Wait for it or cancel it, then render this file.`;
+function busyReason(running: ActiveRender, storage: StorageMode): string {
+  const other = running.request.storage && running.request.storage !== storage;
+  const where = other ? (running.request.storage === "browser" ? " (stored in this browser)" : " (in the workspace folder)") : "";
+  return `${running.queued ? "Waiting to render" : "Rendering"} ${running.request.scene} from ${running.request.filename}${where}. Wait for it or cancel it, then render this file.`;
+}
+
+/**
+ * Whether *request* is for the open script: same name *and* same storage (a disk
+ * my_scene.py job says nothing about the browser-storage my_scene.py).
+ */
+function isFor(request: RenderRequest | null | undefined, storage: StorageMode, file: string | null): boolean {
+  return Boolean(request && file !== null && request.filename === file && (request.storage ?? storage) === storage);
 }
 
 function uniqueName(base: string, existing: string[]): string {
@@ -122,7 +134,7 @@ export default function App() {
   const [lastOutcome, setLastOutcome] = useState<RenderOutcome | null>(null);
   const [cursor, setCursor] = useState<{ line: number; column: number } | null>(null);
   // The script whose render output the console is showing.
-  const [logsFile, setLogsFile] = useState<string | null>(null);
+  const [logsFile, setLogsFile] = useState<{ storage: StorageMode; file: string } | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
   const [bottomCollapsed, setBottomCollapsed] = useState(false);
   const workSizes = workPanelSizes(useViewportHeight());
@@ -159,6 +171,7 @@ export default function App() {
   // ---- Render session ----------------------------------------------------
   const { refreshFiles } = workspace;
   const activeFileRef = useRef(workspace.activeFile);
+  const storageModeRef = useRef(storageMode);
   const filesRef = useRef<WorkspaceFiles>(workspace.files);
   const pendingAutoRender = useRef(false);
   const startRenderRef = useRef<() => Promise<void>>(async () => {});
@@ -166,16 +179,17 @@ export default function App() {
   const handleOutput = useCallback(
     async (output: RenderOutput, render: ActiveRender) => {
       const { filename: file, scene } = render.request;
+      const storage = render.request.storage ?? "disk";
       const title = scene;
       // The preview follows the open file; a render of a file you switched away from only lands in Renders.
-      const stillOpen = () => file === activeFileRef.current;
+      const stillOpen = () => isFor(render.request, storageModeRef.current, activeFileRef.current);
       if (output.temporary) {
         try {
           const response = await fetch(apiUrl(output.url));
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const url = URL.createObjectURL(await response.blob());
           if (stillOpen()) {
-            showPreview({ url, kind: output.kind, title, location: "Downloaded · not kept on the server", downloadName: output.filename, file, scene });
+            showPreview({ url, kind: output.kind, title, location: "Downloaded · not kept on the server", downloadName: output.filename, file, scene, storage });
           }
           triggerDownload(url, output.filename);
           if (!stillOpen()) URL.revokeObjectURL(url);
@@ -184,16 +198,21 @@ export default function App() {
         }
         return;
       }
+      // The output folder is named after the script whatever its storage: remember which
+      // mode (and which name, after a rename mid-render) this output belongs to.
+      const mediaPath = output.relPath.replace(/^media\//, "");
+      recordRenderOrigin(mediaPath, storage, file);
       if (stillOpen()) {
         showPreview({
           url: `${apiUrl(output.url)}?v=${Date.now()}`,
           kind: output.kind,
           title,
           location: `workspace/${output.relPath}`,
-          mediaPath: output.relPath.replace(/^media\//, ""),
+          mediaPath,
           downloadName: output.filename,
           file,
           scene,
+          storage,
         });
       } else {
         toast.success(`${scene} rendered`, { description: `${file} isn't open, so it's in the Renders list.` });
@@ -208,15 +227,17 @@ export default function App() {
       setLastOutcome(outcome);
       const { filename, scene } = outcome.request;
       const failed = !outcome.success && outcome.status !== "cancelled";
-      if (!(outcome.success && outcome.output) && filename === activeFileRef.current) {
+      const ownFile = isFor(outcome.request, storageModeRef.current, activeFileRef.current);
+      if (!(outcome.success && outcome.output) && ownFile) {
         // No new clip. Keep (and flag) this scene's current clip, or fall back to its
         // last good render instead of whatever unrelated clip was showing before.
         const failedOrEmpty = failed || outcome.success;
         const current = previewRef.current;
-        if (previewBelongsTo(current, filename, scene)) {
+        const storage = outcome.request.storage ?? "disk";
+        if (previewBelongsTo(current, filename, scene, storage)) {
           if (failedOrEmpty && current && !current.stale) showPreview({ ...current, stale: true });
         } else {
-          const last = latestRenderFor(filesRef.current.media, filename, scene);
+          const last = latestRenderFor(filesRef.current.media, filename, scene, storage);
           showPreview(last ? { ...previewFromMedia(last), stale: failedOrEmpty } : null);
         }
       }
@@ -227,7 +248,7 @@ export default function App() {
           logSnapshot().map((entry) => entry.text),
           [outcome.request.filename],
         );
-        if (location && outcome.request.filename === activeFileRef.current) {
+        if (location && ownFile) {
           editorRef.current?.setErrorMarker(location.line, location.message);
         }
         // A file whose name the rules now forbid: say so instead of "see the console".
@@ -253,6 +274,29 @@ export default function App() {
   const session = useRenderSession({ log, onOutput: handleOutput, onFinished: handleFinished });
   // What the toolbar and preview overlay show: a quick cancel keeps "Stopping…" up for a moment.
   const shownRender = useMinimumStopping(session.active, session.stopping);
+
+  // Cancel (toolbar or overlay) disappears when the job ends; the toolbar's Render takes
+  // its place, so focus goes there instead of falling back to the page.
+  const refocusRender = useRef(false);
+  const { cancel: cancelSession } = session;
+  const cancelRender = useCallback(() => {
+    refocusRender.current = true;
+    cancelSession();
+  }, [cancelSession]);
+  const renderShown = shownRender.active !== null;
+  useEffect(() => {
+    if (renderShown || !refocusRender.current) return;
+    // A moment later: the job's end can be followed at once by useMinimumStopping's held
+    // "Stopping…" frame (renderShown true again, which clears this timer).
+    const timer = window.setTimeout(() => {
+      refocusRender.current = false;
+      const focused = document.activeElement;
+      // Leave focus alone if it already moved somewhere else on purpose.
+      if (focused instanceof HTMLElement && focused !== document.body && focused.isConnected && !focused.matches(":disabled")) return;
+      document.querySelector<HTMLElement>('section[aria-label="Editor"] button[aria-label="Render"]')?.focus();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [renderShown]);
 
   // The socket is the first to notice a server going away or coming back.
   const { refresh: refreshDiagnostics } = diagnostics;
@@ -282,9 +326,13 @@ export default function App() {
               onConfirm: () => saveRef.current({ force: true }),
             }
           : {
-              title: `${name} changed in another tab`,
+              // On disk the change can come from anywhere (another tab, an editor, git, a script);
+              // browser storage can only be changed by another tab.
+              title: storageMode === "browser" ? `${name} changed in another tab` : `${name} changed outside this tab`,
               description:
-                "It was saved somewhere else after you opened it. Reload it to get that version (your unsaved edits here are dropped), or overwrite it with yours.",
+                storageMode === "browser"
+                  ? "It was saved in another tab after you opened it. Reload it to get that version (your unsaved edits here are dropped), or overwrite it with yours."
+                  : "It was changed after you opened it, in another tab or by another program (an editor, git, a script). Reload it to get that version (your unsaved edits here are dropped), or overwrite it with yours.",
               confirmLabel: "Overwrite",
               tone: "danger",
               conflict: true,
@@ -296,16 +344,16 @@ export default function App() {
             },
       );
     },
-    [workspace],
+    [workspace, storageMode],
   );
 
   const startRender = useCallback(async () => {
     const filename = workspace.activeFile;
     // Ctrl+Enter can arrive twice (editor and window) while the first call is still saving.
     const running = sessionActiveRef.current;
-    if (running && running.request.filename !== filename) {
+    if (running && !isFor(running.request, storageMode, filename)) {
       // One render at a time per tab: say why instead of doing nothing.
-      toast.error("Can't render this script", { id: "render-blocked", description: busyReason(running) });
+      toast.error("Can't render this script", { id: "render-blocked", description: busyReason(running, storageMode) });
       return;
     }
     if (running || startingRef.current || !filename) return;
@@ -360,9 +408,9 @@ export default function App() {
       if (scene !== workspace.selectedScene) workspace.setSelectedScene(scene);
 
       clearLogs();
-      setLogsFile(filename);
+      setLogsFile({ storage: storageMode, file: filename });
       lastRenderedCode.current = buffer;
-      const id = session.start({ filename, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
+      const id = session.start({ filename, storage: storageMode, scene, quality, useOpenGL: useOpenGL && openGLSupported, downloadOnly, code });
       // The steps of the code being rendered, for its progress and timeline highlight,
       // whatever file is open (or edited) while it runs.
       if (id) setRenderSteps({ id, steps: parsed?.animations[scene] ?? workspace.animations[scene] ?? [] });
@@ -373,6 +421,7 @@ export default function App() {
 
   useEffect(() => {
     activeFileRef.current = workspace.activeFile;
+    storageModeRef.current = storageMode;
     filesRef.current = workspace.files;
     sessionActiveRef.current = session.active;
     startRenderRef.current = startRender;
@@ -424,15 +473,24 @@ export default function App() {
   // instead of "Nothing rendered yet" or a clip from another file.
   const filesReady = workspace.filesStatus === "ready";
   const bindKey = filesReady && workspace.activeFile ? `${storageMode}\n${workspace.activeFile}\n${workspace.selectedScene}` : null;
+  const noFileOpen = filesReady && !workspace.activeFile;
   useEffect(() => {
     const file = activeFileRef.current;
     if (!bindKey || !file) return;
     const scene = workspace.selectedScene;
-    if (previewBelongsTo(previewRef.current, file, scene)) return;
-    const last = latestRenderFor(filesRef.current.media, file, scene);
+    const storage = storageModeRef.current;
+    if (previewBelongsTo(previewRef.current, file, scene, storage)) return;
+    // Only this storage mode's renders: a browser file's my_scene.py never shows the
+    // workspace folder's my_scene.py output (they share the server's output folder).
+    const last = latestRenderFor(filesRef.current.media, file, scene, storage);
     showPreview(last ? previewFromMedia(last) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bindKey, showPreview]);
+  // No script open (the last one was deleted, or another storage mode has none): a preview
+  // that followed a file goes too; one picked from the Renders list stays.
+  useEffect(() => {
+    if (noFileOpen && previewRef.current && !previewRef.current.pinned) showPreview(null);
+  }, [noFileOpen, storageMode, showPreview]);
 
   // ---- Auto-render -------------------------------------------------------
   const codeRef = useRef(workspace.code);
@@ -551,9 +609,9 @@ export default function App() {
       onConfirm: async () => {
         await workspace.deleteFile(name);
         // Nothing about the deleted file should linger in the preview or status bar.
-        setLastOutcome((outcome) => (outcome?.request.filename === name ? null : outcome));
+        setLastOutcome((outcome) => (isFor(outcome?.request, storageMode, name) ? null : outcome));
         setCursor(null);
-        if (logsFile === name) {
+        if (logsFile?.file === name && logsFile.storage === storageMode) {
           clearLogs();
           setLogsFile(null);
         }
@@ -572,6 +630,7 @@ export default function App() {
       onConfirm: async () => {
         await workspace.deleteMedia(item);
         if (previewRef.current?.mediaPath === item.path) showPreview(null);
+        forgetRenderOrigin(item.path);
       },
     });
 
@@ -602,8 +661,11 @@ export default function App() {
   const renderingSteps = session.active && renderSteps?.id === session.active.id ? renderSteps.steps : NO_STEPS;
   // From the displayed render, so a quick cancel's "Stopping…" stays up (useMinimumStopping).
   const shown = shownRender.active;
-  const ownRender = shown && shown.request.filename === workspace.activeFile ? shown : null;
-  const otherRender = shown && !ownRender ? shown : null;
+  const ownRender = shown && isFor(shown.request, storageMode, workspace.activeFile) ? shown : null;
+  // Another file's job in this storage mode gets the preview banner (with Cancel). One from the
+  // other mode doesn't: it isn't about any file shown here (the status bar and Render's blocked
+  // reason still say what is running and where).
+  const otherRender = shown && !ownRender && (shown.request.storage ?? "disk") === storageMode ? shown : null;
   const sceneSteps = workspace.animations[workspace.selectedScene];
   const sameSteps = useMemo(() => JSON.stringify(sceneSteps ?? []) === JSON.stringify(renderingSteps), [sceneSteps, renderingSteps]);
   const [percentFloor, setPercentFloor] = useState<{ id: string; value: number } | null>(null);
@@ -624,17 +686,20 @@ export default function App() {
   // Another file's job doesn't turn this file's Render into Cancel: it stays Render,
   // blocked with the reason (one render per tab; cancel it from the preview banner).
   // (The session's own state, not the held "Stopping…" frame: Render is back as soon as the job ends.)
-  const canRender = online && Boolean(workspace.activeFile) && session.active?.request.filename !== workspace.activeFile;
+  const canRender = online && Boolean(workspace.activeFile) && !isFor(session.active?.request, storageMode, workspace.activeFile);
   // Why Render (and Ctrl+Enter) won't run this buffer, shown on the button.
   const maxCodeBytes = diagnostics.data?.max_code_bytes ?? getMaxCodeBytes();
   const codeBytes = useMemo(() => utf8ByteLength(workspace.code), [workspace.code]);
+  // The size limit comes first: it is this file's own problem and outlasts another file's render.
+  const oversize = workspace.activeFile ? renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: null }) : null;
   const renderBlocked = !workspace.activeFile
     ? null
-    : session.active && session.active.request.filename !== workspace.activeFile
-      ? busyReason(session.active)
-      : renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: workspace.syntaxError });
+    : (oversize ??
+      (session.active && !isFor(session.active.request, storageMode, workspace.activeFile)
+        ? busyReason(session.active, storageMode)
+        : renderBlockReason({ codeBytes, maxCodeBytes, syntaxError: workspace.syntaxError })));
   // Outcome of the open file's last render (the status bar and preview don't show another file's).
-  const ownOutcome = lastOutcome?.request.filename === workspace.activeFile ? lastOutcome : null;
+  const ownOutcome = isFor(lastOutcome?.request, storageMode, workspace.activeFile) ? lastOutcome : null;
 
   // The tab title shows unsaved changes and render progress, even in a background tab.
   const activeFileName = workspace.activeFile;
@@ -646,8 +711,8 @@ export default function App() {
   }, [activeFileName, isDirty, renderPercent]);
   // Line links only make sense when the output belongs to the open file.
   const linkFiles = useMemo(
-    () => (logsFile && logsFile === workspace.activeFile ? [logsFile] : []),
-    [logsFile, workspace.activeFile],
+    () => (logsFile && logsFile.storage === storageMode && logsFile.file === workspace.activeFile ? [logsFile.file] : []),
+    [logsFile, storageMode, workspace.activeFile],
   );
 
   // ---- Layout ------------------------------------------------------------
@@ -658,6 +723,7 @@ export default function App() {
           <FilesPanel
             files={workspace.files}
             filesError={workspace.filesStatus === "error"}
+            filesReady={workspace.filesStatus === "ready"}
             storageMode={storageMode}
             activeFile={workspace.activeFile}
             dirtyFiles={workspace.dirtyFiles}
@@ -665,12 +731,31 @@ export default function App() {
             onOpen={openFile}
             onNew={() => setNewFile({ suggestedName: uniqueName("scene.py", scriptNames) })}
             onRename={async (oldName, newName) => {
-              await workspace.renameFile(oldName, newName);
-              setLogsFile((file) => (file === oldName ? newName : file));
+              // Everything about the file follows it: a running render (progress, Cancel,
+              // result), its last outcome, the console's line links, its renders, and the preview.
+              // (Run by renameFile before the open file takes the new name, in the same update.)
+              const follow = () => {
+                session.retarget(storageMode, oldName, newName);
+                // Its renders so far follow it too (their output folder keeps the old name).
+                renameRenderOrigins(storageMode, oldName, newName);
+                const renamed = (request: RenderRequest) => ({ ...request, filename: newName });
+                setLastOutcome((outcome) => (outcome && isFor(outcome.request, storageMode, oldName) ? { ...outcome, request: renamed(outcome.request) } : outcome));
+                setLogsFile((logs) => (logs && logs.storage === storageMode && logs.file === oldName ? { ...logs, file: newName } : logs));
+                const current = previewRef.current;
+                if (current?.file === oldName && (current.storage ?? "disk") === storageMode) showPreview({ ...current, file: newName });
+              };
+              try {
+                await workspace.renameFile(oldName, newName, follow);
+              } catch (err) {
+                // Renamed or deleted in another tab: the "no longer exists" dialog (Recreate)
+                // takes over; the editor keeps the text.
+                if (err instanceof SaveConflictError) return reportSaveError(err, "Couldn't rename the file.");
+                throw err;
+              }
             }}
             onDelete={requestDeleteScript}
             onRefresh={() => void workspace.refresh()}
-            onPreviewMedia={(item) => showPreview(previewFromMedia(item))}
+            onPreviewMedia={(item) => showPreview({ ...previewFromMedia(item), pinned: true })}
             onDeleteMedia={requestDeleteMedia}
             onCompare={() => setCompareOpen(true)}
           />
@@ -781,6 +866,7 @@ export default function App() {
                         latexAvailable={latexAvailable}
                         canRender={canRender}
                         renderBlocked={renderBlocked}
+                        oversize={oversize}
                         fontSize={editorFontSize}
                         syntaxError={workspace.syntaxError}
                         stopping={shownRender.stopping}
@@ -791,7 +877,7 @@ export default function App() {
                         onAutoRenderChange={setAutoRender}
                         onSave={() => void save()}
                         onRender={() => void startRender()}
-                        onCancel={session.cancel}
+                        onCancel={cancelRender}
                         onNewFile={() => setNewFile({ suggestedName: uniqueName("scene.py", scriptNames) })}
                         onOpenSetup={() => setSetupOpen(true)}
                       />
@@ -802,6 +888,7 @@ export default function App() {
                         preview={preview}
                         active={ownRender}
                         otherRender={otherRender}
+                        // A job from the other storage mode can't be opened by name from here.
                         onOpenFile={openFile}
                         stopping={shownRender.stopping}
                         stepCount={expandedStepCount(renderingSteps)}
@@ -812,7 +899,7 @@ export default function App() {
                         renderBlocked={renderBlocked}
                         canCompare={videos.length > 1}
                         onRender={() => void startRender()}
-                        onCancel={session.cancel}
+                        onCancel={cancelRender}
                         onCompare={() => setCompareOpen(true)}
                         onShowConsole={() => {
                           setBottomTab("console");
@@ -844,9 +931,11 @@ export default function App() {
                     }}
                     collapsed={bottomCollapsed}
                     onToggleCollapsed={() => (bottomCollapsed ? bottomPanelRef.current?.expand() : bottomPanelRef.current?.collapse())}
-                    logs={logs}
+                    // The console belongs to its render's storage mode: a workspace render's output
+                    // isn't shown next to browser-storage files (it comes back when you switch back).
+                    logs={logsFile && logsFile.storage !== storageMode ? NO_LOGS : logs}
                     linkFiles={linkFiles}
-                    logsFile={logsFile !== workspace.activeFile ? logsFile : null}
+                    logsFile={logsFile && logsFile.storage === storageMode && logsFile.file !== workspace.activeFile ? logsFile.file : null}
                     onOpenLogsFile={openFile}
                     onClearLogs={() => {
                       clearLogs();
@@ -884,7 +973,15 @@ export default function App() {
         />
       </div>
 
-      <NewFileDialog request={newFile} existing={scriptNames} onClose={() => setNewFile(null)} onCreate={createFile} />
+      <NewFileDialog
+        request={newFile}
+        existing={scriptNames}
+        onClose={() => setNewFile(null)}
+        onCreate={createFile}
+        // A new script is opened to be written: start typing in it (it is already the
+        // selected row in Scripts, and returning to the New button would only re-show its hint).
+        onCreatedFocus={() => editorRef.current?.focus()}
+      />
       <ConfirmDialog request={confirm} onClose={(closing) => setConfirm((current) => (current === closing ? null : current))} />
       <CompareDialog open={compareOpen} onOpenChange={setCompareOpen} videos={videos} />
       <SetupDialog

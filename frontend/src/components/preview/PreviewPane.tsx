@@ -5,6 +5,7 @@ import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender, RenderOutcome } from "@/hooks/useRenderSession";
 import { MOD_KEY } from "@/lib/constants";
+import { useRenderAnnouncement } from "@/hooks/useRenderAnnouncement";
 import { overallPercent } from "@/lib/progress";
 import type { PreviewItem } from "@/lib/types";
 
@@ -85,9 +86,11 @@ function RenderingOverlay({
   }
 
   return (
+    // Not a live region: the percent changes on every tick. Milestones are announced by the
+    // pane's own status line (useRenderAnnouncement).
     <div
-      role="status"
-      aria-live="polite"
+      role="group"
+      aria-label="Render in progress"
       className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/75 p-6 text-center backdrop-blur-sm animate-in fade-in-0"
     >
       <ProgressRing percent={percent} />
@@ -134,9 +137,13 @@ export function PreviewPane(props: PreviewPaneProps) {
   const failed = lastOutcome && !lastOutcome.success && lastOutcome.status !== "cancelled";
   // Manim writes a PNG instead of a video when a scene never calls play() or wait().
   const still = preview?.kind === "image";
+  const announcement = useRenderAnnouncement(active, props.stepCount, Boolean(props.stopping), lastOutcome);
 
   return (
     <section aria-label="Preview" className="flex h-full min-h-0 flex-col bg-surface">
+      <p role="status" aria-live="polite" className="sr-only" data-testid="render-announcement">
+        {announcement}
+      </p>
       <PaneHeader className="h-10 justify-between pr-1.5">
         <div className="flex min-w-0 items-center gap-2">
           <PaneTitle>Preview</PaneTitle>

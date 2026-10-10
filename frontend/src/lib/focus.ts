@@ -43,3 +43,12 @@ export function focusWithRing(target: HTMLElement) {
   target.addEventListener("blur", () => target.removeAttribute("data-autofocus-ring"), { once: true });
   target.focus();
 }
+
+/**
+ * True when nothing holds focus on purpose (it sits on the page body, or on an element that
+ * has since been removed, e.g. a closed dialog's field), so a deferred focus() may take it.
+ */
+export function focusIsFree(): boolean {
+  const focused = document.activeElement;
+  return !focused || focused === document.body || !focused.isConnected;
+}
