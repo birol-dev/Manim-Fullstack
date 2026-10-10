@@ -1,4 +1,4 @@
-import { forwardRef, lazy, Suspense, useEffect, useRef, useState } from "react";
+import { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
 import type { SyntaxErrorInfo } from "@/lib/types";
@@ -11,6 +11,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender } from "@/hooks/useRenderSession";
 import { MOD_KEY, QUALITY_OPTIONS, qualityShortLabel, qualityTooltip } from "@/lib/constants";
 import type { Quality } from "@/lib/types";
+import { focusIsFree } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import type { CodeEditorHandle } from "./types";
 
@@ -100,7 +101,9 @@ function ScenePicker({
         if (value === OTHER_SCENE) {
           setDraft(typed ?? "");
           setTyping(true);
-        } else {
+        } else if (scenes.includes(value) || value === typed) {
+          // Only a scene this file lists: the Select (or its hidden native select, on autofill)
+          // must never write another file's scene, or "", back as this file's choice.
           onSceneChange(value);
         }
       }}
@@ -160,6 +163,82 @@ interface EditorPaneProps {
 export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function EditorPane(props, ref) {
   const { activeFile, code, isDirty, scenes, selectedScene, quality, active } = props;
   const rendering = active !== null;
+  // The handle App holds. The editor itself only exists while a file is open, after its lazy
+  // chunk loads and Monaco mounts, so a focus() that comes first (New script from the empty
+  // Scripts list) waits for it, and what is typed in the meantime goes into the editor too.
+  const inner = useRef<CodeEditorHandle | null>(null);
+  const ready = useRef(false);
+  const pending = useRef<{ typed: string; stop: () => void } | null>(null);
+  const flushPending = useCallback(() => {
+    const wait = pending.current;
+    if (!wait || !inner.current || !ready.current) return;
+    pending.current = null;
+    wait.stop();
+    if (!focusIsFree()) return;
+    inner.current.focus();
+    if (wait.typed) inner.current.insertText(wait.typed, "inline");
+  }, []);
+  const focusWhenReady = useCallback(() => {
+    if (inner.current && ready.current) {
+      inner.current.focus();
+      return;
+    }
+    if (pending.current) return;
+    // Keys pressed before the editor is there would land on the page and be lost: keep the
+    // plain text ones (nothing with Ctrl/Cmd/Alt) while nothing else has focus.
+    const onKeyDown = (event: KeyboardEvent) => {
+      const wait = pending.current;
+      if (!wait || !focusIsFree() || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+      if (event.key.length === 1) wait.typed += event.key;
+      else if (event.key === "Enter") wait.typed += "\n";
+      else if (event.key === "Backspace") wait.typed = wait.typed.slice(0, -1);
+      else return;
+      event.preventDefault();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    // Give up if the editor never comes (the file failed to open).
+    const timer = window.setTimeout(() => {
+      pending.current?.stop();
+      pending.current = null;
+    }, 5000);
+    pending.current = {
+      typed: "",
+      stop: () => {
+        document.removeEventListener("keydown", onKeyDown, true);
+        window.clearTimeout(timer);
+      },
+    };
+  }, []);
+  useEffect(() => () => pending.current?.stop(), []);
+  // The editor unmounts with the last open file; the next one reports ready again when it mounts.
+  const hasFile = Boolean(activeFile);
+  useLayoutEffect(() => {
+    if (!hasFile) ready.current = false;
+  }, [hasFile]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      insertText: (text, mode) => inner.current?.insertText(text, mode) ?? false,
+      revealLine: (line) => inner.current?.revealLine(line),
+      setErrorMarker: (line, message) => inner.current?.setErrorMarker(line, message),
+      clearMarkers: () => inner.current?.clearMarkers(),
+      focus: focusWhenReady,
+    }),
+    [focusWhenReady],
+  );
+  const attachEditor = useCallback(
+    (handle: CodeEditorHandle | null) => {
+      // (Called with null and a new handle on every render of the editor, not only on unmount.)
+      inner.current = handle;
+      if (handle) flushPending();
+    },
+    [flushPending],
+  );
+  const onEditorReady = useCallback(() => {
+    ready.current = true;
+    flushPending();
+  }, [flushPending]);
+
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
   // Only when Render would otherwise be available (not while rendering, offline, ...).
   const blocked = props.canRender && props.renderBlocked ? props.renderBlocked : null;
@@ -333,7 +412,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
             }
           >
             <CodeEditor
-              ref={ref}
+              ref={attachEditor}
               path={`${props.storageKey}/${activeFile}`}
               value={code}
               fontSize={props.fontSize}
@@ -341,6 +420,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               onCursorChange={props.onCursorChange}
               onSave={props.onSave}
               onRender={props.onRender}
+              onReady={onEditorReady}
               syntaxError={props.syntaxError ? { line: props.syntaxError.line, message: props.syntaxError.message } : null}
             />
           </Suspense>

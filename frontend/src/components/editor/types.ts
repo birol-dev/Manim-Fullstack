@@ -11,6 +11,11 @@ export interface CodeEditorHandle {
   revealLine(lineNumber: number): void;
   setErrorMarker(lineNumber: number, message: string): void;
   clearMarkers(): void;
+  /**
+   * Focus the editor, or, if it is still loading (Monaco mounts asynchronously, and the
+   * first file of a session also waits for the editor chunk), as soon as it is ready,
+   * unless focus has gone somewhere else on purpose in the meantime.
+   */
   focus(): void;
 }
 
@@ -23,6 +28,8 @@ export interface CodeEditorProps {
   onSave?: () => void;
   onRender?: () => void;
   fontSize?: number;
+  /** Called once the editor can take focus and edits (Monaco mounts some time after rendering). */
+  onReady?: () => void;
   /** Live Python syntax error, shown as a squiggle independent of render errors. */
   syntaxError?: { line: number; message: string } | null;
 }

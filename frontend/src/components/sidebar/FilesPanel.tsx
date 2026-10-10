@@ -8,6 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { apiUrl, errorMessage } from "@/lib/api";
 import { dedupeExtension, formatBytes, formatRelativeTime, toScriptName, validateScriptName } from "@/lib/format";
 import type { MediaFile, StorageMode, WorkspaceFiles } from "@/lib/types";
+import { mediaScriptLabel } from "@/lib/preview";
 import { cn } from "@/lib/utils";
 import { RowActions, SidebarPanel } from "./SidebarPanel";
 
@@ -355,7 +356,8 @@ export function FilesPanel(props: FilesPanelProps) {
                 const Icon = item.type === "image" ? ImageIcon : Film;
                 // "720p30 · just now" stays together; the script name follows, or wraps to its own line.
                 const when = [item.quality, formatRelativeTime(item.modified)].filter(Boolean).join(" · ");
-                const script = item.script ? `${item.script}.py` : null;
+                // The script's current name (a rename mid-render keeps the old output folder).
+                const script = mediaScriptLabel(item);
                 return (
                   <li
                     key={item.path}

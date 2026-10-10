@@ -70,16 +70,14 @@ describe("R4 #2: render state is keyed by storage mode as well as file name", ()
     await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveValue(BROWSER_STARTER));
     expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/my_scene.py");
 
-    // Not this file's job: no overlay, Render stays Render (blocked, with the reason), a banner names it.
+    // Not this file's job: no overlay or Cancel strip; Render stays Render, blocked with the reason
+    // (which names where the running script lives).
     expect(overlay()).not.toBeInTheDocument();
-    expect(within(editorSection()).queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("button", { name: "Cancel" })).toEqual([]);
+    expect(screen.queryByTestId("other-render")).not.toBeInTheDocument();
     const render = within(editorSection()).getByRole("button", { name: "Render" });
     expect(render).toHaveAttribute("aria-disabled", "true");
     expect(document.getElementById("render-blocked-reason")).toHaveTextContent("from my_scene.py (in the workspace folder)");
-    const banner = screen.getByTestId("other-render");
-    expect(banner).toHaveTextContent("Rendering Intro from my_scene.py");
-    // Opening it by name would open the browser file of the same name.
-    expect(within(banner).queryByRole("button", { name: "Open" })).not.toBeInTheDocument();
 
     // Its result doesn't land in this file's preview or status either.
     finishWithVideo(socket, id, "my_scene", "Intro");

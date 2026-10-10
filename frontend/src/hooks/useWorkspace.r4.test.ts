@@ -107,6 +107,52 @@ describe("R4 #9: switching browser files never shows the previous file's scenes"
     const stale = seen.filter(([file, scenes, scene]) => file === "b.py" && (scenes.includes("Alpha") || scene === "Alpha"));
     expect(stale).toEqual([]);
   });
+
+  it("drops the scenes of a deleted file when no file is left open", async () => {
+    installFakeServer();
+    localStorage.setItem("mc.browserSeeded", "true");
+    writeBrowserFile("a.py", A);
+    const { result } = browserHook();
+    await waitFor(() => expect(result.current.scenes).toEqual(["Alpha"]));
+    await act(async () => {
+      await result.current.deleteFile("a.py");
+    });
+    expect(result.current.activeFile).toBeNull();
+    expect(result.current.scenes).toEqual([]);
+    expect(result.current.selectedScene).toBe("");
+    expect(result.current.animations).toEqual({});
+  });
+
+  it("never pairs the scenes of one storage mode's file with the other mode while switching", async () => {
+    installFakeServer({ scripts: { "other.py": "from manim import *\n\nclass Other(Scene):\n    pass\n" } });
+    writeBrowserFile("a.py", A);
+    const seen: Array<[string, string[], string]> = [];
+    const { result, rerender } = renderHook(
+      ({ mode }: { mode: "browser" | "disk" }) => {
+        const workspace = useWorkspace({ mode, online: true });
+        seen.push([mode, workspace.scenes, workspace.selectedScene]);
+        return workspace;
+      },
+      { initialProps: { mode: "browser" as "browser" | "disk" } },
+    );
+    await waitFor(() => expect(result.current.scenes).toEqual(["Alpha"]));
+    rerender({ mode: "disk" });
+    await waitFor(() => expect(result.current.scenes).toEqual(["Other"]));
+    expect(seen.filter(([mode, scenes, scene]) => mode === "disk" && (scenes.includes("Alpha") || scene === "Alpha"))).toEqual([]);
+  });
+
+  it("keeps the scenes when the open file is renamed", async () => {
+    installFakeServer();
+    writeBrowserFile("a.py", A);
+    const { result } = browserHook();
+    await waitFor(() => expect(result.current.scenes).toEqual(["Alpha"]));
+    await act(async () => {
+      await result.current.renameFile("a.py", "renamed.py");
+    });
+    expect(result.current.activeFile).toBe("renamed.py");
+    expect(result.current.scenes).toEqual(["Alpha"]);
+    expect(result.current.selectedScene).toBe("Alpha");
+  });
 });
 
 describe("R4 browser storage: rename, name clashes, and the starter script", () => {

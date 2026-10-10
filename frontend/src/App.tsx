@@ -34,6 +34,7 @@ import { horizontalDefaults, TOAST_TOP_PX, workPanelSizes } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
+import { forgetRenderOrigin, recordRenderOrigin, renameRenderOrigins } from "@/lib/renderOrigins";
 import { overallPercent, risingPercent } from "@/lib/progress";
 import { expandedStepCount, stepIndexForAnimation } from "@/lib/timeline";
 import { STORAGE_KEYS } from "@/lib/storage";
@@ -44,6 +45,7 @@ import type { AnimationStep, AssetFile, MediaFile, ParseResult, PreviewItem, Qua
 const LatexPanel = lazy(() => import("@/components/sidebar/LatexPanel").then((module) => ({ default: module.LatexPanel })));
 
 const AUTO_RENDER_DELAY_MS = 1500;
+const NO_LOGS: never[] = [];
 const NO_STEPS: AnimationStep[] = [];
 const SETUP_SHOWN_KEY = "mc.setupShown";
 
@@ -177,6 +179,7 @@ export default function App() {
   const handleOutput = useCallback(
     async (output: RenderOutput, render: ActiveRender) => {
       const { filename: file, scene } = render.request;
+      const storage = render.request.storage ?? "disk";
       const title = scene;
       // The preview follows the open file; a render of a file you switched away from only lands in Renders.
       const stillOpen = () => isFor(render.request, storageModeRef.current, activeFileRef.current);
@@ -186,7 +189,7 @@ export default function App() {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const url = URL.createObjectURL(await response.blob());
           if (stillOpen()) {
-            showPreview({ url, kind: output.kind, title, location: "Downloaded · not kept on the server", downloadName: output.filename, file, scene });
+            showPreview({ url, kind: output.kind, title, location: "Downloaded · not kept on the server", downloadName: output.filename, file, scene, storage });
           }
           triggerDownload(url, output.filename);
           if (!stillOpen()) URL.revokeObjectURL(url);
@@ -195,16 +198,21 @@ export default function App() {
         }
         return;
       }
+      // The output folder is named after the script whatever its storage: remember which
+      // mode (and which name, after a rename mid-render) this output belongs to.
+      const mediaPath = output.relPath.replace(/^media\//, "");
+      recordRenderOrigin(mediaPath, storage, file);
       if (stillOpen()) {
         showPreview({
           url: `${apiUrl(output.url)}?v=${Date.now()}`,
           kind: output.kind,
           title,
           location: `workspace/${output.relPath}`,
-          mediaPath: output.relPath.replace(/^media\//, ""),
+          mediaPath,
           downloadName: output.filename,
           file,
           scene,
+          storage,
         });
       } else {
         toast.success(`${scene} rendered`, { description: `${file} isn't open, so it's in the Renders list.` });
@@ -225,10 +233,11 @@ export default function App() {
         // last good render instead of whatever unrelated clip was showing before.
         const failedOrEmpty = failed || outcome.success;
         const current = previewRef.current;
-        if (previewBelongsTo(current, filename, scene)) {
+        const storage = outcome.request.storage ?? "disk";
+        if (previewBelongsTo(current, filename, scene, storage)) {
           if (failedOrEmpty && current && !current.stale) showPreview({ ...current, stale: true });
         } else {
-          const last = latestRenderFor(filesRef.current.media, filename, scene);
+          const last = latestRenderFor(filesRef.current.media, filename, scene, storage);
           showPreview(last ? { ...previewFromMedia(last), stale: failedOrEmpty } : null);
         }
       }
@@ -464,15 +473,24 @@ export default function App() {
   // instead of "Nothing rendered yet" or a clip from another file.
   const filesReady = workspace.filesStatus === "ready";
   const bindKey = filesReady && workspace.activeFile ? `${storageMode}\n${workspace.activeFile}\n${workspace.selectedScene}` : null;
+  const noFileOpen = filesReady && !workspace.activeFile;
   useEffect(() => {
     const file = activeFileRef.current;
     if (!bindKey || !file) return;
     const scene = workspace.selectedScene;
-    if (previewBelongsTo(previewRef.current, file, scene)) return;
-    const last = latestRenderFor(filesRef.current.media, file, scene);
+    const storage = storageModeRef.current;
+    if (previewBelongsTo(previewRef.current, file, scene, storage)) return;
+    // Only this storage mode's renders: a browser file's my_scene.py never shows the
+    // workspace folder's my_scene.py output (they share the server's output folder).
+    const last = latestRenderFor(filesRef.current.media, file, scene, storage);
     showPreview(last ? previewFromMedia(last) : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bindKey, showPreview]);
+  // No script open (the last one was deleted, or another storage mode has none): a preview
+  // that followed a file goes too; one picked from the Renders list stays.
+  useEffect(() => {
+    if (noFileOpen && previewRef.current && !previewRef.current.pinned) showPreview(null);
+  }, [noFileOpen, storageMode, showPreview]);
 
   // ---- Auto-render -------------------------------------------------------
   const codeRef = useRef(workspace.code);
@@ -612,6 +630,7 @@ export default function App() {
       onConfirm: async () => {
         await workspace.deleteMedia(item);
         if (previewRef.current?.mediaPath === item.path) showPreview(null);
+        forgetRenderOrigin(item.path);
       },
     });
 
@@ -643,7 +662,10 @@ export default function App() {
   // From the displayed render, so a quick cancel's "Stopping…" stays up (useMinimumStopping).
   const shown = shownRender.active;
   const ownRender = shown && isFor(shown.request, storageMode, workspace.activeFile) ? shown : null;
-  const otherRender = shown && !ownRender ? shown : null;
+  // Another file's job in this storage mode gets the preview banner (with Cancel). One from the
+  // other mode doesn't: it isn't about any file shown here (the status bar and Render's blocked
+  // reason still say what is running and where).
+  const otherRender = shown && !ownRender && (shown.request.storage ?? "disk") === storageMode ? shown : null;
   const sceneSteps = workspace.animations[workspace.selectedScene];
   const sameSteps = useMemo(() => JSON.stringify(sceneSteps ?? []) === JSON.stringify(renderingSteps), [sceneSteps, renderingSteps]);
   const [percentFloor, setPercentFloor] = useState<{ id: string; value: number } | null>(null);
@@ -709,26 +731,31 @@ export default function App() {
             onOpen={openFile}
             onNew={() => setNewFile({ suggestedName: uniqueName("scene.py", scriptNames) })}
             onRename={async (oldName, newName) => {
+              // Everything about the file follows it: a running render (progress, Cancel,
+              // result), its last outcome, the console's line links, its renders, and the preview.
+              // (Run by renameFile before the open file takes the new name, in the same update.)
+              const follow = () => {
+                session.retarget(storageMode, oldName, newName);
+                // Its renders so far follow it too (their output folder keeps the old name).
+                renameRenderOrigins(storageMode, oldName, newName);
+                const renamed = (request: RenderRequest) => ({ ...request, filename: newName });
+                setLastOutcome((outcome) => (outcome && isFor(outcome.request, storageMode, oldName) ? { ...outcome, request: renamed(outcome.request) } : outcome));
+                setLogsFile((logs) => (logs && logs.storage === storageMode && logs.file === oldName ? { ...logs, file: newName } : logs));
+                const current = previewRef.current;
+                if (current?.file === oldName && (current.storage ?? "disk") === storageMode) showPreview({ ...current, file: newName });
+              };
               try {
-                await workspace.renameFile(oldName, newName);
+                await workspace.renameFile(oldName, newName, follow);
               } catch (err) {
                 // Renamed or deleted in another tab: the "no longer exists" dialog (Recreate)
                 // takes over; the editor keeps the text.
                 if (err instanceof SaveConflictError) return reportSaveError(err, "Couldn't rename the file.");
                 throw err;
               }
-              // Everything about the file follows it: a running render (progress, Cancel,
-              // result), its last outcome, the console's line links, and the preview.
-              session.retarget(storageMode, oldName, newName);
-              const renamed = (request: RenderRequest) => ({ ...request, filename: newName });
-              setLastOutcome((outcome) => (outcome && isFor(outcome.request, storageMode, oldName) ? { ...outcome, request: renamed(outcome.request) } : outcome));
-              setLogsFile((logs) => (logs && logs.storage === storageMode && logs.file === oldName ? { ...logs, file: newName } : logs));
-              const current = previewRef.current;
-              if (current?.file === oldName) showPreview({ ...current, file: newName });
             }}
             onDelete={requestDeleteScript}
             onRefresh={() => void workspace.refresh()}
-            onPreviewMedia={(item) => showPreview(previewFromMedia(item))}
+            onPreviewMedia={(item) => showPreview({ ...previewFromMedia(item), pinned: true })}
             onDeleteMedia={requestDeleteMedia}
             onCompare={() => setCompareOpen(true)}
           />
@@ -862,7 +889,7 @@ export default function App() {
                         active={ownRender}
                         otherRender={otherRender}
                         // A job from the other storage mode can't be opened by name from here.
-                        onOpenFile={otherRender && !isFor(otherRender.request, storageMode, otherRender.request.filename) ? undefined : openFile}
+                        onOpenFile={openFile}
                         stopping={shownRender.stopping}
                         stepCount={expandedStepCount(renderingSteps)}
                         lastOutcome={ownOutcome}
@@ -904,7 +931,9 @@ export default function App() {
                     }}
                     collapsed={bottomCollapsed}
                     onToggleCollapsed={() => (bottomCollapsed ? bottomPanelRef.current?.expand() : bottomPanelRef.current?.collapse())}
-                    logs={logs}
+                    // The console belongs to its render's storage mode: a workspace render's output
+                    // isn't shown next to browser-storage files (it comes back when you switch back).
+                    logs={logsFile && logsFile.storage !== storageMode ? NO_LOGS : logs}
                     linkFiles={linkFiles}
                     logsFile={logsFile && logsFile.storage === storageMode && logsFile.file !== workspace.activeFile ? logsFile.file : null}
                     onOpenLogsFile={openFile}

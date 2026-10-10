@@ -1,6 +1,6 @@
 // Test helper, never hot-reloaded.
 /* eslint-disable react-refresh/only-export-components */
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 
 import type { CodeEditorHandle, CodeEditorProps } from "@/components/editor/types";
 
@@ -33,6 +33,9 @@ export const FakeCodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(func
       textarea.current?.focus();
     },
   }));
+
+  // A textarea is ready at once (Monaco reports it from onMount).
+  useEffect(() => latest.current.onReady?.(), []);
 
   return (
     <textarea

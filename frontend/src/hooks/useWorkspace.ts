@@ -150,6 +150,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   const [savedCode, setSavedCode] = useState("");
   const [parsed, setParsed] = useState<ParseResult>(EMPTY_PARSE);
   const [selectedScene, setSelectedSceneState] = useState("");
+  // The file ("mode:file") the parse result and selected scene describe. Read through this,
+  // the scene picker, timeline and Render can never show one file's scenes for another,
+  // whatever order the state updates of a file switch land in.
+  const [parsedFor, setParsedFor] = useState<string | null>(null);
   // "mode:file" -> unsaved contents of files that are not currently open.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
@@ -192,6 +196,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     parsedCodeRef.current = source;
     parsedRef.current = result;
     setParsed(result);
+    setParsedFor(file ? fileKey(modeRef.current, file) : null);
     const remembered = file
       ? readStored<Record<string, string>>(STORAGE_KEYS.sceneByFile, {})[fileKey(modeRef.current, file)]
       : undefined;
@@ -453,8 +458,13 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     [openFile, refreshFiles],
   );
 
+  /**
+   * Rename a script. *onRenamed* runs once the rename has happened and before the open file
+   * takes the new name, so whatever follows the file (a render, the preview) moves with it in
+   * the same update instead of seeing the new name with nothing attached for a moment.
+   */
   const renameFile = useCallback(
-    async (oldName: string, newName: string) => {
+    async (oldName: string, newName: string, onRenamed?: () => void) => {
       if (oldName === newName) return;
       if (modeRef.current === "browser") {
         const source = readBrowserFile(oldName);
@@ -478,6 +488,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       } else {
         await postJson("/api/rename", { old_name: oldName, new_name: newName });
       }
+      onRenamed?.();
       const oldKey = fileKey(modeRef.current, oldName);
       if (oldKey in versionsRef.current) {
         versionsRef.current[fileKey(modeRef.current, newName)] = versionsRef.current[oldKey];
@@ -503,6 +514,8 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       if (activeFileRef.current === oldName) {
         activeFileRef.current = newName;
         setActiveFile(newName);
+        // Same buffer, same scenes: they follow the new name.
+        setParsedFor((owner) => (owner === oldKey ? newKey : owner));
         writeStored(activeFileKey(modeRef.current), newName);
       }
       await refreshFiles();
@@ -717,6 +730,10 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     .filter((key) => key.startsWith(prefix))
     .map((key) => key.slice(prefix.length));
   const isDirty = activeFile !== null && code !== savedCode;
+  // Only the open file's parse and scene (empty until it has been parsed).
+  const ownsParse = activeFile !== null && parsedFor === fileKey(mode, activeFile);
+  const current = ownsParse ? parsed : EMPTY_PARSE;
+  const currentScene = ownsParse ? selectedScene : "";
   if (isDirty && activeFile) dirtyFiles.push(activeFile);
 
   return {
@@ -729,12 +746,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     dirtyFiles,
     hasUnsavedWork: isDirty || Object.keys(drafts).length > 0,
     discardChanges,
-    scenes: parsed.scenes,
-    syntaxError: parsed.syntaxError ?? null,
-    animations: parsed.animations,
-    selectedScene,
+    scenes: current.scenes,
+    syntaxError: current.syntaxError ?? null,
+    animations: current.animations,
+    selectedScene: currentScene,
     /** The selected scene was typed in ("Other scene…"), not found by the parser. */
-    selectedSceneTyped: selectedScene !== "" && !parsed.scenes.includes(selectedScene),
+    selectedSceneTyped: currentScene !== "" && !current.scenes.includes(currentScene),
     setSelectedScene,
     refreshFiles,
     refresh,
