@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import Editor, { type OnMount } from "@monaco-editor/react";
 
 import { IS_MAC } from "@/lib/constants";
-import { focusNextAfter } from "@/lib/focus";
+import { focusIsFree, focusNextAfter } from "@/lib/focus";
 import { isInsertRefusal, planBlockInsert } from "@/lib/insert";
 import { EDITOR_THEME, monaco, TabFocus } from "@/lib/monaco";
 import type { CodeEditorHandle, CodeEditorProps } from "./types";
@@ -47,10 +47,12 @@ function applySyntaxMarker(editor: StandaloneEditor | null, marker: { line: numb
 }
 
 const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEditor(
-  { path, value, onChange, onCursorChange, onSave, onRender, fontSize = 13, syntaxError = null },
+  { path, value, onChange, onCursorChange, onSave, onRender, onReady, fontSize = 13, syntaxError = null },
   ref,
 ) {
   const editorRef = useRef<StandaloneEditor | null>(null);
+  // focus() called before Monaco mounted: done in handleMount.
+  const pendingFocus = useRef(false);
   const [focused, setFocused] = useState(false);
   const [tabFocusMode, setTabFocusMode] = useState(false);
   // Keyboard actions are registered once; read the latest callbacks through refs.
@@ -58,7 +60,9 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
   const renderRef = useRef(onRender);
   const cursorRef = useRef(onCursorChange);
   const syntaxRef = useRef(syntaxError);
+  const readyRef = useRef(onReady);
   useEffect(() => {
+    readyRef.current = onReady;
     saveRef.current = onSave;
     renderRef.current = onRender;
     cursorRef.current = onCursorChange;
@@ -120,13 +124,19 @@ const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function CodeEd
       for (const model of monaco.editor.getModels()) monaco.editor.setModelMarkers(model, MARKER_OWNER, []);
     },
     focus() {
-      editorRef.current?.focus();
+      if (editorRef.current) editorRef.current.focus();
+      else pendingFocus.current = true;
     },
   }));
 
   const handleMount: OnMount = (editor) => {
     editorRef.current = editor;
     applySyntaxMarker(editor, syntaxRef.current);
+    if (pendingFocus.current) {
+      pendingFocus.current = false;
+      if (focusIsFree()) editor.focus();
+    }
+    readyRef.current?.();
     editor.addAction({
       id: "manim.save",
       label: "Save File",

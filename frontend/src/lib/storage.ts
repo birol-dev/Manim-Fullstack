@@ -67,20 +67,133 @@ class MyScene(Scene):
         self.play(FadeOut(text))
 `;
 
-/** Scripts kept in this browser (storage mode "browser"). Seeds a starter file. */
-export function loadBrowserFiles(): Record<string, string> {
-  const files = readStored<Record<string, string> | null>(STORAGE_KEYS.browserFiles, null);
-  if (files && typeof files === "object" && Object.keys(files).length > 0) return files;
-  const seeded = { [BROWSER_STARTER_NAME]: BROWSER_STARTER };
-  writeStored(STORAGE_KEYS.browserFiles, seeded);
-  return seeded;
+// ---- Browser-storage scripts --------------------------------------------------
+// One localStorage key per script ("mc.browserFile:<name>"), so a tab whose view of
+// storage is stale can only ever write the file it saves, never another tab's file.
+// Older versions kept every script in one JSON map (mc.browserFiles, before that
+// manim_composer_browser_files); it is migrated on first read and removed.
+
+const BROWSER_FILE_PREFIX = "mc.browserFile:";
+/** Set once the starter script has been offered, so deleting every script leaves an empty list. */
+const BROWSER_SEEDED_KEY = "mc.browserSeeded";
+
+/** localStorage key that holds the browser-storage script *name*. */
+export function browserFileKey(name: string): string {
+  return `${BROWSER_FILE_PREFIX}${name}`;
 }
 
-export function saveBrowserFiles(files: Record<string, string>): boolean {
+/** True for a "storage" event key that can change the browser-storage scripts. */
+export function isBrowserFilesKey(key: string | null): boolean {
+  return key === null || key.startsWith(BROWSER_FILE_PREFIX) || key === STORAGE_KEYS.browserFiles;
+}
+
+function storage(): Storage | null {
   try {
-    window.localStorage.setItem(STORAGE_KEYS.browserFiles, JSON.stringify(files));
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function storedNames(store: Storage): string[] {
+  const names: string[] = [];
+  for (let index = 0; index < store.length; index += 1) {
+    const key = store.key(index);
+    if (key?.startsWith(BROWSER_FILE_PREFIX)) names.push(key.slice(BROWSER_FILE_PREFIX.length));
+  }
+  return names;
+}
+
+/** Move the old one-map format into per-file keys (files already stored per key win). */
+function migrateBrowserMap(store: Storage): void {
+  const legacyKeys = [STORAGE_KEYS.browserFiles, "manim_composer_browser_files"];
+  for (const key of legacyKeys) {
+    let raw: string | null;
+    try {
+      raw = store.getItem(key);
+    } catch {
+      return;
+    }
+    if (raw === null) continue;
+    let map: unknown;
+    try {
+      map = JSON.parse(raw);
+    } catch {
+      map = null;
+    }
+    try {
+      if (map && typeof map === "object") {
+        for (const [name, content] of Object.entries(map as Record<string, unknown>)) {
+          if (typeof content !== "string" || store.getItem(browserFileKey(name)) !== null) continue;
+          store.setItem(browserFileKey(name), content);
+        }
+      }
+      store.setItem(BROWSER_SEEDED_KEY, "true");
+      store.removeItem(key);
+    } catch {
+      return; // Storage full: keep the map, try again next time.
+    }
+  }
+}
+
+/** Read one browser-storage script, or undefined when it doesn't exist. */
+export function readBrowserFile(name: string): string | undefined {
+  const store = storage();
+  if (!store) return undefined;
+  migrateBrowserMap(store);
+  try {
+    return store.getItem(browserFileKey(name)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Write one browser-storage script. False when storage is full or unavailable. */
+export function writeBrowserFile(name: string, content: string): boolean {
+  const store = storage();
+  if (!store) return false;
+  try {
+    store.setItem(browserFileKey(name), content);
+    store.setItem(BROWSER_SEEDED_KEY, "true");
     return true;
   } catch {
     return false;
   }
+}
+
+export function deleteBrowserFile(name: string): void {
+  try {
+    storage()?.removeItem(browserFileKey(name));
+  } catch {
+    // nothing to do
+  }
+}
+
+/**
+ * Scripts kept in this browser (storage mode "browser"). The starter script is
+ * added the first time only; after the user deletes everything the list stays empty.
+ */
+export function loadBrowserFiles(): Record<string, string> {
+  const store = storage();
+  if (!store) return {};
+  migrateBrowserMap(store);
+  const files: Record<string, string> = {};
+  for (const name of storedNames(store)) {
+    try {
+      const content = store.getItem(browserFileKey(name));
+      if (content !== null) files[name] = content;
+    } catch {
+      // skip
+    }
+  }
+  let seeded: boolean;
+  try {
+    seeded = store.getItem(BROWSER_SEEDED_KEY) !== null;
+  } catch {
+    seeded = true;
+  }
+  if (Object.keys(files).length === 0 && !seeded) {
+    if (writeBrowserFile(BROWSER_STARTER_NAME, BROWSER_STARTER)) files[BROWSER_STARTER_NAME] = BROWSER_STARTER;
+  }
+  return files;
 }

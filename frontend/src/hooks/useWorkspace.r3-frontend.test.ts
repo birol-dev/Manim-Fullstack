@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 
 import { useWorkspace } from "./useWorkspace";
-import { STORAGE_KEYS } from "@/lib/storage";
+import { loadBrowserFiles, STORAGE_KEYS, writeBrowserFile } from "@/lib/storage";
 import { installFakeServer } from "@/test/fakeServer";
 
-const stored = () => JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!) as Record<string, string>;
+const stored = () => loadBrowserFiles();
 
 describe("useWorkspace: a save right after a keystroke (R3 verify B)", () => {
   it("saves the keystroke, and the other tab then gets the conflict instead of silently overwriting it", async () => {
@@ -26,7 +26,7 @@ describe("useWorkspace: a save right after a keystroke (R3 verify B)", () => {
     // The second tab, still based on "# v1", now has to ask.
     const other = renderHook(() => useWorkspace({ mode: "browser", online: true }));
     await waitFor(() => expect(other.result.current.activeFile).toBe("a.py"));
-    localStorage.setItem(STORAGE_KEYS.browserFiles, JSON.stringify({ "a.py": "# v1\n# tab one, again\n" }));
+    writeBrowserFile("a.py", "# v1\n# tab one, again\n");
     let error: unknown = null;
     await act(async () => {
       other.result.current.setCode("# v1\n# tab two\n");

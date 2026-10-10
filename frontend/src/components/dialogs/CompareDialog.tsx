@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiUrl } from "@/lib/api";
+import { mediaScriptLabel } from "@/lib/preview";
 import type { MediaFile } from "@/lib/types";
 
 interface CompareDialogProps {
@@ -16,7 +17,7 @@ interface CompareDialogProps {
 const DRIFT_TOLERANCE_S = 0.08;
 
 function label(video: MediaFile) {
-  return [video.scene, video.quality, video.script && `${video.script}.py`].filter(Boolean).join(" · ");
+  return [video.scene, video.quality, mediaScriptLabel(video)].filter(Boolean).join(" · ");
 }
 
 function formatTime(seconds: number) {

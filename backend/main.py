@@ -1022,6 +1022,15 @@ def save_file(req: SaveRequest):
             if current is None:
                 raise HTTPException(status_code=404, detail="This file was renamed or deleted outside this tab.")
             if current != req.base_version:
+                # Same bytes as on disk already (both sides made the same edit, or it was
+                # touched without changing): nothing to lose, so no conflict and no write.
+                try:
+                    with open(filepath, "rb") as existing:
+                        same = existing.read() == data
+                except OSError:
+                    same = False
+                if same:
+                    return {"success": True, "filename": filename, "message": "File saved.", "version": current, **_parsed(req.code)}
                 return _version_conflict("This file was changed outside this tab since you opened it.", current)
         _reject_case_collision(WORKSPACE_DIR, filename)
         try:

@@ -8,7 +8,7 @@ vi.mock("@/components/editor/CodeEditor", async () => {
 });
 
 import App from "./App";
-import { BROWSER_STARTER, STORAGE_KEYS } from "@/lib/storage";
+import { BROWSER_STARTER, loadBrowserFiles, STORAGE_KEYS } from "@/lib/storage";
 import { editorCalls } from "@/test/fakeEditor";
 import { DIAGNOSTICS, EXAMPLE_CODE, installFakeServer, media, type FakeServer } from "@/test/fakeServer";
 import { FakeWebSocket } from "@/test/fakeSocket";
@@ -67,7 +67,7 @@ describe("App", () => {
     act(() => socket.emit({ type: "progress", render_id: id, percent: 50, animation: 0, label: "Create(Circle())" }));
     expect(await screen.findByText("Animation 1 of 2 · Create(Circle())")).toBeInTheDocument();
     expect(document.title).toBe("25% · example.py — Manim Composer");
-    expect(within(screen.getByRole("status")).getByText("25%")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("25%")).toBeInTheDocument();
 
     act(() => {
       socket.emit({
@@ -129,7 +129,8 @@ describe("App", () => {
     expect(editorCalls).toContainEqual(["marker", 7, "NameError: name 'x' is not defined"]);
     expect(screen.getByText("Render failed")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Go to line 7" }));
+    // The console row (and its link button) can commit a tick after the toast.
+    await user.click(await screen.findByRole("button", { name: "Go to line 7" }));
     expect(editorCalls).toContainEqual(["reveal", 7]);
   });
 
@@ -263,7 +264,7 @@ describe("App", () => {
     expect(calls(server, "GET", "/api/file-content")).toHaveLength(0);
 
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)["my_scene.py"]).toContain("# local"));
+    await waitFor(() => expect(loadBrowserFiles()["my_scene.py"]).toContain("# local"));
   });
 
   it("saves with Ctrl+S", async () => {

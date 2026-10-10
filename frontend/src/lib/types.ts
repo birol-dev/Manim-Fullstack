@@ -123,4 +123,8 @@ export interface PreviewItem {
   /** Script and scene the render came from, when known. The preview follows the open file. */
   file?: string;
   scene?: string;
+  /** Storage mode of that script (a browser-storage file and a workspace file can share a name). */
+  storage?: StorageMode;
+  /** Picked from the Renders list: kept when no script is open (a preview that followed a file is not). */
+  pinned?: boolean;
 }

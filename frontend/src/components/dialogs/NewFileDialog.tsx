@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +18,8 @@ interface NewFileDialogProps {
   existing: string[];
   onClose: () => void;
   onCreate: (name: string) => Promise<void>;
+  /** Where focus goes once the file is created (cancelling returns it to the opener). */
+  onCreatedFocus?: () => void;
 }
 
 function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProps & { request: NewFileRequest }) {
@@ -85,11 +87,26 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
 }
 
 export function NewFileDialog(props: NewFileDialogProps) {
+  // Set when the file was created: focus then goes to props.onCreatedFocus instead of back to the opener.
+  const created = useRef(false);
+  const onCreate = async (name: string) => {
+    await props.onCreate(name);
+    created.current = true;
+  };
   return (
     <Dialog open={props.request !== null} onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent
+        className="max-w-sm"
+        onCloseAutoFocus={(event) => {
+          if (!created.current) return;
+          created.current = false;
+          if (!props.onCreatedFocus) return;
+          event.preventDefault();
+          props.onCreatedFocus();
+        }}
+      >
         {/* Remount per request so the form starts fresh. */}
-        {props.request && <NewFileForm key={props.request.suggestedName} {...props} request={props.request} />}
+        {props.request && <NewFileForm key={props.request.suggestedName} {...props} request={props.request} onCreate={onCreate} />}
       </DialogContent>
     </Dialog>
   );
