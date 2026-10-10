@@ -1,6 +1,7 @@
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
+from tests.media_bytes import MP4, write_media
 
 import main
 from main import (
@@ -187,7 +188,7 @@ def test_files_list_endpoint_and_default_generation(client, tmp_path):
 
                 (tmp_path / "scene_a.py").write_text("class SceneA(Scene): pass", encoding="utf-8")
                 (assets_dir / "logo.svg").write_text("<svg></svg>", encoding="utf-8")
-                (videos_dir / "render.mp4").write_text("video", encoding="utf-8")
+                (videos_dir / "render.mp4").write_bytes(MP4)
 
                 res = client.get("/api/files")
                 assert res.status_code == 200
@@ -732,11 +733,11 @@ def ws_dirs(tmp_path):
 def test_media_listing_metadata_and_order(client, ws_dirs):
     root, media, _ = ws_dirs
     _write(root / "demo.py")
-    _write(media / "videos" / "demo" / "480p15" / "Old.mp4", mtime=100)
-    _write(media / "videos" / "demo" / "1080p60" / "New Scene.mp4", mtime=300)
-    _write(media / "images" / "demo" / "Still_ManimCE_v0.21.0.png", mtime=200)
-    _write(media / "videos" / "demo" / "480p15" / "partial_movie_files" / "Old" / "chunk.mp4", mtime=400)
-    _write(media / "videos" / "_temp_run_abcd1234" / "480p15" / "Tmp.mp4", mtime=500)
+    write_media(media / "videos" / "demo" / "480p15" / "Old.mp4", mtime=100)
+    write_media(media / "videos" / "demo" / "1080p60" / "New Scene.mp4", mtime=300)
+    write_media(media / "images" / "demo" / "Still_ManimCE_v0.21.0.png", mtime=200)
+    write_media(media / "videos" / "demo" / "480p15" / "partial_movie_files" / "Old" / "chunk.mp4", mtime=400)
+    write_media(media / "videos" / "_temp_run_abcd1234" / "480p15" / "Tmp.mp4", mtime=500)
 
     items = client.get("/api/files").json()["media"]
     assert [item["name"] for item in items] == ["New Scene.mp4", "Still_ManimCE_v0.21.0.png", "Old.mp4"]

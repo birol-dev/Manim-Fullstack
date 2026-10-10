@@ -11,10 +11,12 @@ Events passed to ``log_callback`` are plain dicts with a ``type`` key:
 
 import asyncio
 import codecs
+import ctypes
 import functools
 import os
 import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,6 +24,8 @@ import sysconfig
 import tempfile
 import time
 import unicodedata
+
+from file_ops import locked, move_into_place
 
 VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm")
 IMAGE_EXTENSIONS = (".png", ".gif")
@@ -174,8 +178,10 @@ def _compile_redaction(workspace_dir, app_root, home, tmp):
     if with_separator:
         whole = rf"(?:{alternation(with_separator)})|{whole}"
     # ...and must start a path: "/workspace" inside "/srv/workspace" is left alone,
-    # except right after a file:// scheme.
-    start = r"(?:(?<=file://)|(?<=file:///)|(?<![\w.\-/\\]))"
+    # except right after a file:// scheme. A path glued to a word ("id" + cwd) is
+    # matched too; redact_with_offsets() keeps it only when that word is not itself
+    # part of a longer path or URL (see _glued_path_allowed).
+    start = r"(?:(?<=file://)|(?<=file:///)|(?<![.\-/\\]))"
     pattern = re.compile(rf"{start}(?:{whole})", re.IGNORECASE if fold else 0)
     return pattern, lookup
 
@@ -187,6 +193,28 @@ def _redaction_for(workspace_dir, app_root=None):
         os.path.expanduser("~"),
         tempfile.gettempdir(),
     )
+
+
+# A host path stuck to the end of a word ("id/home/me/project/x.py", from code like
+# "id" + os.getcwd()) is still a host path when the word is not part of a longer
+# path or URL. Only paths of at least this many components are redacted that way,
+# so "build/tmp/x" or "data/home/me" in ordinary text are left alone.
+GLUED_MIN_COMPONENTS = 3
+# Characters that end the "word" a glued path is attached to.
+GLUE_BOUNDARY = set(" \t\"'`([{<=,;|")
+
+
+def _glued_path_allowed(text: str, start: int, key: str) -> bool:
+    """For a match at *start* preceded by a word character: redact it?"""
+    components = [part for part in key.replace("\\", "/").split("/") if part and not part.endswith(":")]
+    if len(components) < GLUED_MIN_COMPONENTS:
+        return False
+    index = start
+    while index > 0 and text[index - 1] not in GLUE_BOUNDARY:
+        index -= 1
+    word = text[index:start]
+    # "https://host/home/me/..." or "src/home/me/...": the path is part of something longer.
+    return not any(ch in word for ch in "/\\:")
 
 
 def redact_with_offsets(text: str, workspace_dir, app_root=None):
@@ -203,9 +231,16 @@ def redact_with_offsets(text: str, workspace_dir, app_root=None):
     last = 0
     length = 0
     for match in pattern.finditer(text):
+        key = match.group(0).lower() if fold else match.group(0)
+        before = text[match.start() - 1] if match.start() else ""
+        glued = (before.isalnum() or before == "_") and text[max(0, match.start() - 7):match.start()].lower() not in ("file://", "ile:///")
+        if glued and not _glued_path_allowed(text, match.start(), key):
+            continue
         pieces.append(text[last:match.start()])
         length += match.start() - last
-        replacement = lookup[match.group(0).lower() if fold else match.group(0)]
+        replacement = lookup[key]
+        if glued and replacement == "":
+            replacement = WORKSPACE_MARKER + os.sep  # "id" + "scene.py" would read as one name
         if replacement == "" and text[max(0, match.start() - 7):match.start()].lower() in ("file://", "ile:///"):
             replacement = WORKSPACE_MARKER + "/"  # "file://scene.py" would not be a URI
         pieces.append(replacement)
@@ -238,6 +273,205 @@ def output_kind(path: str) -> str:
     return "image" if path.lower().endswith(IMAGE_EXTENSIONS) else "video"
 
 
+def mp4_is_complete(path: str) -> bool:
+    """True when the top-level MP4 boxes tile the whole file and include ``moov``.
+
+    Manim encodes each play() straight into its cache path
+    (``partial_movie_files/<Scene>/<hash>.mp4``). A process killed mid-segment
+    leaves a header-only or moov-less file at that path, and Manim's cache check
+    is only ``path.exists()``, so every later render "uses cached data" and then
+    fails to combine with InvalidDataError. Reads box headers only.
+    """
+    try:
+        size = os.path.getsize(path)
+        seen_moov = False
+        with open(path, "rb") as f:
+            pos = 0
+            while pos < size:
+                f.seek(pos)
+                head = f.read(8)
+                if len(head) < 8:
+                    return False
+                box_size = int.from_bytes(head[:4], "big")
+                if box_size == 1:
+                    ext = f.read(8)
+                    if len(ext) < 8:
+                        return False
+                    box_size = int.from_bytes(ext, "big")
+                elif box_size == 0:
+                    box_size = size - pos  # "to end of file": only valid for the last box
+                if box_size < 8 or pos + box_size > size:
+                    return False
+                if head[4:8] == b"moov":
+                    seen_moov = True
+                pos += box_size
+        return seen_moov
+    except OSError:
+        return False
+
+
+def media_file_is_complete(path: str) -> bool:
+    """Cheap header/trailer check that a rendered output was written to the end.
+
+    MP4/MOV need their ``moov`` box; PNG must end with IEND, GIF with its trailer,
+    WebM must start with an EBML header. Empty files never count.
+    """
+    lower = path.lower()
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return False
+        size = os.path.getsize(path)
+        if size == 0:
+            return False
+        if lower.endswith((".mp4", ".mov")):
+            return mp4_is_complete(path)
+        with open(path, "rb") as f:
+            head = f.read(16)
+            f.seek(max(0, size - 16))
+            tail = f.read(16)
+    except OSError:
+        return False
+    if lower.endswith(".png"):
+        return head.startswith(b"\x89PNG\r\n\x1a\n") and b"IEND" in tail
+    if lower.endswith(".gif"):
+        return head[:6] in (b"GIF87a", b"GIF89a") and tail.endswith(b"\x3b")
+    if lower.endswith(".webm"):
+        return head.startswith(b"\x1a\x45\xdf\xa3") and size > 64
+    return True
+
+
+# Per-run folder Manim writes final outputs to (media/{videos,images}/<stem>/.~run-<id>).
+# Its files are moved over the real ones only after Manim succeeded and they passed
+# media_file_is_complete(), so a failed or cancelled render never replaces a good video.
+STAGE_PREFIX = ".~run-"
+
+
+class StagedOutputError(Exception):
+    """Manim exited cleanly but one of its outputs is incomplete."""
+
+
+def stage_roots(media_dir: str, stem: str, stage: str) -> list:
+    """(staging folder, final folder) for videos and images."""
+    return [
+        (os.path.join(media_dir, sub, stem, stage), os.path.join(media_dir, sub, stem))
+        for sub in ("videos", "images")
+    ]
+
+
+def promote_staged_outputs(media_dir: str, stem: str, stage: str) -> dict:
+    """Move a successful run's outputs from its staging folders to their real place.
+
+    Every output is checked first; if any is incomplete nothing is moved and
+    StagedOutputError is raised. Returns {staged path: final path}.
+    """
+    moves = []
+    for stage_root, final_root in stage_roots(media_dir, stem, stage):
+        for dirpath, _dirnames, filenames in os.walk(stage_root):
+            for name in filenames:
+                src = os.path.join(dirpath, name)
+                if os.path.islink(src):
+                    continue
+                if name.lower().endswith(OUTPUT_EXTENSIONS) and not media_file_is_complete(src):
+                    raise StagedOutputError(f"{name} is incomplete")
+                moves.append((src, os.path.join(final_root, os.path.relpath(src, stage_root))))
+    moved = {}
+    for src, dst in moves:
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        # Same lock table as saves/uploads; move_into_place is an atomic os.replace
+        # that also refuses to replace a file the user made read-only.
+        with locked(dst):
+            move_into_place(src, dst)
+        moved[os.path.abspath(src)] = os.path.abspath(dst)
+    return moved
+
+
+def remove_stage(media_dir: str, stem: str, stage: str) -> None:
+    for stage_root, _final in stage_roots(media_dir, stem, stage):
+        shutil.rmtree(stage_root, ignore_errors=True)
+
+
+# ---- Manim dies with the backend ------------------------------------------------
+# A backend killed with SIGKILL can't stop its renders. On Linux the child asks the
+# kernel for SIGKILL when its parent dies (prctl PR_SET_PDEATHSIG); elsewhere, or
+# when prctl is unavailable, Manim runs under parent_watch.py, which polls for the
+# parent and kills its process group (or tree) when it is gone.
+# MANIM_PARENT_WATCH = auto (default) | pdeathsig | watcher | off
+PR_SET_PDEATHSIG = 1
+PARENT_WATCH_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parent_watch.py")
+
+
+def _parent_watch_mode() -> str:
+    mode = os.environ.get("MANIM_PARENT_WATCH", "auto").strip().lower()
+    return mode if mode in ("auto", "pdeathsig", "watcher", "off") else "auto"
+
+
+@functools.lru_cache(maxsize=1)
+def _libc_prctl():
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):
+        return None
+    prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+    prctl.restype = ctypes.c_int
+    return prctl
+
+
+def die_with_parent_preexec():
+    """A preexec_fn that makes the child get SIGKILL when this process dies (Linux), or None."""
+    prctl = _libc_prctl()
+    if prctl is None:
+        return None
+    parent = os.getpid()
+
+    def preexec():
+        # Runs in the child after setsid(), before exec; the setting survives exec.
+        prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0)
+        if os.getppid() != parent:
+            os._exit(1)  # the parent died before prctl took effect
+
+    return preexec
+
+
+def parent_guard(cmd: list):
+    """(command, preexec_fn) so the render can't outlive this process."""
+    mode = _parent_watch_mode()
+    if mode == "off":
+        return cmd, None
+    if mode in ("auto", "pdeathsig") and platform.system() != "Windows":
+        preexec = die_with_parent_preexec()
+        if preexec is not None:
+            return cmd, preexec
+        if mode == "pdeathsig":
+            return cmd, None
+    return [sys.executable, PARENT_WATCH_SCRIPT, str(os.getpid()), "--", *cmd], None
+
+
+def purge_incomplete_segments(media_root: str) -> list:
+    """Delete unfinished cached segments under *media_root* (one script's media/videos folder)."""
+    removed = []
+    for dirpath, _dirnames, filenames in os.walk(media_root):
+        if os.path.basename(os.path.dirname(dirpath)) != "partial_movie_files":
+            continue
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            if not name.endswith(".mp4") or os.path.islink(path) or not os.path.isfile(path):
+                continue
+            if not mp4_is_complete(path):
+                try:
+                    os.unlink(path)
+                    removed.append(path)
+                except OSError:
+                    pass
+    return removed
+
+
+# Output stems with a render in flight in this process: their newest segment is
+# legitimately incomplete, so nobody else may purge that folder meanwhile.
+_stems_in_flight: dict = {}
+
+
 class ManimExecutor:
     def __init__(self, workspace_dir: str, render_timeout=None, app_root=None):
         self.workspace_dir = workspace_dir
@@ -259,6 +493,8 @@ class ManimExecutor:
         self._output_stem = None
         self._hidden_config = None
         self._run_started_ns = 0
+        self._stage = None
+        self._staged_ready = None
 
     @property
     def is_running(self) -> bool:
@@ -352,7 +588,23 @@ class ManimExecutor:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         return env
 
-    async def _emit_file_ready(self, abs_path: str, log_callback):
+    def _in_stage(self, abs_path: str) -> bool:
+        if not (self._stage and self._output_stem):
+            return False
+        real = os.path.normcase(os.path.realpath(abs_path))
+        media_dir = os.path.join(self.workspace_dir, "media")
+        return any(
+            real.startswith(os.path.normcase(os.path.realpath(stage_root)) + os.sep)
+            for stage_root, _final in stage_roots(media_dir, self._output_stem, self._stage)
+        )
+
+    async def _emit_file_ready(self, abs_path: str, log_callback, staged_ok: bool = False):
+        if self._stage and not staged_ok:
+            # Announced after Manim succeeded and the file was moved to its real place.
+            if self._in_stage(abs_path):
+                self._staged_ready = abs_path
+                self._last_file_ready = ("", os.path.basename(abs_path), abs_path)
+            return
         rel_path = media_rel_path(abs_path)
         filename = os.path.basename(abs_path)
         self._last_file_ready = (rel_path, filename, abs_path)
@@ -374,6 +626,7 @@ class ManimExecutor:
         log_callback,
         output_stem=None,
         extra_args=None,
+        stage=None,
     ):
         """Render *scene_name* from *script_name* and stream events to *log_callback*.
 
@@ -382,6 +635,8 @@ class ManimExecutor:
         *output_stem* is the media folder the output lands in when it differs
         from the script's own stem (a snapshot rendered with a per-run config);
         *extra_args* are passed to Manim but not shown in the command echo.
+        *stage* names the per-run folder (``STAGE_PREFIX`` + id) the per-run config
+        sends Manim's final outputs to; they replace the real ones only on success.
         """
         output_stem = output_stem or os.path.splitext(script_name)[0]
         if self.is_running:
@@ -395,6 +650,8 @@ class ManimExecutor:
         self._latex_warned = False
         self._last_progress = None
         self._box_carry = {}
+        self._staged_ready = None
+        self._stage = stage
         self.current_process = None
         output_name = output_stem + ".py"
         # Outputs that exist before Manim starts; the disk-scan fallback ignores them.
@@ -402,7 +659,7 @@ class ManimExecutor:
 
         prefix = list(manim_path) if isinstance(manim_path, (list, tuple)) else [manim_path]
         args = self.build_args(script_name, scene_name, quality, use_opengl)
-        cmd = prefix + args + list(extra_args or [])
+        cmd, preexec = parent_guard(prefix + args + list(extra_args or []))
         await log_callback({"type": "info", "message": f"$ manim {' '.join(args)}"})
 
         popen_kwargs = {
@@ -419,8 +676,20 @@ class ManimExecutor:
         else:
             # New session so cancel() can signal the whole process group (ffmpeg children).
             popen_kwargs["start_new_session"] = True
+            if preexec is not None:
+                popen_kwargs["preexec_fn"] = preexec
 
         process = None
+        segments_root = os.path.join(self.workspace_dir, "media", "videos", output_stem)
+        if not _stems_in_flight.get(output_stem):
+            removed = await asyncio.to_thread(purge_incomplete_segments, segments_root)
+            if removed:
+                await log_callback({
+                    "type": "info",
+                    "message": f"Removed {len(removed)} unfinished cached segment(s) left by an interrupted render.",
+                })
+        _stems_in_flight[output_stem] = _stems_in_flight.get(output_stem, 0) + 1
+        finished_ok = False
         self._output_stem = output_stem
         args_list = list(extra_args or [])
         self._hidden_config = (
@@ -469,8 +738,25 @@ class ManimExecutor:
 
             if not self._last_file_ready:
                 latest = self._find_latest_render(output_name, scene_name, self._previous_outputs)
-                if latest and self._trusted_output(latest):
+                if latest and self._trusted_output(latest) and (not self._stage or self._in_stage(latest)):
                     await self._emit_file_ready(latest, log_callback)
+
+            if self._stage and self._staged_ready:
+                media_dir = os.path.join(self.workspace_dir, "media")
+                try:
+                    moved = await asyncio.to_thread(promote_staged_outputs, media_dir, output_stem, self._stage)
+                except (StagedOutputError, OSError) as exc:
+                    detail = (
+                        f"Manim's output is incomplete ({exc})" if isinstance(exc, StagedOutputError)
+                        else f"The new render could not replace the previous one ({exc.strerror or exc})"
+                    )
+                    await log_callback({"type": "error", "message": f"{detail}; the previous render was kept."})
+                    await log_callback({"type": "status", "status": "failed", "message": "Rendering produced a broken file."})
+                    return {"success": False, "status": "failed", "exit_code": exit_code}
+                final = moved.get(os.path.abspath(self._staged_ready))
+                self._last_file_ready = None
+                if final:
+                    await self._emit_file_ready(final, log_callback, staged_ok=True)
 
             if not self._last_file_ready:
                 await log_callback({
@@ -488,6 +774,7 @@ class ManimExecutor:
                 return {"success": False, "status": "failed", "exit_code": exit_code}
 
             await log_callback({"type": "status", "status": "success", "message": "Rendering completed successfully."})
+            finished_ok = True
             return {"success": True, "status": "success"}
 
         except Exception as exc:
@@ -496,10 +783,24 @@ class ManimExecutor:
             await log_callback({"type": "error", "message": f"Executor error: {exc}"})
             return {"success": False, "status": "error", "error": str(exc)}
         finally:
+            left = _stems_in_flight.get(output_stem, 1) - 1
+            if left > 0:
+                _stems_in_flight[output_stem] = left
+            else:
+                _stems_in_flight.pop(output_stem, None)
+                if not finished_ok and (process is None or process.returncode is not None):
+                    # Cancelled, failed or timed out: drop the segment Manim was writing
+                    # so the next render re-encodes it instead of "using cached data".
+                    # (Synchronous: a cancelled task must not skip this at an await.)
+                    purge_incomplete_segments(segments_root)
+            if self._stage:
+                # This run's own staging folder: whatever is still in it was not promoted.
+                remove_stage(os.path.join(self.workspace_dir, "media"), output_stem, self._stage)
             self._executing = False
             self._cancel_pending = False
             self._output_stem = None
             self._hidden_config = None
+            self._stage = None
             if self.current_process is process:
                 self.current_process = None
 

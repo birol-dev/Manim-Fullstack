@@ -26,7 +26,7 @@ class Recorder:
         self.loop = None
         Recorder.instances.append(self)
 
-    async def execute(self, manim_path, script_name, scene_name, quality, use_opengl, log_callback, output_stem=None, extra_args=None):
+    async def execute(self, manim_path, script_name, scene_name, quality, use_opengl, log_callback, output_stem=None, extra_args=None, stage=None):
         import os
 
         with open(os.path.join(self.workspace_dir, script_name), encoding="utf-8") as f:
@@ -35,7 +35,7 @@ class Recorder:
         if extra_args:
             with open(os.path.join(self.workspace_dir, extra_args[1]), encoding="utf-8") as f:
                 config = f.read()
-        self.runs.append({"script": script_name, "code": code, "output_stem": output_stem, "extra_args": extra_args, "config": config})
+        self.runs.append({"script": script_name, "code": code, "output_stem": output_stem, "extra_args": extra_args, "config": config, "stage": stage})
         self.loop = asyncio.get_running_loop()
         self.gate = asyncio.Event()
         await log_callback({"type": "info", "message": f"$ manim {script_name} {scene_name}"})
@@ -118,8 +118,12 @@ def test_saved_render_writes_into_the_scripts_own_media_folder(client, ws_render
     run = Recorder.instances[0].runs[0]
     assert run["output_stem"] == "snap"
     assert run["extra_args"][0] == "--config_file" and run["extra_args"][1].endswith(".cfg")
-    assert "video_dir = {media_dir}/videos/snap/{quality}" in run["config"]
-    assert "images_dir = {media_dir}/images/snap" in run["config"]
+    # r4: final outputs are staged per run; the segment cache stays where it was.
+    stage = run["stage"]
+    assert stage.startswith(main.STAGE_PREFIX)
+    assert f"video_dir = {{media_dir}}/videos/snap/{stage}/{{quality}}" in run["config"]
+    assert f"images_dir = {{media_dir}}/images/snap/{stage}" in run["config"]
+    assert "partial_movie_dir = {media_dir}/videos/snap/{quality}/partial_movie_files/{scene_name}" in run["config"]
 
 
 def test_percent_in_a_name_is_escaped_for_the_config(client, ws_render):
@@ -129,7 +133,8 @@ def test_percent_in_a_name_is_escaped_for_the_config(client, ws_render):
         until(ws, lambda m: m.get("message", "").startswith("$ manim"))
         Recorder.instances[0].release()
         until(ws, result_of("p"))
-    assert "videos/100%%/{quality}" in Recorder.instances[0].runs[0]["config"]
+    config = Recorder.instances[0].runs[0]["config"]
+    assert "videos/100%%/.~run-" in config and "videos/100%%/{quality}/partial_movie_files" in config
 
 
 def test_command_echo_shows_the_users_file_name(client, ws_render):
