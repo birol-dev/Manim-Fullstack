@@ -398,7 +398,9 @@ def test_build_args_and_subprocess_env():
 
 
 @pytest.mark.asyncio
-async def test_execute_accepts_command_prefix(tmp_path):
+async def test_execute_accepts_command_prefix(tmp_path, monkeypatch):
+    # Windows and macOS wrap the command in parent_watch.py; this test is about Manim's own argv.
+    monkeypatch.setenv("MANIM_PARENT_WATCH", "off")
     executor = ManimExecutor(str(tmp_path))
     proc = MagicMock()
     proc.pid = 1
@@ -435,7 +437,12 @@ async def test_cancel_mid_render_reports_cancelled_not_error(tmp_path):
         with patch("platform.system", return_value="Linux"):
             with patch("os.killpg", create=True), patch("os.getpgid", return_value=4242, create=True):
                 task = asyncio.create_task(executor.execute("/bin/manim", "a.py", "S", "l", False, log_cb))
-                await asyncio.sleep(0.01)
+                # execute() first purges stale segments in a worker thread; wait for the
+                # spawn instead of a fixed 10 ms (Windows timers tick every ~16 ms).
+                for _ in range(200):
+                    if executor.is_running:
+                        break
+                    await asyncio.sleep(0.01)
                 assert executor.is_running
                 await executor.cancel()
                 assert executor.current_process is None

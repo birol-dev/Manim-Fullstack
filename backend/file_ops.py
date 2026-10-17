@@ -15,6 +15,7 @@ import os
 import stat
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import ExitStack, contextmanager
 from typing import Dict, Iterator
@@ -130,9 +131,42 @@ def ensure_writable(path: str) -> None:
         raise ReadOnlyFileError(errno.EACCES, "File is read-only", path)
 
 
-def read_bytes(path: str) -> bytes:
+# Windows: a file another handle has open (a reader, an antivirus scan) can't be
+# replaced or unlinked for a moment (ERROR_SHARING_VIOLATION 32), and a file that
+# is being replaced can't be opened (ERROR_ACCESS_DENIED 5 while the old one is
+# pending delete). POSIX has neither, so there the operation runs once.
+_WINDOWS = os.name == "nt"
+_TRANSIENT_WINERRORS = frozenset({5, 32})
+WINDOWS_RETRY_SECONDS = 1.0
+
+
+def _retry_if_busy(fn, *args):
+    """Run fn(*args); on Windows retry briefly while the file is busy (see above)."""
+    if not _WINDOWS:
+        return fn(*args)
+    deadline = time.monotonic() + WINDOWS_RETRY_SECONDS
+    delay = 0.002
+    while True:
+        try:
+            return fn(*args)
+        except PermissionError as exc:
+            if getattr(exc, "winerror", None) not in _TRANSIENT_WINERRORS or time.monotonic() >= deadline:
+                raise
+        time.sleep(delay)
+        delay = min(delay * 2, 0.05)
+
+
+def _read_all(path: str) -> bytes:
     with open(path, "rb") as f:
         return f.read()
+
+
+def read_bytes(path: str) -> bytes:
+    return _retry_if_busy(_read_all, path)
+
+
+def _replace(src: str, dst: str) -> None:
+    _retry_if_busy(os.replace, src, dst)
 
 
 def _fsync_directory(directory: str) -> None:
@@ -205,7 +239,7 @@ def _place_new(temp_path: str, path: str) -> None:
         # name holds its lock, so the check below cannot race another save.
         if os.path.lexists(path):
             raise FileExistsError(errno.EEXIST, "File exists", path)
-        os.replace(temp_path, path)
+        _replace(temp_path, path)
         return
     _unlink_quietly(temp_path)
 
@@ -226,7 +260,7 @@ def atomic_write(path: str, data: bytes, *, exclusive: bool = False) -> str:
         if exclusive:
             _place_new(temp_path, path)
         else:
-            os.replace(temp_path, path)
+            _replace(temp_path, path)
     except BaseException:
         _unlink_quietly(temp_path)
         raise
@@ -246,7 +280,7 @@ def move_into_place(temp_path: str, path: str, *, exclusive: bool = False) -> No
             _place_new(temp_path, path)
         else:
             ensure_writable(path)
-            os.replace(temp_path, path)
+            _replace(temp_path, path)
     except BaseException:
         _unlink_quietly(temp_path)
         raise
@@ -273,9 +307,9 @@ def rename_no_replace(src: str, dst: str) -> None:
         # Only the letter case differs and the filesystem ignores case.
         directory = os.path.dirname(os.path.abspath(src))
         hop = os.path.join(directory, f"{TEMP_WRITE_PREFIX}{uuid.uuid4().hex}.rename")
-        os.rename(src, hop)
+        _retry_if_busy(os.rename, src, hop)
         try:
-            os.rename(hop, dst)
+            _retry_if_busy(os.rename, hop, dst)
         except BaseException:
             os.rename(hop, src)
             raise
@@ -291,10 +325,10 @@ def rename_no_replace(src: str, dst: str) -> None:
             raise FileExistsError(errno.EEXIST, "File exists", dst)
         # os.rename refuses an existing target on Windows; elsewhere the lock and
         # the check above keep other writers of *dst* out.
-        os.rename(src, dst)
+        _retry_if_busy(os.rename, src, dst)
         return
     try:
-        os.unlink(src)
+        _retry_if_busy(os.unlink, src)
     except OSError:
         _unlink_quietly(dst)
         raise

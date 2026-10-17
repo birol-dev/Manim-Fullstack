@@ -33,11 +33,13 @@ def test_redaction_hides_host_paths_but_keeps_backslashes(tmp_path, monkeypatch)
 
     home = tmp_path / "home" / "box"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what expanduser("~") reads on Windows
     workspace = home / "proj" / "workspace"
     executor = ManimExecutor(str(workspace))
     import sysconfig
 
-    site = os.path.join(sysconfig.get_paths()["purelib"], "manim", "scene.py")
+    # "/" after the prefix: the redaction keeps whatever separator the line used.
+    site = sysconfig.get_paths()["purelib"] + "/manim/scene.py"
     line = (
         rf"LaTeX \frac{{a}}{{b}} \t C:\Users\me in {workspace}/demo.py:5, "
         rf"{site}:12, {tempfile.gettempdir()}/Tex/abc.tex, {home}/notes"
@@ -57,7 +59,7 @@ def test_redaction_matches_whole_paths_only(tmp_path):
     # A longer sibling name and a path that merely ends with the workspace stay as they are.
     sibling = f"{workspace}er/file.py"
     nested = f"/srv{workspace}/file.py"
-    assert executor._redact_paths(sibling).endswith("/wser/file.py")  # temp dir hidden, workspace not
+    assert executor._redact_paths(sibling).endswith(f"{os.sep}wser/file.py")  # temp dir hidden, workspace not
     assert executor._redact_paths(nested) == nested
     assert executor._redact_paths(f"'{workspace}/a.py'") == "'a.py'"
     # The bare folder is named, not erased ("cwd is " would read as a bug).
@@ -193,7 +195,8 @@ def test_dash_script_names_are_passed_as_paths(name):
 
 
 @pytest.mark.asyncio
-async def test_dash_script_name_reaches_manim_as_a_path(tmp_path):
+async def test_dash_script_name_reaches_manim_as_a_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("MANIM_PARENT_WATCH", "off")  # no parent_watch.py prefix (Windows/macOS)
     executor = ManimExecutor(str(tmp_path))
     spawned = {}
 

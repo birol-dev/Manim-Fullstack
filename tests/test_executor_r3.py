@@ -321,8 +321,8 @@ def test_diagnostics_hide_the_venv_and_app_paths(client, monkeypatch):
     assert main.BASE_DIR not in str(deps)
     assert deps["ffmpeg"] == "/usr/bin/ffmpeg" and deps["latex"] == "Not Found"
     assert deps["latex_available"] is False
-    assert deps["dvisvgm"] == "<app>/tools/dvisvgm"
-    assert deps["manim"].endswith("/bin/manim") and isinstance(deps["manim_command"], list)
+    assert deps["dvisvgm"] == "<app>" + os.sep + os.path.join("tools", "dvisvgm")
+    assert deps["manim"].endswith(os.sep + os.path.join("bin", "manim")) and isinstance(deps["manim_command"], list)
 
 
 def test_renders_still_get_the_real_manim_path(monkeypatch):
