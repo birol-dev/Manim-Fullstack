@@ -230,7 +230,7 @@ def test_fixture_covers_the_round4_cases():
 
 def test_existing_files_with_a_space_lookalike_stay_reachable(root):
     ws = root
-    (ws / "old\u00a0.py").write_text("x = 1\n")
+    (ws / "old\u00a0.py").write_bytes(b"x = 1\n")  # write_text would write CRLF on Windows
     assert main.get_file_content("old\u00a0.py")["code"] == "x = 1\n"
     status = main.rename_file(main.RenameRequest(old_name="old\u00a0.py", new_name="old.py"))
     assert (ws / "old.py").exists() and status

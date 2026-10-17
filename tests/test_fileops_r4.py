@@ -129,12 +129,12 @@ def test_delete_sent_before_a_rename_created_the_name_is_refused(ws):
 
     (ws / "a.py").write_text("A\n")
     request = _Req()
-    request.scope = {"manim_arrived": time.monotonic()}
+    request.scope = {"manim_arrived": time.perf_counter()}
     assert _call(main.rename_file, main.RenameRequest(old_name="a.py", new_name="b.py"))[0] == 200
     code, body = _call(main.delete_script, "b.py", request)
     assert code == 409 and (ws / "b.py").read_text() == "A\n"
     # A delete sent after the rename deletes it.
-    request.scope = {"manim_arrived": time.monotonic()}
+    request.scope = {"manim_arrived": time.perf_counter()}
     assert _call(main.delete_script, "b.py", request)[0] == 200
 
 
@@ -595,7 +595,8 @@ def test_second_instance_with_broken_psutil_on_a_busy_port_does_not_sweep(tmp_pa
         busy.bind(("127.0.0.1", 0))
         busy.listen()
         result = _run_server(tmp_path, busy.getsockname()[1], no_fds)
-    assert "address already in use" in result.stderr.lower(), result.stderr
+    # POSIX: "address already in use"; Windows (WSAEADDRINUSE 10048): "only one usage of each socket address".
+    assert any(m in result.stderr.lower() for m in ("address already in use", "only one usage of each socket address")), result.stderr
     assert result.returncode != 0
     assert old.exists(), result.stderr
 
