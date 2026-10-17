@@ -379,7 +379,11 @@ def test_delete_of_a_link_never_reaches_outside(ws, client, tmp_path_factory):
 
 
 @needs_symlinks
-def test_render_refuses_a_script_linked_from_outside(ws, client, tmp_path_factory):
+def test_render_refuses_a_script_linked_from_outside(ws, client, tmp_path_factory, monkeypatch):
+    # The link check must be reached whether or not Manim is installed (CI runs
+    # without it), so the binary lookup is faked; the render is refused before
+    # anything is launched.
+    monkeypatch.setattr(main, "get_binary_paths", lambda: {"manim_command": [sys.executable, "-m", "manim"]})
     outside_dir = tmp_path_factory.mktemp("outside3")
     target = outside_dir / "scene.py"
     target.write_text("from manim import *\nclass Out(Scene):\n    def construct(self):\n        self.wait()\n")
