@@ -21,6 +21,12 @@ def _busy(winerror):
     return exc
 
 
+def _crt_busy():
+    """What the built-in open() raises on Windows for a busy file: the C runtime
+    maps sharing violations and pending deletes to EACCES and sets no winerror."""
+    return PermissionError(13, "Permission denied")
+
+
 @pytest.fixture
 def windows(monkeypatch):
     monkeypatch.setattr(file_ops, "_WINDOWS", True)
@@ -47,6 +53,30 @@ def test_busy_file_is_retried_on_windows(windows, winerror):
 
 def test_other_permission_errors_are_not_retried(windows):
     fn, calls = _flaky(1, 1314)  # e.g. a privilege error
+    with pytest.raises(PermissionError):
+        file_ops._retry_if_busy(fn)
+    assert calls["n"] == 1
+
+
+def test_open_style_eacces_without_winerror_is_retried(windows):
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise _crt_busy()
+        return "ok"
+
+    assert file_ops._retry_if_busy(fn) == "ok" and calls["n"] == 4
+
+
+def test_eperm_without_winerror_is_not_retried(windows):
+    calls = {"n": 0}
+
+    def fn():
+        calls["n"] += 1
+        raise PermissionError(1, "Operation not permitted")
+
     with pytest.raises(PermissionError):
         file_ops._retry_if_busy(fn)
     assert calls["n"] == 1
@@ -88,7 +118,7 @@ def test_atomic_write_and_read_survive_a_busy_target(windows, tmp_path, monkeypa
     def opener(path, *args, **kwargs):
         state["open"] += 1
         if state["open"] <= 2:
-            raise _busy(5)  # mid-replace
+            raise _crt_busy()  # mid-replace, as open() reports it
         return real_open(path, *args, **kwargs)
 
     monkeypatch.setattr("builtins.open", opener)
