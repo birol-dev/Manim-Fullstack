@@ -2,6 +2,7 @@
 
 import errno
 import os
+import sys
 import threading
 
 import pytest
@@ -19,6 +20,7 @@ def test_atomic_write_returns_the_version_of_the_bytes_written(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == ["a.py"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits: Windows chmod only toggles the read-only attribute")
 def test_atomic_write_keeps_the_file_mode(tmp_path):
     target = tmp_path / "a.py"
     target.write_bytes(b"old")
@@ -112,7 +114,9 @@ def test_case_only_rename_on_a_case_insensitive_filesystem(tmp_path, monkeypatch
     real_lexists = os.path.lexists
     monkeypatch.setattr(os.path, "lexists", lambda p: True if p == str(dst) else real_lexists(p))
     rename_no_replace(str(src), str(dst))
-    assert dst.read_bytes() == b"A" and not src.exists()
+    # On a really case-insensitive filesystem (Windows) "a.py" still "exists" as
+    # A.py, so check the stored spelling instead.
+    assert dst.read_bytes() == b"A" and [p.name for p in tmp_path.iterdir()] == ["A.py"]
     assert not any(p.name.startswith(file_ops.TEMP_WRITE_PREFIX) for p in tmp_path.iterdir())
 
 
