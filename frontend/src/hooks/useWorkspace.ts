@@ -723,7 +723,12 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     [refreshFiles],
   );
 
-  const discardChanges = useCallback(() => setCode(savedCode), [savedCode]);
+  /** Drop the open buffer's unsaved edits (back to what was last saved or loaded). */
+  const discardChanges = useCallback(() => {
+    // The refs too: a storage-mode switch right after must not stash the edits as a draft.
+    codeRef.current = savedCodeRef.current;
+    setCode(savedCodeRef.current);
+  }, []);
 
   const prefix = `${mode}:`;
   const dirtyFiles = Object.keys(drafts)
