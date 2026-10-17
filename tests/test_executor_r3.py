@@ -232,10 +232,14 @@ def test_cell_len_without_rich(monkeypatch):
 @pytest.mark.asyncio
 async def test_path_wrapped_across_box_lines_is_redacted(tmp_path):
     """r2 (PSD): Rich folds a long frame path over several boxed lines; each half slipped past."""
-    ws = tmp_path / ("deep_" + "w" * 60) / ("workspace_" + "v" * 40)
+    width = 96
+    # Pad the folder so the fold always lands inside the path, whatever the
+    # length of tmp_path (it differs per user and machine, e.g. on CI runners).
+    head = len(str(tmp_path / "deep_")) + len("/workspace_" + "v" * 40 + "/wrapped.py:5 in construct")
+    ws = tmp_path / ("deep_" + "w" * (60 + (-head) % width)) / ("workspace_" + "v" * 40)
     executor = ManimExecutor(str(ws))
     path = f"{ws}/wrapped.py:5 in construct"
-    width = 96
+    assert len(path) % width == 60
     pieces = [path[i:i + width] for i in range(0, len(path), width)]
     pieces[-1] = pieces[-1].ljust(width)
     assert " " not in pieces[0]
