@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ApiError, deleteRequest, errorMessage, postJson, requestJson } from "@/lib/api";
-import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMaxCodeBytes } from "@/lib/constants";
+import { ALLOWED_ASSET_EXTENSIONS, MAX_ASSET_SIZE_BYTES, formatByteLimit, getMaxCodeBytes, utf8ByteLength } from "@/lib/constants";
 import { foldFilename } from "@/lib/format";
 import {
   browserFileKey,
@@ -343,7 +343,9 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     const timer = setTimeout(async () => {
       const result = await parseCode(source).catch((err: unknown) => {
         if (codeRef.current === source && err instanceof ApiError && err.status === 413) {
-          toast.error(err.message, { id: "code-size" });
+          // Over the limit the UI knows, the editor's size banner already says so; a toast
+          // is only needed when the server's own limit is lower.
+          if (utf8ByteLength(source) <= getMaxCodeBytes()) toast.error(err.message, { id: "code-size" });
           // The last scene list and timeline describe code that is no longer there: clear
           // them (the selected scene is kept, so it comes back once the file fits again).
           // (Not marked as parsed: undoing back to the old code must parse it again.)
@@ -659,9 +661,35 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
       const base = browserBaseRef.current[name];
       if (stored === base) return;
       if (stored === undefined) {
+        if (codeRef.current === savedCodeRef.current) {
+          // Nothing unsaved here: close it, as deleting it in this tab would. A rename stores the
+          // new name before removing the old one, so a script with this exact text is likely it.
+          const shown = codeRef.current;
+          delete browserBaseRef.current[name];
+          activeFileRef.current = null;
+          const scripts = loadBrowserFiles();
+          const names = browserScriptList().map((script) => script.name);
+          const next = names.find((other) => scripts[other] === shown) ?? names[0];
+          if (next) void openFile(next).catch(() => false);
+          else showBuffer(null, "");
+          // Not "external-change": that one is dismissed when another file opens.
+          toast.info(`${name} was renamed or deleted in another tab`, {
+            id: "file-closed",
+            description: next ? `It had no unsaved changes here. ${next} is open now.` : "It had no unsaved changes here, so it was closed.",
+          });
+          return;
+        }
         toast.warning(`${name} was renamed or deleted in another tab`, {
           id: "external-change",
           description: "Your text is still here. Saving asks before recreating the file.",
+          action: {
+            label: "Recreate file",
+            onClick: () =>
+              void save({ force: true }).then(
+                () => setFiles((previous) => ({ ...previous, scripts: browserScriptList() })),
+                (error) => toast.error(errorMessage(error, "Couldn't recreate the file.")),
+              ),
+          },
         });
         return;
       }
@@ -684,7 +712,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
-  }, [mode, reloadFromDisk]);
+  }, [mode, reloadFromDisk, openFile, showBuffer, save]);
 
   /** Hold (true) or release notices about outside changes, e.g. while a save-conflict dialog is open. */
   const holdExternalNotices = useCallback((hold: boolean) => {

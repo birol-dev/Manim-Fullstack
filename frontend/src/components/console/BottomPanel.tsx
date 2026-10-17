@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, Copy, Eraser, FileCode2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronUp, Copy, Eraser, FileCode2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -38,19 +38,24 @@ interface BottomPanelProps {
   timelineKey?: string | null;
 }
 
-/** Copy the whole console as plain text (Rich's box drawing removed, line markers kept). */
-async function copyConsole(logs: LogEntry[]) {
+/** Copy the whole console as plain text (Rich's box drawing removed, line markers kept). True once copied. */
+async function copyConsole(logs: LogEntry[], liveQueueLine: { id: number; position: number } | null): Promise<boolean> {
   try {
     if (!navigator.clipboard?.writeText) throw new Error("no clipboard");
-    await navigator.clipboard.writeText(consoleCopyText(logs, stripBoxDrawing));
+    await navigator.clipboard.writeText(consoleCopyText(logs, stripBoxDrawing, liveQueueLine));
     toast.success("Console output copied", { id: "console-copied" });
+    return true;
   } catch {
     toast.error("Couldn't copy the console output", {
       id: "console-copied",
       description: "Select the lines and press Ctrl+C instead.",
     });
+    return false;
   }
 }
+
+/** How long the Copy button shows its check mark. */
+export const COPIED_MS = 1500;
 
 function CountBadge({ count, tone = "neutral" }: { count: number; tone?: "neutral" | "danger" }) {
   if (count === 0) return null;
@@ -105,6 +110,16 @@ export function BottomPanel(props: BottomPanelProps) {
   if (queuePosition && queueLineId !== null && (liveQueueLine?.id !== queueLineId || liveQueueLine.position !== queuePosition)) {
     setLiveQueueLine({ id: queueLineId, position: queuePosition });
   }
+  // A check mark on the button itself: the toast shows up far away, over the preview.
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), []);
+  const copy = async () => {
+    if (!(await copyConsole(logs, liveQueueLine))) return;
+    setCopied(true);
+    window.clearTimeout(copiedTimer.current);
+    copiedTimer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
+  };
 
   return (
     <Tabs
@@ -131,9 +146,9 @@ export function BottomPanel(props: BottomPanelProps) {
             </div>
           )}
           {props.tab === "console" && props.logs.length > 0 && (
-            <Tooltip content="Copy console output">
-              <Button variant="ghost" size="icon-xs" aria-label="Copy console output" onClick={() => void copyConsole(props.logs)}>
-                <Copy />
+            <Tooltip content={copied ? "Copied" : "Copy console output"}>
+              <Button variant="ghost" size="icon-xs" aria-label="Copy console output" onClick={() => void copy()}>
+                {copied ? <Check className="text-success" data-testid="console-copied" /> : <Copy />}
               </Button>
             </Tooltip>
           )}

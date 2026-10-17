@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check, Copy, CornerDownLeft, FileAudio, FileType, Loader2, Trash2, Upload } from "lucide-react";
+import { Check, Copy, CornerDownLeft, FileAudio, FileType, Link2, Loader2, Trash2, Unlink, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -21,7 +21,22 @@ interface AssetsPanelProps {
   onDelete: (asset: AssetFile) => void;
 }
 
+/** Why a link entry can't be used, or null for a regular asset. */
+function linkNote(asset: AssetFile): string | null {
+  if (asset.outside) return "link to a file outside the assets folder";
+  if (asset.broken) return "broken link";
+  return null;
+}
+
 function AssetThumb({ asset }: { asset: AssetFile }) {
+  if (asset.outside || asset.broken) {
+    const Icon = asset.outside ? Link2 : Unlink;
+    return (
+      <span className="flex size-8 shrink-0 items-center justify-center rounded border border-line bg-raised text-fg-subtle">
+        <Icon aria-hidden className={cn("size-4", asset.broken && "text-warning/80")} />
+      </span>
+    );
+  }
   const kind = assetKind(asset.name);
   if (kind === "image" || kind === "vector") {
     return (
@@ -129,45 +144,53 @@ export function AssetsPanel({ assets, canInsert, onUpload, onInsert, onDelete }:
             </p>
           ) : (
             <ul className="flex flex-col gap-px">
-              {assets.map((asset) => (
-                <li key={asset.name} className="group flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-raised">
-                  <AssetThumb asset={asset} />
-                  <div className="min-w-0 flex-1">
-                    {/* The full name wraps at _ - . boundaries; actions sit on the size row so they never squeeze it. */}
-                    <Tooltip content={asset.name} side="right">
-                      <p className="code-wrap text-xs leading-snug text-fg" data-testid="asset-name">
-                        <FileNameText name={asset.name} />
-                      </p>
-                    </Tooltip>
-                    <div className="flex h-6 items-center justify-between gap-1">
-                      <p className="text-2xs text-fg-subtle">{formatBytes(asset.size)}</p>
-                      <RowActions>
-                        <Tooltip content={`Insert ${assetUsageSnippet(asset.name).split("(")[0]}`} wrap>
-                          <Button
-                            variant="ghost"
-                            size="icon-xs"
-                            aria-label={`Insert ${asset.name}`}
-                            disabled={!canInsert}
-                            onClick={() => onInsert(assetUsageSnippet(asset.name))}
-                          >
-                            <CornerDownLeft />
-                          </Button>
-                        </Tooltip>
-                        <Tooltip content="Copy path">
-                          <Button variant="ghost" size="icon-xs" aria-label={`Copy path of ${asset.name}`} onClick={() => void copyPath(asset)}>
-                            {copied === asset.name ? <Check className="text-success" /> : <Copy />}
-                          </Button>
-                        </Tooltip>
-                        <Tooltip content="Delete">
-                          <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete ${asset.name}`} onClick={() => onDelete(asset)}>
-                            <Trash2 />
-                          </Button>
-                        </Tooltip>
-                      </RowActions>
+              {assets.map((asset) => {
+                const note = linkNote(asset);
+                return (
+                  <li key={asset.name} className="group flex items-start gap-2 rounded-md px-1.5 py-1 hover:bg-raised">
+                    <AssetThumb asset={asset} />
+                    <div className="min-w-0 flex-1">
+                      {/* The full name wraps at _ - . boundaries; actions sit on the size row so they never squeeze it. */}
+                      <Tooltip content={note ? `${note[0].toUpperCase()}${note.slice(1)}: it can't be used, only deleted.` : asset.name} side="right">
+                        <p className={cn("code-wrap text-xs leading-snug text-fg", note && "italic text-fg-muted")} data-testid="asset-name">
+                          <FileNameText name={asset.name} />
+                          {note && <span className="sr-only"> ({note}, can only be deleted)</span>}
+                        </p>
+                      </Tooltip>
+                      <div className="flex h-6 items-center justify-between gap-1">
+                        <p className="text-2xs text-fg-subtle">{note ? (asset.outside ? "Link" : "Broken link") : formatBytes(asset.size)}</p>
+                        <RowActions>
+                          {!note && (
+                            <>
+                              <Tooltip content={`Insert ${assetUsageSnippet(asset.name).split("(")[0]}`} wrap>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label={`Insert ${asset.name}`}
+                                  disabled={!canInsert}
+                                  onClick={() => onInsert(assetUsageSnippet(asset.name))}
+                                >
+                                  <CornerDownLeft />
+                                </Button>
+                              </Tooltip>
+                              <Tooltip content="Copy path">
+                                <Button variant="ghost" size="icon-xs" aria-label={`Copy path of ${asset.name}`} onClick={() => void copyPath(asset)}>
+                                  {copied === asset.name ? <Check className="text-success" /> : <Copy />}
+                                </Button>
+                              </Tooltip>
+                            </>
+                          )}
+                          <Tooltip content="Delete">
+                            <Button variant="danger-ghost" size="icon-xs" aria-label={`Delete ${asset.name}`} onClick={() => onDelete(asset)}>
+                              <Trash2 />
+                            </Button>
+                          </Tooltip>
+                        </RowActions>
+                      </div>
                     </div>
-                  </div>
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Section>

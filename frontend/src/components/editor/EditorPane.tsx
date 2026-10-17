@@ -58,7 +58,8 @@ function ScenePicker({
   const valid = CLASS_NAME.test(draft.trim());
   // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
   // Narrowed only below 340 px: from 430 px down the toolbar wraps, so the controls have a full row.
-  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[340px]:max-w-32 @max-[340px]:min-w-[5.5rem]";
+  // Below that it gives up width (down to 48 px, the name truncated) so Render never leaves the row.
+  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[340px]:max-w-32 @max-[340px]:min-w-12";
 
   if (typing) {
     const commit = (keyboard = false) => {
@@ -109,7 +110,12 @@ function ScenePicker({
       }}
       disabled={disabled}
     >
-      <Tooltip content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"} wrap>
+      <Tooltip
+        content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"}
+        wrap
+        // The wrap span is the toolbar's flex item: it has to be allowed to shrink too.
+        wrapClassName="min-w-0 @max-[430px]:shrink"
+      >
         <SelectTrigger ref={triggerRef} aria-label="Scene" className={className}>
           <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
         </SelectTrigger>
@@ -259,7 +265,8 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </div>
         )}
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {/* Shrinks once the toolbar wraps: the scene picker narrows instead of pushing Render out of view. */}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[430px]:min-w-0 @max-[430px]:shrink @max-[300px]:gap-1">
           <Tooltip
             content={!activeFile ? "Save (no script open)" : isDirty ? "Save" : "Saved (no unsaved changes)"}
             shortcut={`${MOD_KEY}+S`}

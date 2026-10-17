@@ -25,6 +25,15 @@ afterEach(() => {
 });
 
 describe("useRenderSession", () => {
+  it("tells the server which storage the file is in", async () => {
+    const { result } = setup();
+    await flush();
+    act(() => {
+      result.current.start({ ...REQUEST, storage: "browser", code: "x = 1\n" });
+    });
+    expect(FakeWebSocket.latest().lastSent("start")).toMatchObject({ filename: "a.py", storage: "browser", code: "x = 1\n" });
+  });
+
   it("connects, streams events, and finishes on result", async () => {
     const { result, log, onOutput, onFinished } = setup();
     await flush();

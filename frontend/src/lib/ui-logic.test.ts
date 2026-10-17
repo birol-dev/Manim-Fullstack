@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { qualityShortLabel, qualityTooltip } from "./constants";
 import { focusWithRing } from "./focus";
 import { friendlyKatex } from "./katex";
-import { horizontalDefaults, TOAST_TOP_PX, workPanelSizes } from "./layout";
+import { horizontalDefaults, PREVIEW_NOTE_ROW_PX, TOAST_TOP_PX, toastTopPx, workPanelSizes } from "./layout";
 import { consoleCopyText, latestQueuedLineId, withQueuePosition } from "./logs";
 import { codeBreakSegments, longestSegment, SHORT_GROUP_CHARS, stepMetaWidth } from "./timeline";
 import { stripBoxDrawing } from "./traceback";
@@ -93,6 +93,12 @@ describe("editor / preview split at narrow widths", () => {
   it("puts toasts under the top bar and preview header", () => {
     expect(TOAST_TOP_PX).toBe(44 + 40 + 8);
   });
+
+  it("moves toasts below the preview's notes so they never cover “Out of date”", () => {
+    expect(toastTopPx()).toBe(TOAST_TOP_PX);
+    expect(toastTopPx(1)).toBe(TOAST_TOP_PX + PREVIEW_NOTE_ROW_PX);
+    expect(toastTopPx(2)).toBe(TOAST_TOP_PX + 2 * PREVIEW_NOTE_ROW_PX);
+  });
 });
 
 describe("work panel minimums on short viewports", () => {
@@ -177,6 +183,17 @@ describe("copying from the console", () => {
     expect(copied.split("\n")[0]).toBe("$ manim scene.py A");
     expect(copied).not.toMatch(/[│╭╮╰╯─]/);
     expect(copied).toContain("❱ 7");
+  });
+
+  it("copies the queued notice with the position the console shows", () => {
+    const lines = [
+      { id: 1, text: "$ manim scene.py A" },
+      { id: 2, text: "Waiting for another render to finish… (position 3 in queue)" },
+    ];
+    expect(consoleCopyText(lines, stripBoxDrawing, { id: 2, position: 1 }).split("\n")[1]).toBe(
+      "Waiting for another render to finish… (position 1 in queue)",
+    );
+    expect(consoleCopyText(lines, stripBoxDrawing, null)).toContain("(position 3 in queue)");
   });
 });
 
