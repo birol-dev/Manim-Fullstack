@@ -1542,8 +1542,10 @@ def install_manim():
     spec = _manim_requirement()
     if spec is None:
         raise HTTPException(status_code=500, detail="Could not read the Manim version range from backend/requirements.txt.")
-    _start_background([sys.executable, "-m", "pip", "install", spec])
-    return {"success": True, "message": f"Manim CE ({spec}) is installing in the background via pip."}
+    pins = _companion_pins()
+    _start_background([sys.executable, "-m", "pip", "install", spec, *pins])
+    shown = " ".join([spec, *pins])
+    return {"success": True, "message": f"Manim CE ({shown}) is installing in the background via pip."}
 
 
 REQUIREMENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
@@ -1598,6 +1600,31 @@ def _manim_requirement(path: Optional[str] = None) -> Optional[str]:
         extras_part = "[" + ",".join(part.strip() for part in extras.split(",")) + "]" if extras else ""
         return "manim" + extras_part + spec
     return None
+
+
+# Installed along with Manim: the caps in requirements.txt that keep a fresh install
+# working (Pillow 13 breaks every ImageMobject scene on Manim 0.22). Without them pip
+# picks the newest release that Manim itself allows.
+INSTALL_COMPANIONS = frozenset({"pillow"})
+_PIN_LINE = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
+    r"(?P<spec>(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+(?:\s*,\s*(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+)*)$"
+)
+
+
+def _companion_pins(path: Optional[str] = None) -> List[str]:
+    """The requirements.txt lines for INSTALL_COMPANIONS as pip arguments (``pillow<13``)."""
+    try:
+        with open(path or REQUIREMENTS_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    pins = []
+    for raw in lines:
+        match = _PIN_LINE.match(raw.split("#", 1)[0].strip())
+        if match and match.group("name").lower() in INSTALL_COMPANIONS:
+            pins.append(match.group("name") + re.sub(r"\s+", "", match.group("spec")))
+    return pins
 
 
 # --------------------------------------------------------------------------- #

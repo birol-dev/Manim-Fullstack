@@ -61,7 +61,7 @@ All endpoints return JSON. Errors use FastAPI's `{"detail": "..."}` shape.
 | `DELETE /api/assets` | `?filename=` | Deletes an upload |
 | `DELETE /api/media` | `?path=` (relative to `workspace/media`) | Deletes a render and its cached chunks |
 | `GET /api/download-temp` | `?path=` | Serves a download-only render once, then deletes it |
-| `POST /api/install-manim` \| `-latex` \| `-ffmpeg` | — | Starts `pip install manim` or a `winget` install in the background. Refused (403) in containers or with `MANIM_ALLOW_INSTALLS=0`. |
+| `POST /api/install-manim` \| `-latex` \| `-ffmpeg` | — | Starts a `pip install` of the `manim` and `pillow` lines of `backend/requirements.txt` (so the version caps apply) or a `winget` install in the background. Refused (403) in containers or with `MANIM_ALLOW_INSTALLS=0`. |
 
 `animations` maps scene names to steps: `{type: "play" | "wait", label, line, duration?, estimated?, alternative?, repeat?,
 loop_line?, loops?}`. `duration` is a number of seconds when it is a literal, otherwise the expression's source text; `estimated`
