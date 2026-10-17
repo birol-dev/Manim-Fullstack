@@ -50,6 +50,19 @@ describe("Insert edge cases produce valid Python", () => {
     expect(apply(chain, 8).split("\n").slice(4, 7)).toEqual(["        sq = Square()", "        self.play(Create(sq))", "        @a"]);
   });
 
+  it("from a decorator at class level, goes into construct(): `self.play` can't run in a class body", () => {
+    const decorated = [...H, "    @timed", "    def construct(self):", "        self.wait()", ""].join("\n");
+    expect(apply(decorated, 3).split("\n").slice(2, 7)).toEqual([
+      "    @timed",
+      "    def construct(self):",
+      "        self.wait()",
+      "        sq = Square()",
+      "        self.play(Create(sq))",
+    ]);
+    const helper = [...H, "    def construct(self):", "        self.wait()", "", "    @staticmethod", "    def helper():", "        pass", ""].join("\n");
+    expect(apply(helper, 6).split("\n").slice(3, 7)).toEqual(["        self.wait()", "        sq = Square()", "        self.play(Create(sq))", ""]);
+  });
+
   it("indents below a comment by the code around it, not by the comment's own indentation", () => {
     const deeper = [...H, "    def construct(self):", "        if True:", "            self.wait()", "        self.wait()", "            # stray", ""].join("\n");
     expect(apply(deeper, 7).split("\n").slice(6, 9)).toEqual(["            # stray", "        sq = Square()", "        self.play(Create(sq))"]);

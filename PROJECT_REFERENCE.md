@@ -256,6 +256,12 @@ editor font size, the open sidebar view, the last open file per storage mode, th
 browser-stored scripts. Pane sizes are remembered by `react-resizable-panels`. Keys from earlier versions are migrated
 on first read.
 
+Settings changed in one tab apply in the others without a reload. A storage-mode switch is followed only when the
+other tab has no unsaved edits; otherwise that tab stays put and offers the switch (which asks about the edits first).
+Browser-stored scripts are one key each (`mc.browserFile:<name>`). The older single-map format is migrated, and a tab
+still running an older version that writes the map again loses nothing: its stale copies are skipped, its edits are
+taken, and a script changed on both sides is kept as `<name> (older tab).py` next to the current one.
+
 ## Tests
 
 - `tests/` — pytest suite for the API, executor, parser, origin policy, paths, and diagnostics.

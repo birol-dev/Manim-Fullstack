@@ -54,6 +54,14 @@ export function workPanelSizes(viewportHeight: number): WorkPanelSizes {
 /** Toasts: below the top bar (h-11) and the preview header (h-10), plus a gap. */
 export const TOAST_TOP_PX = 44 + 40 + 8;
 
+/** One note row across the top of the preview ("Out of date", still image): py-1.5 + a 16 px line. */
+export const PREVIEW_NOTE_ROW_PX = 28;
+
+/** Where toasts start when *noteRows* preview notes are showing, so a toast never covers one. */
+export function toastTopPx(noteRows = 0): number {
+  return TOAST_TOP_PX + noteRows * PREVIEW_NOTE_ROW_PX;
+}
+
 /** Below this viewport width the editor/preview split favours the preview. */
 export const NARROW_VIEWPORT_PX = 1200;
 

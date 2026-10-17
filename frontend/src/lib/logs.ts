@@ -82,9 +82,18 @@ export function withQueuePosition(text: string, position: number | null | undefi
   return /\(position \d+ in queue\)/.test(text) ? text.replace(/\(position \d+ in queue\)/, live) : `${text} ${live}`;
 }
 
-/** Console text for the Copy button: every line, without Rich's box drawing. */
-export function consoleCopyText(lines: ReadonlyArray<{ text: string }>, strip: (text: string) => string): string {
-  return strip(lines.map((line) => line.text).join("\n"));
+/**
+ * Console text for the Copy button: every line, without Rich's box drawing, and the queued
+ * notice with the position the console shows (*liveQueueLine*), not the one first logged.
+ */
+export function consoleCopyText(
+  lines: ReadonlyArray<{ id?: number; text: string }>,
+  strip: (text: string) => string,
+  liveQueueLine: { id: number; position: number } | null = null,
+): string {
+  const text = (line: { id?: number; text: string }) =>
+    liveQueueLine && line.id === liveQueueLine.id ? withQueuePosition(line.text, liveQueueLine.position) : line.text;
+  return strip(lines.map(text).join("\n"));
 }
 
 /** Prefix of the server's queued notice (kept in sync with useRenderSession's QUEUED_MESSAGE_PREFIX). */

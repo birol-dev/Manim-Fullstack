@@ -433,6 +433,39 @@ describe("typed scene names and browser storage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Recreate file" }));
     await waitFor(() => expect(loadBrowserFiles()["a.py"]).toBe("# keep\n"));
   });
+
+  it("offers Recreate on the notice itself when there are unsaved edits", async () => {
+    const { user } = await renderBrowserMode({ "a.py": "# v1\n", "b.py": "# b\n" });
+    fireEvent.change(screen.getByLabelText("Code editor"), { target: { value: "# keep\n" } });
+    writeFromOtherTab({ "b.py": "# b\n" });
+    const notice = (await screen.findByText("a.py was renamed or deleted in another tab")).closest("[data-sonner-toast]") as HTMLElement;
+    await user.click(within(notice).getByRole("button", { name: "Recreate file" }));
+    await waitFor(() => expect(loadBrowserFiles()["a.py"]).toBe("# keep\n"));
+    expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/a.py");
+  });
+
+  it("closes a script deleted in another tab when nothing here is unsaved", async () => {
+    await renderBrowserMode({ "a.py": "# v1\n", "b.py": "# b\n" });
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/a.py"));
+    writeFromOtherTab({ "b.py": "# b\n" });
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/b.py"));
+    expect(screen.getByLabelText("Code editor")).toHaveValue("# b\n");
+    expect(await screen.findByText("It had no unsaved changes here. b.py is open now.")).toBeInTheDocument();
+    expect(loadBrowserFiles()).not.toHaveProperty("a.py");
+  });
+
+  it("follows a rename made in another tab, and empties the editor when the last script goes", async () => {
+    await renderBrowserMode({ "a.py": "# a\n", "b.py": "# b\n" });
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/a.py"));
+    // Renamed there: the new name is stored before the old one is removed.
+    writeFromOtherTab({ "b.py": "# b\n", "z.py": "# a\n" });
+    await waitFor(() => expect(screen.getByLabelText("Code editor")).toHaveAttribute("data-path", "browser/z.py"));
+    expect(screen.getByLabelText("Code editor")).toHaveValue("# a\n");
+
+    writeFromOtherTab({});
+    expect(await screen.findByText("It had no unsaved changes here, so it was closed.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^z\.py/ })).toBeNull();
+  });
 });
 
 // Keep the fake server type referenced for editors.

@@ -19,7 +19,7 @@ function browserHook() {
 }
 
 describe("a too-large buffer while typing", () => {
-  it("toasts the size limit and clears the scene list instead of an unhandled rejection", async () => {
+  it("clears the scene list instead of an unhandled rejection, and leaves the message to the size banner", async () => {
     installFakeServer();
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
@@ -32,10 +32,10 @@ describe("a too-large buffer while typing", () => {
       const scene = result.current.selectedScene;
       setMaxCodeBytes(200);
       act(() => result.current.setCode(`${result.current.code}\n${"x = 1\n".repeat(100)}`));
-      await waitFor(() => expect(error).toHaveBeenCalledWith(expect.stringMatching(/larger than/), { id: "code-size" }));
       // The old scene list and timeline described other code: gone. The picked scene stays.
-      // (Waited for: the toast is recorded before React commits the cleared state.)
       await waitFor(() => expect(result.current.scenes).toEqual([]));
+      // The editor's banner says the buffer is too large; no toast on top of it.
+      expect(error).not.toHaveBeenCalled();
       expect(result.current.animations).toEqual({});
       expect(result.current.selectedScene).toBe(scene);
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -49,6 +49,24 @@ describe("a too-large buffer while typing", () => {
     } finally {
       process.off("unhandledRejection", onRejection);
     }
+  });
+});
+
+describe("a server whose size limit is lower than the one the UI knows", () => {
+  it("toasts the server's message, since the editor shows no size banner", async () => {
+    const server = installFakeServer();
+    const fakeFetch = server.fetch.getMockImplementation() as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    server.fetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/parse-code")) {
+        return { ok: false, status: 413, headers: new Headers(), json: async () => ({ detail: "Code payload exceeds maximum size (64 bytes)." }) } as unknown as Response;
+      }
+      return fakeFetch(input, init);
+    });
+    const error = vi.spyOn(toast, "error");
+    const { result } = renderHook(() => useWorkspace({ mode: "disk", online: true }));
+    await waitFor(() => expect(result.current.activeFile).not.toBeNull());
+    act(() => result.current.setCode(`${result.current.code}\n# a little more\n`));
+    await waitFor(() => expect(error).toHaveBeenCalledWith("Code payload exceeds maximum size (64 bytes).", { id: "code-size" }));
   });
 });
 
@@ -82,9 +100,38 @@ describe("browser storage writes one key per file", () => {
   it("migrates the old one-map format once, without overwriting files already stored per key", () => {
     localStorage.setItem(STORAGE_KEYS.browserFiles, JSON.stringify({ "old.py": "# old\n", "both.py": "# from the map\n" }));
     localStorage.setItem(browserFileKey("both.py"), "# per key wins\n");
-    expect(loadBrowserFiles()).toEqual({ "old.py": "# old\n", "both.py": "# per key wins\n" });
+    // Nothing tells which of the two is newer: both are kept.
+    expect(loadBrowserFiles()).toEqual({ "old.py": "# old\n", "both.py": "# per key wins\n", "both (older tab).py": "# from the map\n" });
     expect(localStorage.getItem(STORAGE_KEYS.browserFiles)).toBeNull();
     expect(localStorage.getItem(browserFileKey("old.py"))).toBe("# old\n");
+  });
+});
+
+describe("a tab still running the one-map version", () => {
+  const legacyMap = (files: Record<string, string>, key: string = STORAGE_KEYS.browserFiles) => localStorage.setItem(key, JSON.stringify(files));
+
+  it("keeps its edit and the edits made here since, without copies of its stale scripts", () => {
+    legacyMap({ "a.py": "# a0\n", "b.py": "# b0\n" });
+    loadBrowserFiles(); // migrated by the new version
+    writeBrowserFile("a.py", "# a1, edited here\n");
+    // The old tab saves b.py: it writes its whole map again, with its stale a.py.
+    legacyMap({ "a.py": "# a0\n", "b.py": "# b1, edited there\n" });
+    expect(loadBrowserFiles()).toEqual({ "a.py": "# a1, edited here\n", "b.py": "# b1, edited there\n" });
+    // And again: still no copies.
+    legacyMap({ "a.py": "# a0\n", "b.py": "# b2, edited there\n" });
+    expect(loadBrowserFiles()).toEqual({ "a.py": "# a1, edited here\n", "b.py": "# b2, edited there\n" });
+  });
+
+  it("keeps both versions of a script edited on both sides, once (the oldest key name too)", () => {
+    const oldest = "manim_composer_browser_files";
+    legacyMap({ "a.py": "# a0\n" }, oldest);
+    loadBrowserFiles();
+    writeBrowserFile("a.py", "# a1, edited here\n");
+    legacyMap({ "a.py": "# a1, edited there\n" }, oldest);
+    expect(loadBrowserFiles()).toEqual({ "a.py": "# a1, edited here\n", "a (older tab).py": "# a1, edited there\n" });
+    legacyMap({ "a.py": "# a1, edited there\n" }, oldest);
+    expect(Object.keys(loadBrowserFiles()).sort()).toEqual(["a (older tab).py", "a.py"]);
+    expect(localStorage.getItem(oldest)).toBeNull();
   });
 });
 

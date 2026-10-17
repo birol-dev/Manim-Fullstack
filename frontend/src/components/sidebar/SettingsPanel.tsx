@@ -98,7 +98,8 @@ export function SettingsPanel({ settings, openGLSupported, onChange }: SettingsP
               </div>
               <Select value={settings.quality} onValueChange={(value) => onChange("quality", value as Quality)}>
                 <SelectTrigger id="render-quality" aria-describedby="render-quality-description" className="mt-0.5 w-[88px] shrink-0 gap-1 px-2">
-                  <SelectValue />
+                  {/* Just "Medium": the whole "Medium · 720p" didn't fit and read "Mediu…". The menu has the details. */}
+                  <SelectValue>{QUALITY_OPTIONS.find((option) => option.value === settings.quality)?.label}</SelectValue>
                 </SelectTrigger>
                 <SelectContent align="end">
                   {QUALITY_OPTIONS.map((option) => (

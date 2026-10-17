@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -22,7 +23,13 @@ interface NewFileDialogProps {
   onCreatedFocus?: () => void;
 }
 
-function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProps & { request: NewFileRequest }) {
+function NewFileForm({
+  request,
+  existing,
+  onClose,
+  onCreate,
+  onCreatedFocus,
+}: NewFileDialogProps & { request: NewFileRequest }) {
   const [value, setValue] = useState(request.suggestedName);
   // Checked while typing, with the same rule and wording as renaming in the Files panel.
   const [serverError, setServerError] = useState<string | null>(null);
@@ -37,7 +44,10 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
     setBusy(true);
     try {
       await onCreate(name);
-      onClose();
+      // Close first (the dialog traps focus while it is open), then hand focus to the new
+      // file right away: waiting for the 150 ms fade-out lost whatever was typed meanwhile.
+      flushSync(onClose);
+      onCreatedFocus?.();
     } catch (err) {
       setServerError(errorMessage(err, "Couldn't create the file."));
       setBusy(false);
@@ -62,6 +72,9 @@ function NewFileForm({ request, existing, onClose, onCreate }: NewFileDialogProp
           id="new-file-name"
           autoFocus
           value={value}
+          // The name is submitted: keys typed while the file is created must not change it.
+          readOnly={busy}
+          aria-busy={busy || undefined}
           aria-invalid={error ? true : undefined}
           placeholder="my_scene.py"
           onFocus={(event) => event.currentTarget.setSelectionRange(0, value.replace(/\.py$/i, "").length)}
@@ -100,9 +113,8 @@ export function NewFileDialog(props: NewFileDialogProps) {
         onCloseAutoFocus={(event) => {
           if (!created.current) return;
           created.current = false;
-          if (!props.onCreatedFocus) return;
-          event.preventDefault();
-          props.onCreatedFocus();
+          // Focus already went to the new file when the dialog closed; don't pull it back.
+          if (props.onCreatedFocus) event.preventDefault();
         }}
       >
         {/* Remount per request so the form starts fresh. */}
