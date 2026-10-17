@@ -324,7 +324,9 @@ def _peer_host(client) -> Optional[str]:
 async def reject_untrusted_requests(request: Request, call_next):
     # When the request reached the app, before it waits for a worker thread
     # (DELETE /api/scripts uses it to tell what existed when it was sent).
-    request.scope.setdefault("manim_arrived", time.monotonic())
+    # perf_counter, not monotonic: Windows' monotonic clock ticks every ~16 ms,
+    # too coarse to order this against a rename that commits a moment later.
+    request.scope.setdefault("manim_arrived", time.perf_counter())
     if not _request_allowed(request.headers, _peer_host(request.client)):
         return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
     return await call_next(request)
@@ -425,12 +427,16 @@ class RequestBodyLimitMiddleware:
             if body_done:
                 return await receive()
             remaining = deadline - time.monotonic()
+            # Which limit bounds this wait, decided up front: Windows' clock ticks
+            # every ~16 ms, so re-reading it after the timeout can land just before
+            # the deadline and blame the per-chunk timeout instead.
+            deadline_bound = remaining <= BODY_READ_TIMEOUT_SECONDS
             try:
                 if remaining <= 0:
                     raise asyncio.TimeoutError
                 message = await asyncio.wait_for(receive(), timeout=min(BODY_READ_TIMEOUT_SECONDS, remaining))
             except asyncio.TimeoutError:
-                if time.monotonic() >= deadline:
+                if deadline_bound or time.monotonic() >= deadline:
                     abort = (408, f"The request body did not finish arriving within {deadline_seconds:g} seconds.")
                 else:
                     abort = (408, f"The request body did not arrive within {BODY_READ_TIMEOUT_SECONDS:g} seconds.")
@@ -512,7 +518,9 @@ def _sweep_temp_renders(min_age: Optional[float] = None) -> None:
     default) and not owned by a render of this process are removed.
     """
     min_age = SWEEP_MIN_AGE_SECONDS if min_age is None else min_age
-    cutoff = time.time() - min_age
+    # 0 means "regardless of age". Comparing with time.time() would miss files
+    # written this instant on Windows, where time.time() lags file mtimes.
+    cutoff = float("inf") if min_age <= 0 else time.time() - min_age
     try:
         for entry in os.scandir(WORKSPACE_DIR):
             if not (entry.is_file(follow_symlinks=False) and _is_scratch_file(entry.name)):
@@ -556,7 +564,7 @@ def _sweep_upload_partials(min_age: Optional[float] = None) -> None:
     the whole body has arrived, so a live one is seconds old at most.
     """
     min_age = UPLOAD_PARTIAL_MIN_AGE_SECONDS if min_age is None else min_age
-    cutoff = time.time() - min_age
+    cutoff = float("inf") if min_age <= 0 else time.time() - min_age  # see _sweep_temp_renders
     try:
         entries = list(os.scandir(ASSETS_DIR))
     except OSError:
@@ -1025,8 +1033,7 @@ def save_file(req: SaveRequest):
                 # Same bytes as on disk already (both sides made the same edit, or it was
                 # touched without changing): nothing to lose, so no conflict and no write.
                 try:
-                    with open(filepath, "rb") as existing:
-                        same = existing.read() == data
+                    same = read_bytes(filepath) == data  # retries a busy file on Windows
                 except OSError:
                     same = False
                 if same:
@@ -1077,14 +1084,14 @@ def rename_file(req: RenameRequest):
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
 
-# lock_key -> time.monotonic() when a rename last put a file under that name.
+# lock_key -> time.perf_counter() when a rename last put a file under that name.
 _new_names: dict = {}
 _new_names_guard = threading.Lock()
 _NEW_NAME_MEMORY_SECONDS = 30.0
 
 
 def _note_new_name(path: str) -> None:
-    now = time.monotonic()
+    now = time.perf_counter()
     with _new_names_guard:
         _new_names[lock_key(path)] = now
         for key in [k for k, t in _new_names.items() if now - t > _NEW_NAME_MEMORY_SECONDS]:
@@ -1118,7 +1125,7 @@ def delete_script(filename: str, request: Request = None):  # type: ignore[assig
         return {"success": True, "filename": os.path.basename(link), "link_removed": True}
     arrived = request.scope.get("manim_arrived") if request is not None else None
     if arrived is None:
-        arrived = time.monotonic()
+        arrived = time.perf_counter()
     filename, filepath = _script_path(filename)
     # What the caller can mean is the file that exists, settled, as the request
     # arrives: a save or rename of this name in flight (or one that creates the
