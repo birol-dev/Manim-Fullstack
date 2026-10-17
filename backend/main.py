@@ -2,25 +2,65 @@
 
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 import platform
+import re
 import shutil
+import socket
+import stat
 import subprocess
 import sys
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from urllib.parse import quote
 
+logger = logging.getLogger("uvicorn.error")
+
 # Ensure backend directory is in python search path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from diagnostics import get_binary_paths, get_cached_profile, write_manim_config_file
-from executor import OUTPUT_EXTENSIONS, ManimExecutor, media_rel_path, output_kind
+from file_ops import (
+    TEMP_WRITE_PREFIX,
+    LockBusyError,
+    ReadOnlyFileError,
+    atomic_write,
+    content_version,
+    ensure_writable,
+    held_lock,
+    lock_key,
+    locked,
+    move_into_place,
+    read_bytes,
+    rename_no_replace,
+)
+from executor import (
+    OUTPUT_EXTENSIONS,
+    STAGE_PREFIX,
+    ManimExecutor,
+    keep_box_width,
+    media_file_is_complete,
+    media_rel_path,
+    output_kind,
+    redact_host_paths,
+)
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
-from scene_parser import get_scene_animations, get_scenes_from_code, get_syntax_error
-from workspace_paths import UnsafePathError, safe_basename, safe_join
+from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
+from workspace_paths import (
+    UnsafePathError,
+    find_case_insensitive_match,
+    is_within_directory,
+    nfc_filename,
+    safe_basename,
+    safe_join,
+    to_script_name,
+    validate_new_filename,
+)
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -50,6 +90,17 @@ MEDIA_SUBDIRS = ("videos", "images")
 
 # Max size for code sent to /api/save, /api/parse-code, and the render socket.
 MAX_CODE_BYTES = int(os.environ.get("MANIM_MAX_CODE_BYTES", str(2 * 1024 * 1024)))
+# Raw request / WebSocket message cap. The code limit above is checked on the decoded
+# code itself; JSON escaping can grow it up to 6x (control chars become \u00XX).
+MAX_REQUEST_BODY_BYTES = int(
+    os.environ.get("MANIM_MAX_REQUEST_BYTES", str(6 * MAX_CODE_BYTES + 64 * 1024))
+)
+
+
+def _body_too_large() -> str:
+    return f"Request body exceeds maximum size ({MAX_REQUEST_BODY_BYTES} bytes)."
+
+
 ALLOWED_QUALITIES = frozenset({"l", "m", "h", "k"})
 
 ALLOWED_ASSET_EXTENSIONS = {
@@ -69,6 +120,10 @@ ALLOWED_ASSET_EXTENSIONS = {
 MAX_ASSET_SIZE_BYTES = 50 * 1024 * 1024  # 50MB
 
 DEFAULT_SCRIPT_NAME = "example.py"
+# Written once the starter script has been offered, so deleting example.py sticks.
+SEED_MARKER_NAME = ".composer-initialized"
+# A download-only render that nobody fetched is removed after this many seconds.
+TEMP_DOWNLOAD_TTL_SECONDS = int(os.environ.get("MANIM_TEMP_DOWNLOAD_TTL", "3600"))
 DEFAULT_SCRIPT = '''from manim import *
 
 
@@ -129,6 +184,8 @@ RUN_STARTUP_MAINTENANCE = True
 # Parallel renders share Manim's text cache and the same output path.
 MAX_CONCURRENT_RENDERS = max(1, int(os.environ.get("MANIM_MAX_CONCURRENT_RENDERS", "1")))
 _render_slots: Optional[asyncio.Semaphore] = None
+# How long a cancelled render may take to wind down before its task is cancelled outright.
+STOP_GRACE_SECONDS = 30.0
 
 
 def _render_semaphore() -> asyncio.Semaphore:
@@ -138,22 +195,125 @@ def _render_semaphore() -> asyncio.Semaphore:
     return _render_slots
 
 
+# Startup sweeps wait until this process is really serving: uvicorn runs the
+# lifespan *before* it binds, so a second server that fails with "address already
+# in use" would otherwise delete the scratch files of renders the first server
+# is still running. Sweeps also leave entries younger than this alone, in case
+# another server (on another port) shares the workspace.
+SWEEP_MIN_AGE_SECONDS = float(os.environ.get("MANIM_SWEEP_MIN_AGE", str(6 * 3600)))
+BIND_WAIT_SECONDS = 15.0
+
+
+def _listening_via_psutil() -> Optional[bool]:
+    """psutil's view of this process's sockets; None when psutil is missing or fails."""
+    try:
+        import psutil
+
+        proc = psutil.Process()
+        connections = proc.net_connections(kind="inet") if hasattr(proc, "net_connections") else proc.connections(kind="inet")
+    except Exception:
+        return None
+    return any(getattr(conn, "status", None) == "LISTEN" for conn in connections)
+
+
+def _listening_via_fds() -> Optional[bool]:
+    """Fallback without psutil (POSIX): is any of our file descriptors a listening
+    TCP socket? None when descriptors can't be listed (Windows)."""
+    if os.name == "nt" or not hasattr(socket, "SO_ACCEPTCONN"):
+        return None
+    fd_dir = "/proc/self/fd" if os.path.isdir("/proc/self/fd") else "/dev/fd"
+    try:
+        fds = [int(name) for name in os.listdir(fd_dir) if name.isdigit()]
+    except OSError:
+        return None
+    for fd in fds:
+        try:
+            if not stat.S_ISSOCK(os.fstat(fd).st_mode):
+                continue
+            sock = socket.socket(fileno=fd)
+        except (OSError, ValueError):
+            continue
+        try:
+            if sock.family in (socket.AF_INET, socket.AF_INET6) and sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN):
+                return True
+        except OSError:
+            pass
+        finally:
+            sock.detach()  # the descriptor belongs to uvicorn; never close it
+    return False
+
+
+def _process_is_listening() -> Optional[bool]:
+    """True once this process owns a listening TCP socket (uvicorn has bound).
+
+    psutil first, then a scan of our own file descriptors; None when neither can tell.
+    """
+    result = _listening_via_psutil()
+    if result is None:
+        result = _listening_via_fds()
+    return result
+
+
+# Without any way to see our own sockets, the sweep waits this long after
+# startup instead. uvicorn binds right after the lifespan starts; a server that
+# can't bind shuts down at once, and shutdown cancels the waiting sweep.
+BIND_FALLBACK_DELAY_SECONDS = 5.0
+
+
+async def _maintenance_after_bind(wait_seconds: float = BIND_WAIT_SECONDS, poll: float = 0.1) -> bool:
+    """Sweep old scratch files once this server has bound its port; give up otherwise."""
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        listening = await asyncio.to_thread(_process_is_listening)
+        if listening:
+            break
+        if listening is None:
+            logger.warning(
+                "Can't check whether this server has bound its port (psutil unavailable and "
+                "no socket list); sweeping old scratch files after %gs instead.",
+                BIND_FALLBACK_DELAY_SECONDS,
+            )
+            await asyncio.sleep(BIND_FALLBACK_DELAY_SECONDS)
+            break
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(poll)
+    await asyncio.to_thread(_sweep_temp_renders)
+    return True
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    task = None
     if RUN_STARTUP_MAINTENANCE:
-        _sweep_temp_renders()
+        # Harmless when another server is running: the same profile, rewritten.
         write_manim_config_file(WORKSPACE_DIR, get_cached_profile())
-    yield
+        task = asyncio.create_task(_maintenance_after_bind())
+    try:
+        yield
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
 
 
 app = FastAPI(title="Manim Composer API", version=APP_VERSION, lifespan=_lifespan)
 
 
+@app.exception_handler(UnicodeEncodeError)
+async def _unicode_error_handler(_request: Request, _exc: UnicodeEncodeError):
+    """A lone surrogate (``"\\udc80"`` in JSON) that reached a path or encode call: 400, not 500."""
+    return JSONResponse({"detail": f"The request {_SURROGATE_MESSAGE}"}, status_code=400)
+
+
 def _request_allowed(headers, peer: Optional[str] = None) -> bool:
-    if not is_peer_allowed(peer):
+    try:
+        if not is_peer_allowed(peer):
+            return False
+        host = headers.get("host")
+        return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
+    except (ValueError, TypeError):
+        # A header the policy cannot parse is refused (403), never a 500.
         return False
-    host = headers.get("host")
-    return is_host_allowed(host) and is_origin_allowed(headers.get("origin"), host)
 
 
 def _peer_host(client) -> Optional[str]:
@@ -162,77 +322,159 @@ def _peer_host(client) -> Optional[str]:
 
 @app.middleware("http")
 async def reject_untrusted_requests(request: Request, call_next):
+    # When the request reached the app, before it waits for a worker thread
+    # (DELETE /api/scripts uses it to tell what existed when it was sent).
+    # perf_counter, not monotonic: Windows' monotonic clock ticks every ~16 ms,
+    # too coarse to order this against a rename that commits a moment later.
+    request.scope.setdefault("manim_arrived", time.perf_counter())
     if not _request_allowed(request.headers, _peer_host(request.client)):
         return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
     return await call_next(request)
 
 
-class LimitCodeBodyMiddleware:
-    """Reject oversized script uploads from Content-Length, before the body is parsed.
+# A request body that stops arriving for this long is answered 408 and dropped.
+BODY_READ_TIMEOUT_SECONDS = float(os.environ.get("MANIM_BODY_TIMEOUT", "30"))
+# The whole body must arrive within this many seconds, however steadily it
+# trickles in (408 otherwise). Asset uploads (up to 50 MB) get
+# UPLOAD_DEADLINE_FACTOR times as long: 10 minutes by default, about 0.7 Mbit/s.
+BODY_DEADLINE_SECONDS = float(os.environ.get("MANIM_BODY_DEADLINE", "120"))
+UPLOAD_DEADLINE_FACTOR = 5
+# Multipart framing around an asset upload (boundaries, part headers).
+UPLOAD_OVERHEAD_BYTES = 1024 * 1024
 
-    The JSON envelope around the code is allowed a few extra kilobytes.
+
+class RequestBodyLimitMiddleware:
+    """Cap every request body by the bytes actually received, with an idle timeout.
+
+    * ``Content-Length`` above the cap is refused before anything is read.
+    * A request with both ``Content-Length`` and ``Transfer-Encoding`` is refused
+      (400), as RFC 9112 section 6.3 allows; the two can disagree (request smuggling).
+    * Chunked bodies are counted as they arrive and cut off at the cap (413).
+    * While the body is incomplete, a gap longer than MANIM_BODY_TIMEOUT
+      (default 30 s) between chunks ends the request with 408.
+    * The whole body must arrive within MANIM_BODY_DEADLINE (default 120 s,
+      5x that for asset uploads), so a slow trickle can't hold a request open
+      forever (408).
+
+    Nothing is buffered here: receive() is wrapped and the route reads as usual.
+    A refused body looks like a client disconnect to the route, and whatever it
+    answers is replaced by the 413/408 (FastAPI would otherwise turn the abort
+    into "There was an error parsing the body").
     """
 
-    PATHS = {"/api/save", "/api/parse-code"}
+    METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
     def __init__(self, app):
         self.app = app
 
+    @staticmethod
+    def deadline_for(path: str) -> float:
+        if path == "/api/upload-asset":
+            return BODY_DEADLINE_SECONDS * UPLOAD_DEADLINE_FACTOR
+        return BODY_DEADLINE_SECONDS
+
+    @staticmethod
+    def limit_for(path: str) -> tuple:
+        if path == "/api/upload-asset":
+            return MAX_ASSET_SIZE_BYTES + UPLOAD_OVERHEAD_BYTES, "File size exceeds maximum allowed size (50MB)."
+        return MAX_REQUEST_BODY_BYTES, _body_too_large()
+
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope.get("path") not in self.PATHS or scope.get("method") not in {"POST", "PUT", "PATCH"}:
+        if scope["type"] != "http" or scope.get("method") not in self.METHODS:
             await self.app(scope, receive, send)
             return
-        limit = MAX_CODE_BYTES + 8192
-        headers = {key.decode("latin1").lower(): value.decode("latin1") for key, value in scope.get("headers", [])}
-        declared = headers.get("content-length")
-        if declared is not None:
+        limit, too_large = self.limit_for(scope.get("path", ""))
+        declared = []
+        chunked = False
+        for key, value in scope.get("headers", []):
+            name = key.decode("latin1").lower()
+            if name == "content-length":
+                declared.append(value.decode("latin1").strip())
+            elif name == "transfer-encoding":
+                chunked = True
+
+        async def refuse(status: int, detail: str) -> None:
+            response = JSONResponse({"detail": detail}, status_code=status, headers={"Connection": "close"})
+            await response(scope, receive, send)
+
+        if chunked and declared:
+            await refuse(400, "A request cannot have both Content-Length and Transfer-Encoding.")
+            return
+        if declared:
             try:
-                too_big = int(declared) > limit
+                sizes = {int(value) for value in declared}
             except ValueError:
-                too_big = True
-            if too_big:
-                response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
-                    status_code=413,
-                )
-                await response(scope, receive, send)
+                await refuse(400, "Invalid Content-Length header.")
                 return
-            await self.app(scope, receive, send)
-            return
-
-        chunks = []
-        total = 0
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
-                chunks.append(message)
-                continue
-            total += len(message.get("body", b""))
-            if total > limit:
-                response = JSONResponse(
-                    {"detail": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes)."},
-                    status_code=413,
-                )
-                await response(scope, receive, send)
+            if len(sizes) != 1 or min(sizes) < 0:
+                await refuse(400, "Invalid Content-Length header.")
                 return
-            chunks.append(message)
-            if not message.get("more_body", False):
-                break
+            if sizes.pop() > limit:
+                await refuse(413, too_large)
+                return
 
-        index = 0
+        received = 0
+        deadline_seconds = self.deadline_for(scope.get("path", ""))
+        deadline = time.monotonic() + deadline_seconds
+        body_done = False
+        response_started = False
+        abort: Optional[tuple] = None  # (status, detail) once the body is refused
 
-        async def replay():
-            nonlocal index
-            if index < len(chunks):
-                item = chunks[index]
-                index += 1
-                return item
-            return {"type": "http.disconnect"}
+        async def limited_receive():
+            nonlocal received, body_done, abort
+            if abort is not None:
+                return {"type": "http.disconnect"}
+            if body_done:
+                return await receive()
+            remaining = deadline - time.monotonic()
+            # Which limit bounds this wait, decided up front: Windows' clock ticks
+            # every ~16 ms, so re-reading it after the timeout can land just before
+            # the deadline and blame the per-chunk timeout instead.
+            deadline_bound = remaining <= BODY_READ_TIMEOUT_SECONDS
+            try:
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                message = await asyncio.wait_for(receive(), timeout=min(BODY_READ_TIMEOUT_SECONDS, remaining))
+            except asyncio.TimeoutError:
+                if deadline_bound or time.monotonic() >= deadline:
+                    abort = (408, f"The request body did not finish arriving within {deadline_seconds:g} seconds.")
+                else:
+                    abort = (408, f"The request body did not arrive within {BODY_READ_TIMEOUT_SECONDS:g} seconds.")
+                return {"type": "http.disconnect"}
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    # The route sees a disconnect and stops reading; its error
+                    # response is replaced by the 413 below.
+                    abort = (413, too_large)
+                    return {"type": "http.disconnect"}
+                if not message.get("more_body", False):
+                    body_done = True
+            else:
+                body_done = True  # http.disconnect
+            return message
 
-        await self.app(scope, replay, send)
+        async def tracking_send(message):
+            nonlocal response_started
+            if abort is not None:
+                if message["type"] == "http.response.start" and not response_started:
+                    response_started = True
+                    await refuse(*abort)
+                return  # the route's own answer to the "disconnect" is dropped
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracking_send)
+        except Exception:
+            if abort is None:
+                raise
+        if abort is not None and not response_started:
+            await refuse(*abort)
 
 
-app.add_middleware(LimitCodeBodyMiddleware)
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 class _PolicyCORSMiddleware(CORSMiddleware):
@@ -259,21 +501,102 @@ for path in [WORKSPACE_DIR, MEDIA_DIR, ASSETS_DIR]:
     os.makedirs(path, exist_ok=True)
 
 
-def _sweep_temp_renders() -> None:
-    """Remove scratch scripts and outputs left behind by renders from a previous run."""
+def _is_scratch_file(name: str) -> bool:
+    if name.startswith(TEMP_PREFIX) and name.endswith((".py", ".cfg")):
+        return True
+    return name.startswith(TEMP_WRITE_PREFIX)  # an interrupted atomic save
+
+
+def _sweep_temp_renders(min_age: Optional[float] = None) -> None:
+    """Remove scratch scripts and outputs left behind by renders from a previous run.
+
+    Only entries untouched for *min_age* seconds (MANIM_SWEEP_MIN_AGE, 6 h by
+    default) and not owned by a render of this process are removed.
+    """
+    min_age = SWEEP_MIN_AGE_SECONDS if min_age is None else min_age
+    # 0 means "regardless of age". Comparing with time.time() would miss files
+    # written this instant on Windows, where time.time() lags file mtimes.
+    cutoff = float("inf") if min_age <= 0 else time.time() - min_age
     try:
         for entry in os.scandir(WORKSPACE_DIR):
-            if entry.is_file() and entry.name.startswith(TEMP_PREFIX) and entry.name.endswith(".py"):
-                os.remove(entry.path)
+            if not (entry.is_file(follow_symlinks=False) and _is_scratch_file(entry.name)):
+                continue
+            if os.path.splitext(entry.name)[0] in _active_temp_stems:
+                continue
+            try:
+                if entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    os.remove(entry.path)
+            except OSError:
+                pass
     except OSError:
         pass
+    _sweep_upload_partials()
     for sub in MEDIA_SUBDIRS:
         root = os.path.join(MEDIA_DIR, sub)
         if not os.path.isdir(root):
             continue
-        for entry in os.scandir(root):
-            if entry.is_dir() and entry.name.startswith(TEMP_PREFIX):
-                shutil.rmtree(entry.path, ignore_errors=True)
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(TEMP_PREFIX):
+                _sweep_stale_stages(entry, cutoff)
+                continue
+            if entry.name in _active_temp_stems:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False) and _newest_mtime(entry.path) < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                pass
+
+
+def _sweep_upload_partials(min_age: Optional[float] = None) -> None:
+    """Remove "<name>.uploading-<hex>" files that interrupted uploads left in assets/.
+
+    Only partials older than MANIM_UPLOAD_PARTIAL_AGE (900 s) that no upload of
+    this process is writing are removed; an upload only writes its partial after
+    the whole body has arrived, so a live one is seconds old at most.
+    """
+    min_age = UPLOAD_PARTIAL_MIN_AGE_SECONDS if min_age is None else min_age
+    cutoff = float("inf") if min_age <= 0 else time.time() - min_age  # see _sweep_temp_renders
+    try:
+        entries = list(os.scandir(ASSETS_DIR))
+    except OSError:
+        return
+    for entry in entries:
+        if not is_upload_partial(entry.name) or entry.path in _active_upload_partials:
+            continue
+        try:
+            if entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                os.remove(entry.path)
+        except OSError:
+            pass
+
+
+def _sweep_stale_stages(stem_entry, cutoff: float) -> None:
+    """Remove ``<stem>/.~run-*`` output staging folders of renders that never finished.
+
+    A live render of this process keeps its own staging folder fresh (and removes
+    it when it ends), so only folders untouched since *cutoff* go.
+    """
+    try:
+        if not stem_entry.is_dir(follow_symlinks=False):
+            return
+        children = list(os.scandir(stem_entry.path))
+    except OSError:
+        return
+    for child in children:
+        if not child.name.startswith(STAGE_PREFIX):
+            continue
+        if TEMP_PREFIX + child.name[len(STAGE_PREFIX):] in _active_temp_stems:
+            continue
+        try:
+            if child.is_dir(follow_symlinks=False) and _newest_mtime(child.path) < cutoff:
+                shutil.rmtree(child.path, ignore_errors=True)
+        except OSError:
+            pass
 
 
 # Rendered videos are served from /media. User uploads are served by the /assets
@@ -296,7 +619,7 @@ def serve_asset(asset_path: str):
         user_file = safe_join(ASSETS_DIR, asset_path)
     except UnsafePathError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not os.path.isfile(user_file):
+    if is_upload_partial(os.path.basename(user_file)) or not os.path.isfile(user_file):
         raise HTTPException(status_code=404, detail="Asset not found")
     # SVGs are same-origin documents. Without a sandbox policy, a script inside
     # an uploaded SVG runs with the app's origin when the file is opened directly.
@@ -319,16 +642,44 @@ def _render_block_reason(code: str, scene_name: str) -> Optional[str]:
     error = get_syntax_error(code)
     if error:
         return f"Syntax error on line {error['line']}: {error['message']}"
+    # Only reject what the AST can prove. Anything else (aliased or factory-made
+    # bases, Slide, classes under if/try) goes to Manim, and a run that writes
+    # nothing is still reported as failed afterwards.
     scenes = get_scenes_from_code(code)
-    if not scenes:
+    if scene_name in scenes:
+        return None
+    info = get_render_names(code)
+    if not info["has_class"] and not info["open_namespace"]:
         return "No Scene class found. Add one, for example: class Intro(Scene):"
-    if scene_name not in scenes:
-        return f"Scene '{scene_name}' is not in this file. Found: {', '.join(scenes)}."
-    return None
+    if scene_name in info["names"] or info["open_namespace"]:
+        return None
+    found = ", ".join(scenes) if scenes else "no Scene classes"
+    return f"Scene '{scene_name}' is not in this file. Found: {found}."
+
+
+def _render_scene_warning(code: str, scene_name: str) -> Optional[str]:
+    """A note for scenes the AST could not confirm; the render still runs."""
+    if get_syntax_error(code) or scene_name in get_scenes_from_code(code):
+        return None
+    return (
+        f"Couldn't confirm that '{scene_name}' is a Scene subclass from the code alone; "
+        "letting Manim decide."
+    )
+
+
+_SURROGATE_MESSAGE = "contains an unpaired surrogate (\\ud800-\\udfff), which is not valid text."
+
+
+def _utf8(text: str, what: str) -> bytes:
+    """UTF-8 bytes of *text*; a lone surrogate from a JSON escape is a 400, not a 500."""
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise HTTPException(status_code=400, detail=f"{what} {_SURROGATE_MESSAGE}")
 
 
 def _ensure_code_within_limit(code: str) -> None:
-    if len(code.encode("utf-8")) > MAX_CODE_BYTES:
+    if len(_utf8(code, "Code")) > MAX_CODE_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
@@ -358,9 +709,27 @@ def get_diagnostics():
     Dependency lookup is cheap and must not be cached, otherwise an install
     started from the setup dialog would not show up for minutes.
     """
-    profile = get_cached_profile()
-    profile["dependencies"] = get_binary_paths()
+    profile = dict(get_cached_profile())
+    profile["dependencies"] = _redacted_dependencies(get_binary_paths())
+    profile["max_code_bytes"] = MAX_CODE_BYTES
     return profile
+
+
+def _redacted_dependencies(binaries: dict) -> dict:
+    """Dependency paths without the host's folder names (``<venv>/bin/manim``).
+
+    System locations such as /usr/bin/ffmpeg are kept; "Not Found" and flags
+    pass through unchanged, so the System panel needs no change.
+    """
+
+    def hide(value):
+        if isinstance(value, str):
+            return redact_host_paths(value, WORKSPACE_DIR, BASE_DIR)
+        if isinstance(value, list):
+            return [hide(item) for item in value]
+        return value
+
+    return {key: hide(value) for key, value in binaries.items()}
 
 
 # --------------------------------------------------------------------------- #
@@ -373,7 +742,14 @@ def _list_scripts() -> list:
     try:
         with os.scandir(WORKSPACE_DIR) as entries:
             for entry in entries:
-                if entry.is_file() and entry.name.endswith(".py") and not entry.name.startswith(TEMP_PREFIX):
+                if not entry.name.endswith(".py") or entry.name.startswith(TEMP_PREFIX):
+                    continue
+                link = _link_status(entry.path) if entry.is_symlink() else None
+                if link:
+                    # Shown so it can be deleted; it can't be opened, saved, or rendered.
+                    scripts.append({"name": entry.name, "size": 0, "type": "script", link: True})
+                    continue
+                if entry.is_file():
                     try:
                         scripts.append({"name": entry.name, "size": entry.stat().st_size, "type": "script"})
                     except OSError:
@@ -388,7 +764,7 @@ def _list_assets() -> list:
     try:
         with os.scandir(ASSETS_DIR) as entries:
             for entry in entries:
-                if entry.is_file():
+                if entry.is_file() and not is_upload_partial(entry.name):
                     try:
                         assets.append(
                             {
@@ -437,10 +813,20 @@ def _list_media() -> list:
             continue
         for root, dirs, files in os.walk(root_dir):
             # Prune scratch output and Manim's per-animation chunks.
-            dirs[:] = [d for d in dirs if d != "partial_movie_files" and not d.startswith(TEMP_PREFIX)]
+            # Prune scratch output, Manim's per-animation chunks, and renders still
+            # being written (per-run staging folders).
+            dirs[:] = [
+                d for d in dirs
+                if d != "partial_movie_files" and not d.startswith((TEMP_PREFIX, STAGE_PREFIX))
+            ]
             for name in files:
                 if name.lower().endswith(OUTPUT_EXTENSIONS):
-                    item = _media_item(os.path.join(root, name))
+                    path = os.path.join(root, name)
+                    # A broken file (an interrupted render from an older version, a
+                    # copy that never finished) is not offered as a render.
+                    if not media_file_is_complete(path):
+                        continue
+                    item = _media_item(path)
                     if item:
                         media.append(item)
     return sorted(media, key=lambda item: item["modified"], reverse=True)
@@ -449,21 +835,100 @@ def _list_media() -> list:
 @app.get("/api/files")
 def get_files():
     """List workspace scripts, uploaded assets, and rendered media (newest first)."""
-    scripts = _list_scripts()
-    if not scripts:
-        # Never leave the editor empty: seed the workspace with a starter script.
-        with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
-            f.write(DEFAULT_SCRIPT)
-        scripts = _list_scripts()
-    return {"scripts": scripts, "assets": _list_assets(), "media": _list_media()}
+    _seed_starter_script_once()
+    _sweep_stale_temp_downloads()
+    return {"scripts": _list_scripts(), "assets": _list_assets(), "media": _list_media()}
 
 
-def _script_path(filename: str) -> tuple:
+def _seed_starter_script_once() -> None:
+    """Write example.py into an empty workspace on first setup only, not after a delete."""
+    marker = os.path.join(WORKSPACE_DIR, SEED_MARKER_NAME)
+    if os.path.exists(marker):
+        return
     try:
-        name = safe_basename(filename, required_suffix=".py")
+        if not _list_scripts():
+            with open(os.path.join(WORKSPACE_DIR, DEFAULT_SCRIPT_NAME), "w", encoding="utf-8") as f:
+                f.write(DEFAULT_SCRIPT)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("The starter script has been created; delete this file to get it back.\n")
+    except OSError:
+        pass
+
+
+def _script_path(filename: str, *, new: bool = False) -> tuple:
+    """Validate a script name. ``new=True`` applies the rules for names being created."""
+    if isinstance(filename, str):
+        _utf8(filename, "Filename")
+    try:
+        if new:
+            name = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+        else:
+            name = safe_basename(filename, required_suffix=".py")
         return name, safe_join(WORKSPACE_DIR, name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid script filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=_bad_script_name_detail(filename, exc))
+
+
+def _is_existing_script(filename) -> bool:
+    """True if *filename* names a file that is already in the workspace (legacy names too)."""
+    try:
+        return os.path.isfile(safe_join(WORKSPACE_DIR, safe_basename(filename)))
+    except (UnsafePathError, TypeError, ValueError):
+        return False
+
+
+def _bad_script_name_detail(filename, exc: Exception) -> str:
+    """Files that exist under a name today's rules forbid can still be opened and
+    renamed; saving or rendering them says so instead of a bare refusal."""
+    if _is_existing_script(filename):
+        return f"Rename this file to save or render it: {exc}"
+    return f"Invalid script filename: {exc}"
+
+
+def _new_script_path(raw: str) -> tuple:
+    """Save / rename target: ``Foo.PY`` -> ``Foo.py`` (NFC), then the rules for new names."""
+    name = to_script_name(raw)
+    if name != raw and raw.lower().endswith(".py") and _is_existing_script(raw):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Rename this file to save or render it: it would be saved as '{name}'.",
+        )
+    return _script_path(name, new=True)
+
+
+def _reject_case_collision(directory: str, name: str) -> None:
+    """409 when another file differs from *name* only by letter case."""
+    clash = find_case_insensitive_match(directory, name)
+    if clash:
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{clash}' already exists. File names that differ only by case are not allowed.",
+        )
+
+
+def _os_error_detail(exc: OSError, action: str) -> str:
+    """A 500 message without the host path that ``str(OSError)`` would include."""
+    reason = exc.strerror or exc.__class__.__name__
+    return f"Could not {action}: {reason}."
+
+
+def _file_version(filepath: str) -> str:
+    """Opaque version of a file on disk (hash of its bytes), for save-conflict checks."""
+    return content_version(read_bytes(filepath))
+
+
+READ_ONLY_DETAIL = "This file is read-only; change its permissions to save it."
+UNREADABLE_DETAIL = "This file can't be read (permission denied); change its permissions to open it."
+
+
+def _version_conflict(detail: str, current_version: Optional[str]) -> JSONResponse:
+    """412 with the version that is on disk now, so the client can compare or reload."""
+    headers = {"ETag": f'"{current_version}"'} if current_version else None
+    return JSONResponse(
+        {"detail": detail, "current_version": current_version},
+        status_code=412,
+        headers=headers,
+    )
 
 
 @app.get("/api/file-content")
@@ -473,11 +938,16 @@ def get_file_content(filename: str):
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Python script not found.")
     try:
-        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to read file: {e}")
-    return {"filename": filename, "code": content, **_parsed(content)}
+        # One read: the code and its version always describe the same bytes.
+        data = read_bytes(filepath)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Python script not found.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail=UNREADABLE_DETAIL)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
+    content = data.decode("utf-8", errors="replace")
+    return {"filename": filename, "code": content, "version": content_version(data), **_parsed(content)}
 
 
 class ParseRequest(BaseModel):
@@ -494,20 +964,87 @@ def parse_code(req: ParseRequest):
 class SaveRequest(BaseModel):
     filename: str
     code: str
+    # The version the editor loaded (from /api/file-content or the last save).
+    # When given, the save only goes through if the file still exists and is
+    # unchanged on disk, so two tabs can't silently overwrite each other and a
+    # save can't recreate a file that was renamed or deleted elsewhere.
+    base_version: Optional[str] = None
+    # New-file dialogs: never overwrite a file that already exists (e.g. created in another tab).
+    create_only: bool = False
+
+
+def _save_target(path: str) -> str:
+    """The file a save of *path* writes: *path* itself, or a symlink's real target.
+
+    The target must stay inside the workspace and be a ``.py`` file; a link that
+    points outside or nowhere is refused rather than replaced by a regular file.
+    """
+    if not os.path.islink(path):
+        return path
+    target = os.path.realpath(path)
+    if not os.path.isfile(target) or not is_within_directory(target, WORKSPACE_DIR):
+        raise HTTPException(status_code=400, detail="This link points outside the workspace or to nothing; it can't be saved.")
+    if not target.lower().endswith(".py"):
+        raise HTTPException(status_code=400, detail="This link doesn't point to a Python script.")
+    return target
 
 
 @app.post("/api/save")
 def save_file(req: SaveRequest):
-    """Write a script and return its parsed scenes."""
+    """Write a script and return its parsed scenes and new version.
+
+    The version check, the create-only check, and the write happen under one
+    per-file lock, and the write is atomic (temp file + rename), so concurrent
+    saves with the same ``base_version`` produce exactly one winner and readers
+    never see a partial file.
+    """
     _ensure_code_within_limit(req.code)
-    filename = req.filename if req.filename.endswith(".py") else f"{req.filename}.py"
-    filename, filepath = _script_path(filename)
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write(req.code)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"success": True, "filename": filename, "message": "File saved.", **_parsed(req.code)}
+    data = _utf8(req.code, "Code")
+    filename, link_path = _new_script_path(req.filename)
+    # A symlink to another script inside the workspace is saved through: the real
+    # file is replaced atomically and the link stays a link.
+    filepath = _save_target(link_path)
+    with locked(link_path, filepath):
+        if os.path.islink(link_path) and _save_target(link_path) != filepath:
+            raise HTTPException(status_code=409, detail="This file was renamed or deleted outside this tab.")
+        if not req.create_only:
+            try:
+                ensure_writable(filepath)
+            except ReadOnlyFileError:
+                raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+        if req.base_version is not None:
+            # 412 (not 409, which means a name clash here) when the file changed
+            # since the editor loaded it; 404 when it is gone.
+            try:
+                current = _file_version(filepath) if os.path.isfile(filepath) else None
+            except FileNotFoundError:
+                current = None
+            except PermissionError:
+                raise HTTPException(status_code=403, detail=UNREADABLE_DETAIL)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
+            if current is None:
+                raise HTTPException(status_code=404, detail="This file was renamed or deleted outside this tab.")
+            if current != req.base_version:
+                # Same bytes as on disk already (both sides made the same edit, or it was
+                # touched without changing): nothing to lose, so no conflict and no write.
+                try:
+                    same = read_bytes(filepath) == data  # retries a busy file on Windows
+                except OSError:
+                    same = False
+                if same:
+                    return {"success": True, "filename": filename, "message": "File saved.", "version": current, **_parsed(req.code)}
+                return _version_conflict("This file was changed outside this tab since you opened it.", current)
+        _reject_case_collision(WORKSPACE_DIR, filename)
+        try:
+            version = atomic_write(filepath, data, exclusive=req.create_only)
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail=f"{filename} already exists.")
+        except ReadOnlyFileError:
+            raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=_os_error_detail(e, "save the script"))
+    return {"success": True, "filename": filename, "message": "File saved.", "version": version, **_parsed(req.code)}
 
 
 class RenameRequest(BaseModel):
@@ -517,47 +1054,151 @@ class RenameRequest(BaseModel):
 
 @app.post("/api/rename")
 def rename_file(req: RenameRequest):
-    """Rename a workspace script."""
-    try:
-        old_name = safe_basename(req.old_name, required_suffix=".py")
-        new_name = safe_basename(req.new_name, required_suffix=".py")
-        old_path = safe_join(WORKSPACE_DIR, old_name)
-        new_path = safe_join(WORKSPACE_DIR, new_name)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Only python (.py) scripts in the workspace can be renamed.")
+    """Rename a workspace script. Never replaces an existing file, even under a race."""
+    old_name, old_path = _script_path(req.old_name)
+    new_name, new_path = _script_path(to_script_name(req.new_name), new=True)
 
-    if not os.path.exists(old_path):
-        raise HTTPException(status_code=404, detail="Source file not found.")
-
-    is_case_only = os.path.normcase(old_path) == os.path.normcase(new_path)
-    if os.path.exists(new_path) and not is_case_only:
-        raise HTTPException(status_code=400, detail="A file with the target name already exists.")
-
-    try:
-        if is_case_only and old_name != new_name:
-            # Case-insensitive filesystems need a hop through a temporary name.
-            temp_path = safe_join(WORKSPACE_DIR, f"__tmp_rename_{uuid.uuid4().hex[:8]}_{old_name}")
-            os.rename(old_path, temp_path)
-            os.rename(temp_path, new_path)
-        else:
-            os.rename(old_path, new_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    with locked(old_path, new_path):
+        if not os.path.exists(old_path):
+            raise HTTPException(status_code=404, detail="Source file not found.")
+        is_case_only = os.path.normcase(old_path) == os.path.normcase(new_path)
+        if old_name == new_name:
+            return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
+        clash = find_case_insensitive_match(WORKSPACE_DIR, new_name)
+        if clash and clash != old_name:
+            _reject_case_collision(WORKSPACE_DIR, new_name)
+        try:
+            rename_no_replace(old_path, new_path)
+            _note_new_name(new_path)
+        except FileExistsError:
+            if is_case_only:
+                raise HTTPException(status_code=409, detail=f"'{new_name}' already exists.")
+            raise HTTPException(status_code=400, detail="A file with the target name already exists.")
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=_os_error_detail(e, "rename the script"))
 
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
 
+# lock_key -> time.perf_counter() when a rename last put a file under that name.
+_new_names: dict = {}
+_new_names_guard = threading.Lock()
+_NEW_NAME_MEMORY_SECONDS = 30.0
+
+
+def _note_new_name(path: str) -> None:
+    now = time.perf_counter()
+    with _new_names_guard:
+        _new_names[lock_key(path)] = now
+        for key in [k for k, t in _new_names.items() if now - t > _NEW_NAME_MEMORY_SECONDS]:
+            del _new_names[key]
+
+
+def _appeared_after(path: str, moment: float) -> bool:
+    with _new_names_guard:
+        when = _new_names.get(lock_key(path))
+    return when is not None and when > moment
+
+
 @app.delete("/api/scripts")
-def delete_script(filename: str):
-    """Delete a workspace script."""
+def delete_script(filename: str, request: Request = None):  # type: ignore[assignment]
+    """Delete a workspace script, under the same per-name lock as save and rename.
+
+    A symbolic link that points outside the workspace or nowhere can't be opened,
+    but it can be deleted: only the link itself is removed, never its target.
+    """
+    link = _stray_link_path(filename)
+    if link is not None:
+        with locked(link):
+            if _stray_link_path(filename) != link:
+                raise HTTPException(status_code=404, detail="Python script not found.")
+            try:
+                os.unlink(link)  # removes the link entry, never what it points to
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Python script not found.")
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the link"))
+        return {"success": True, "filename": os.path.basename(link), "link_removed": True}
+    arrived = request.scope.get("manim_arrived") if request is not None else None
+    if arrived is None:
+        arrived = time.perf_counter()
     filename, filepath = _script_path(filename)
+    # What the caller can mean is the file that exists, settled, as the request
+    # arrives: a save or rename of this name in flight (or one that creates the
+    # name a moment later) is not deleted out from under it.
+    if held_lock(filepath) is not None:
+        raise HTTPException(status_code=409, detail=DELETE_RACE_DETAIL)
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Python script not found.")
     try:
-        os.remove(filepath)
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Never waits: while a save or rename of this name is in flight, the file
+        # the caller saw may be about to change, so the delete is refused (409)
+        # rather than removing whatever that operation leaves behind.
+        with locked(filepath, blocking=False):
+            if not os.path.isfile(filepath):
+                raise HTTPException(status_code=404, detail="Python script not found.")
+            if _appeared_after(filepath, arrived):
+                # A rename put this file here after the delete was sent: not the
+                # file the caller asked to delete (it didn't exist yet).
+                raise HTTPException(status_code=409, detail=DELETE_RACE_DETAIL)
+            try:
+                os.remove(filepath)
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Python script not found.")
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the script"))
+    except LockBusyError:
+        raise HTTPException(status_code=409, detail=DELETE_RACE_DETAIL)
     return {"success": True, "filename": filename}
+
+
+DELETE_RACE_DETAIL = "This file is being saved or renamed right now, so it was not deleted. Refresh and try again."
+
+
+def _link_status(path: str) -> Optional[str]:
+    """For a symlink in the workspace: "outside" (resolves outside it), "broken"
+    (points nowhere), or None (a regular file, or a link that stays inside)."""
+    if not os.path.islink(path):
+        return None
+    if not os.path.exists(path):
+        return "broken"
+    if not is_within_directory(path, WORKSPACE_DIR):
+        return "outside"
+    return None
+
+
+def _stray_link_path(filename) -> Optional[str]:
+    """Path of the workspace entry *filename* if it is a link that points outside
+    the workspace or nowhere, else None. The path is built from a single checked
+    name segment directly in the workspace folder, so it can't name anything else."""
+    try:
+        name = safe_basename(filename, required_suffix=".py")
+    except (UnsafePathError, TypeError, ValueError):
+        return None
+    path = os.path.join(os.path.abspath(WORKSPACE_DIR), name)
+    if os.path.dirname(path) != os.path.abspath(WORKSPACE_DIR):
+        return None
+    return path if _link_status(path) else None
+
+
+# An upload is written to "<name>.uploading-<32 hex>" next to its target and
+# moved into place when complete. A crash can leave one behind: such partials
+# are never listed or served, and the startup sweep removes old ones.
+UPLOAD_PARTIAL_MARK = ".uploading-"
+_UPLOAD_PARTIAL_PATTERN = re.compile(r"\.uploading-[0-9a-f]{32}$")
+UPLOAD_PARTIAL_MIN_AGE_SECONDS = float(os.environ.get("MANIM_UPLOAD_PARTIAL_AGE", "900"))
+_active_upload_partials: set = set()
+
+
+def is_upload_partial(name: str) -> bool:
+    return bool(_UPLOAD_PARTIAL_PATTERN.search(name))
+
+
+def _asset_exists_detail(filename: str) -> str:
+    return (
+        f"An asset named '{filename}' already exists. "
+        "Confirm to replace it (send the upload again with overwrite=true)."
+    )
 
 
 @app.post("/api/upload-asset")
@@ -566,13 +1207,16 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
 
     An existing file is left untouched unless ``overwrite`` is true. The upload
     is written to a temporary name and moved into place only after it succeeds,
-    so a rejected upload cannot delete the file it was replacing.
+    so a rejected upload cannot delete the file it was replacing. The move holds
+    the per-name lock and, without ``overwrite``, is an exclusive create, so of
+    several uploads racing for one new name exactly one wins (the rest get 409)
+    and ``replaced`` is true only when a file was really overwritten.
     """
     try:
-        filename = safe_basename(file.filename)
+        filename = validate_new_filename(nfc_filename(file.filename))
         dest_path = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Uploaded file must include a valid filename.")
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
 
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ALLOWED_ASSET_EXTENSIONS:
@@ -581,13 +1225,13 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
             detail=f"Unsupported asset type '{ext}'. Allowed: {', '.join(sorted(ALLOWED_ASSET_EXTENSIONS))}",
         )
 
-    if os.path.exists(dest_path) and not overwrite:
-        raise HTTPException(
-            status_code=409,
-            detail=f"An asset named '{filename}' already exists. Upload again to replace it.",
-        )
+    # Early answers so a doomed upload isn't copied first; the commit re-checks.
+    _reject_case_collision(ASSETS_DIR, filename)
+    if os.path.lexists(dest_path) and not overwrite:
+        raise HTTPException(status_code=409, detail=_asset_exists_detail(filename))
 
-    partial_path = f"{dest_path}.uploading-{uuid.uuid4().hex}"
+    partial_path = f"{dest_path}{UPLOAD_PARTIAL_MARK}{uuid.uuid4().hex}"
+    _active_upload_partials.add(partial_path)
 
     def discard_partial():
         try:
@@ -595,6 +1239,15 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
                 os.remove(partial_path)
         except OSError:
             pass
+
+    def commit() -> bool:
+        with locked(dest_path):
+            _reject_case_collision(ASSETS_DIR, filename)
+            existed = os.path.lexists(dest_path)
+            if existed and not overwrite:
+                raise FileExistsError(dest_path)
+            move_into_place(partial_path, dest_path, exclusive=not overwrite)
+            return existed
 
     try:
         size = 0
@@ -605,16 +1258,24 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
                     break
                 buffer.write(chunk)
         if size > MAX_ASSET_SIZE_BYTES:
-            discard_partial()
             raise HTTPException(status_code=413, detail="File size exceeds maximum allowed size (50MB).")
-        os.replace(partial_path, dest_path)
+        # The lock is a thread lock: wait for it on a worker thread, not the event loop.
+        existed = await asyncio.to_thread(commit)
+    except FileExistsError:
+        raise HTTPException(status_code=409, detail=_asset_exists_detail(filename))
+    except ReadOnlyFileError:
+        raise HTTPException(status_code=403, detail="This asset is read-only; change its permissions to replace it.")
     except HTTPException:
         raise
-    except Exception as e:
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "store the upload"))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not store the upload.")
+    finally:
         discard_partial()
-        raise HTTPException(status_code=500, detail=str(e))
+        _active_upload_partials.discard(partial_path)
 
-    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": overwrite}
+    return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": existed}
 
 
 @app.delete("/api/assets")
@@ -623,14 +1284,17 @@ def delete_asset(filename: str):
     try:
         filename = safe_basename(filename)
         filepath = safe_join(ASSETS_DIR, filename)
-    except UnsafePathError:
-        raise HTTPException(status_code=400, detail="Invalid asset filename.")
-    if not os.path.isfile(filepath):
+    except UnsafePathError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid asset filename: {exc}")
+    if is_upload_partial(filename) or not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Asset not found.")
-    try:
-        os.remove(filepath)
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    with locked(filepath):
+        try:
+            os.remove(filepath)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Asset not found.")
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the asset"))
     return {"success": True, "filename": filename}
 
 
@@ -690,11 +1354,39 @@ def _prune_empty_dirs(start_dir: str, stop_dir: str) -> None:
         current = os.path.dirname(current)
 
 
+def _stays_in_media_folder(abs_path: str, top: str) -> bool:
+    """True if every component of *abs_path* below media/<top> is a real folder or file.
+
+    Each prefix is resolved: a symlink anywhere on the way, or a path that
+    resolves outside media/videos (or media/images), is refused.
+    """
+    root = os.path.join(MEDIA_DIR, top)
+    try:
+        real_root = os.path.realpath(root)
+        rel = os.path.relpath(abs_path, root)
+    except (OSError, ValueError):
+        return False
+    if rel.startswith(os.pardir):
+        return False
+    current = root
+    for part in rel.split(os.sep):
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return False
+        real = os.path.realpath(current)
+        if not (real == real_root or real.startswith(real_root + os.sep)):
+            return False
+    return True
+
+
 @app.delete("/api/media")
 def delete_media(path: str):
     """Delete a rendered video or image (path relative to workspace/media)."""
     rel_path = _media_request_path(path)
     top = rel_path.split("/", 1)[0]
+    if ".." in rel_path.split("/"):
+        # Check the folder after resolving, not before: videos/../texts/x.png must not pass.
+        raise HTTPException(status_code=400, detail="Invalid media path.")
     if top not in MEDIA_SUBDIRS or not rel_path.lower().endswith(OUTPUT_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Only rendered videos and images can be deleted.")
     try:
@@ -703,11 +1395,14 @@ def delete_media(path: str):
         raise HTTPException(status_code=400, detail="Invalid media path.")
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="Media file not found.")
+    if not _stays_in_media_folder(abs_path, top):
+        # videos/<link to images/x>/a.png must not delete images/x/a.png.
+        raise HTTPException(status_code=400, detail="Media paths cannot go through symbolic links.")
 
     try:
         os.remove(abs_path)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the render"))
 
     parent = os.path.dirname(abs_path)
     if top == "videos":
@@ -844,8 +1539,92 @@ def install_manim():
     _require_installers_allowed()
     if not sys.executable:
         raise HTTPException(status_code=400, detail="Python executable could not be identified.")
-    _start_background([sys.executable, "-m", "pip", "install", "manim"])
-    return {"success": True, "message": "Manim CE is installing in the background via pip."}
+    spec = _manim_requirement()
+    if spec is None:
+        raise HTTPException(status_code=500, detail="Could not read the Manim version range from backend/requirements.txt.")
+    pins = _companion_pins()
+    _start_background([sys.executable, "-m", "pip", "install", spec, *pins])
+    shown = " ".join([spec, *pins])
+    return {"success": True, "message": f"Manim CE ({shown}) is installing in the background via pip."}
+
+
+REQUIREMENTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+
+
+_REQUIREMENT_LINE = re.compile(
+    r"^(?P<name>manim)\s*(?:\[\s*(?P<extras>[A-Za-z0-9][A-Za-z0-9._-]*(?:\s*,\s*[A-Za-z0-9][A-Za-z0-9._-]*)*)\s*\])?"
+    r"\s*(?P<spec>(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+(?:\s*,\s*(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+)*)?"
+    r"\s*(?:;\s*(?P<marker>.+))?$",
+    re.IGNORECASE,
+)
+
+
+def _manim_requirement(path: Optional[str] = None) -> Optional[str]:
+    """The ``manim`` line of requirements.txt as a pip argument, or None.
+
+    Extras and the version range are kept as written
+    (``manim[jupyter]>=0.19,<0.23``), so the installer uses exactly what a manual
+    ``pip install -r`` would and can never pull a Manim release this app does not
+    support. A line whose environment marker excludes this Python is skipped;
+    URL requirements (``manim @ git+...``) are not used. When ``packaging`` is
+    installed it double-checks each line.
+    """
+    try:
+        with open(path or REQUIREMENTS_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:  # packaging is optional; the pattern alone is strict enough
+        Requirement = None
+    for raw in lines:
+        line = raw.split(" #", 1)[0].split("#", 1)[0].strip() if not raw.lstrip().startswith("#") else ""
+        match = _REQUIREMENT_LINE.match(line)
+        if not match:
+            continue
+        if Requirement is not None:
+            try:
+                req = Requirement(line)
+            except InvalidRequirement:
+                continue
+            if req.name.lower() != "manim" or req.url:
+                continue
+            try:
+                if req.marker is not None and not req.marker.evaluate():
+                    continue
+            except Exception:
+                pass
+        extras = match.group("extras")
+        spec = re.sub(r"\s+", "", match.group("spec") or "")
+        extras_part = "[" + ",".join(part.strip() for part in extras.split(",")) + "]" if extras else ""
+        return "manim" + extras_part + spec
+    return None
+
+
+# Installed along with Manim: the caps in requirements.txt that keep a fresh install
+# working (Pillow 13 breaks every ImageMobject scene on Manim 0.22). Without them pip
+# picks the newest release that Manim itself allows.
+INSTALL_COMPANIONS = frozenset({"pillow"})
+_PIN_LINE = re.compile(
+    r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)\s*"
+    r"(?P<spec>(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+(?:\s*,\s*(?:===|==|!=|~=|<=|>=|<|>)\s*[\w.*+!-]+)*)$"
+)
+
+
+def _companion_pins(path: Optional[str] = None) -> List[str]:
+    """The requirements.txt lines for INSTALL_COMPANIONS as pip arguments (``pillow<13``)."""
+    try:
+        with open(path or REQUIREMENTS_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    pins = []
+    for raw in lines:
+        match = _PIN_LINE.match(raw.split("#", 1)[0].strip())
+        if match and match.group("name").lower() in INSTALL_COMPANIONS:
+            pins.append(match.group("name") + re.sub(r"\s+", "", match.group("spec")))
+    return pins
 
 
 # --------------------------------------------------------------------------- #
@@ -877,6 +1656,45 @@ def _relocate_temp_output(abs_path: str, temp_stem: str, target_stem: str) -> Op
         return None
 
 
+# Temp stems of renders still running; the stale-download sweep never touches these.
+_active_temp_stems: set = set()
+
+
+def _newest_mtime(path: str) -> float:
+    newest = os.path.getmtime(path)
+    for root, dirs, files in os.walk(path):
+        for name in dirs + files:
+            try:
+                newest = max(newest, os.path.getmtime(os.path.join(root, name)))
+            except OSError:
+                pass
+    return newest
+
+
+def _sweep_stale_temp_downloads(ttl: Optional[float] = None) -> None:
+    """Remove download-only outputs whose one-time link was never fetched.
+
+    Only ``media/*/_temp_run_*`` directories untouched for *ttl* seconds are removed,
+    and never one that belongs to a render that is still running.
+    """
+    ttl = TEMP_DOWNLOAD_TTL_SECONDS if ttl is None else ttl
+    cutoff = time.time() - ttl
+    for sub in MEDIA_SUBDIRS:
+        root = os.path.join(MEDIA_DIR, sub)
+        try:
+            entries = list(os.scandir(root))
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.name.startswith(TEMP_PREFIX) or entry.name in _active_temp_stems:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False) and _newest_mtime(entry.path) < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+            except OSError:
+                pass
+
+
 def _remove_temp_media(temp_stem: str) -> None:
     for sub in MEDIA_SUBDIRS:
         shutil.rmtree(os.path.join(MEDIA_DIR, sub, temp_stem), ignore_errors=True)
@@ -891,6 +1709,39 @@ def _file_ready_event(abs_path: str, rel_path: str) -> dict:
         "filename": os.path.basename(abs_path),
         "kind": output_kind(abs_path),
     }
+
+
+def _write_new_file(path: str, data) -> None:
+    """Create a scratch file that must not exist yet (open mode "x")."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    with open(path, "xb") as f:
+        f.write(data)
+
+
+def _config_safe_stem(stem: str) -> bool:
+    """Manim formats config values with str.format, and ConfigParser strips edges."""
+    return bool(stem) and not any(ch in stem for ch in "{}\r\n") and stem == stem.strip()
+
+
+def _output_config(target_stem: str, stage: Optional[str] = None) -> str:
+    """Per-run Manim config: write the scratch copy's output under *target_stem*.
+
+    With *stage*, final outputs go to ``<stem>/<stage>/`` first and the executor
+    moves them over the real ones only after a successful, complete render. The
+    per-animation cache stays in the usual ``<stem>/<quality>/partial_movie_files``.
+    """
+    folder = target_stem.replace("%", "%%")
+    out = folder + "/" + stage if stage else folder
+    lines = [
+        "# Written by Manim Composer for one render; removed when it ends.",
+        "[CLI]",
+        f"video_dir = {{media_dir}}/videos/{out}/{{quality}}",
+        f"images_dir = {{media_dir}}/images/{out}",
+    ]
+    if stage:
+        lines.append(f"partial_movie_dir = {{media_dir}}/videos/{folder}/{{quality}}/partial_movie_files/{{scene_name}}")
+    return "\n".join(lines) + "\n"
 
 
 class _RenderRequestError(ValueError):
@@ -910,23 +1761,145 @@ def _validate_start_message(message: dict) -> dict:
     if not isinstance(quality, str) or quality not in ALLOWED_QUALITIES:
         raise _RenderRequestError("Quality must be one of: l, m, h, k.")
     try:
-        filename = safe_basename(filename, required_suffix=".py")
-    except UnsafePathError:
-        raise _RenderRequestError("Invalid script filename.")
+        filename = validate_new_filename(filename, required_suffix=".py", forbid_temp_prefix=True)
+    except UnsafePathError as exc:
+        raise _RenderRequestError(_bad_script_name_detail(filename, exc))
+    except UnicodeEncodeError:
+        raise _RenderRequestError(f"Invalid script filename: the name {_SURROGATE_MESSAGE}")
     if code_content is not None:
         if not isinstance(code_content, str):
             raise _RenderRequestError("Code payload must be a string.")
-        if len(code_content.encode("utf-8")) > MAX_CODE_BYTES:
+        try:
+            code_bytes = code_content.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _RenderRequestError(f"The code {_SURROGATE_MESSAGE}")
+        if len(code_bytes) > MAX_CODE_BYTES:
             raise _RenderRequestError(f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).")
 
     return {
         "filename": filename,
         "scene": scene_name,
         "quality": quality,
-        "use_opengl": bool(message.get("use_opengl", False)),
-        "download_only": bool(message.get("download_only", False)),
+        "use_opengl": _coerce_flag(message.get("use_opengl"), "use_opengl"),
+        "download_only": _coerce_flag(message.get("download_only"), "download_only"),
         "code": code_content,
     }
+
+
+# Client render ids are echoed on every event; anything else is refused.
+MAX_RENDER_ID_CHARS = 128
+_INVALID_ID = object()
+
+
+def _clean_render_id(value):
+    """The id to echo back, or _INVALID_ID for ids that are too long or not a string/number."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return _INVALID_ID
+    if isinstance(value, int):
+        return value if abs(value) < 10**18 else _INVALID_ID
+    if isinstance(value, float):
+        return value if value == value and abs(value) != float("inf") else _INVALID_ID
+    if isinstance(value, str) and len(value) <= MAX_RENDER_ID_CHARS:
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return _INVALID_ID
+        return value
+    return _INVALID_ID
+
+
+def _echo_id(value):
+    cleaned = _clean_render_id(value)
+    return None if cleaned is _INVALID_ID else cleaned
+
+
+# '"id": "abc"' or '"id": 12' near the start of a message that isn't valid JSON (or
+# is too large to parse): enough to tie the error to the render it was meant for.
+_ID_SNIFF = re.compile(r'"id"\s*:\s*("(?:[^"\\\r\n]|\\.){0,%d}"|-?\d{1,18}(?![\d.eE]))' % (MAX_RENDER_ID_CHARS * 6))
+ID_SNIFF_CHARS = 64 * 1024
+
+
+def _sniff_render_id(data: str):
+    """Best-effort render id from a raw message that couldn't be parsed; None if unknown."""
+    match = _ID_SNIFF.search(data[:ID_SNIFF_CHARS])
+    if not match:
+        return None
+    try:
+        return _echo_id(json.loads(match.group(1)))
+    except (ValueError, RecursionError):
+        return None
+
+
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
+_FALSE_STRINGS = frozenset({"false", "0", "no", "off", ""})
+
+
+def _coerce_flag(value, field: str) -> bool:
+    """Read a boolean flag from JSON. ``"false"`` and ``"0"`` are False; junk is rejected."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_STRINGS:
+            return True
+        if lowered in _FALSE_STRINGS:
+            return False
+    raise _RenderRequestError(f"{field} must be true or false.")
+
+
+class _RenderState:
+    """One accepted ``start`` on a render socket, from validation to its ``result``."""
+
+    __slots__ = ("render_id", "task", "phase", "result_sent", "notify", "position")
+
+    def __init__(self, render_id):
+        self.render_id = render_id
+        self.task: Optional[asyncio.Task] = None
+        # While queued: coroutine function that sends a new queue position.
+        self.notify = None
+        self.position = 0
+        # "pending" (task not started yet), "preparing" (scratch copy, pre-checks),
+        # "queued" (waiting for a render slot), "rendering" (Manim running), or
+        # "finishing" (Manim exited; output, cleanup, and the result being sent).
+        # Only the first three are cancelled outright; a finishing render is
+        # never interrupted, so its result cannot be lost mid-send.
+        self.phase = "pending"
+        self.result_sent = False
+
+
+# Renders waiting for a slot, oldest first, across all sockets. Used for the
+# queue position reported in "queued" events.
+_render_waiters: List[_RenderState] = []
+
+
+# Renders allowed to wait for a slot at once (across all sockets); more are refused.
+MAX_QUEUED_RENDERS = max(1, int(os.environ.get("MANIM_MAX_QUEUED_RENDERS", "16")))
+_queue_notifications: set = set()
+
+
+def _queue_position(state: _RenderState) -> int:
+    try:
+        return _render_waiters.index(state) + 1
+    except ValueError:
+        return 0
+
+
+def _announce_queue_positions() -> None:
+    """Tell every waiting render its new place after one left the queue."""
+    for index, state in enumerate(_render_waiters):
+        position = index + 1
+        if state.notify is None or state.position == position:
+            continue
+        state.position = position
+        task = asyncio.ensure_future(state.notify(position))
+        _queue_notifications.add(task)
+        task.add_done_callback(_queue_notifications.discard)
 
 
 @app.websocket("/api/render")
@@ -934,9 +1907,16 @@ async def websocket_render(websocket: WebSocket):
     """Run renders over a WebSocket and stream logs, progress, and results.
 
     Client messages: ``{"type": "start", "id", "filename", "scene", "quality",
-    "use_opengl", "download_only", "code"?}`` and ``{"type": "cancel"}``.
+    "use_opengl", "download_only", "code"?}`` and ``{"type": "cancel", "id"?}``.
     Every event produced by a render carries the ``render_id`` echoed from
     ``id`` so clients can ignore events from a render they already abandoned.
+    Every accepted or rejected ``start`` gets exactly one ``result``, including
+    a start that is cancelled or replaced before it begins.
+
+    While a render waits for a free slot the server sends
+    ``{"type": "queued", "render_id", "position", "message"}`` (position 1 is
+    next), followed by the legacy ``info`` line for older clients, and
+    ``{"type": "started", "render_id", "waited"}`` once it leaves the queue.
     Each connection gets its own executor so clients never interfere.
     """
     if not _request_allowed(websocket.headers, _peer_host(websocket.client)):
@@ -944,38 +1924,80 @@ async def websocket_render(websocket: WebSocket):
         return
 
     await websocket.accept()
-    current_render_task: Optional[asyncio.Task] = None
-    conn_executor = ManimExecutor(WORKSPACE_DIR)
+    current: Optional[_RenderState] = None
+    conn_executor = ManimExecutor(WORKSPACE_DIR, app_root=BASE_DIR)
 
     async def send(payload: dict) -> bool:
+        text = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         try:
-            await websocket.send_json(payload)
+            text.encode("utf-8")
+        except UnicodeEncodeError:
+            # A lone surrogate (from the client or Manim) can't be sent as UTF-8;
+            # escaped as \udXXX it is still valid JSON.
+            text = json.dumps(payload, separators=(",", ":"))
+        try:
+            await websocket.send_text(text)
             return True
         except (WebSocketDisconnect, RuntimeError):
             return False
 
-    async def stop_current_render():
-        nonlocal current_render_task
-        await conn_executor.cancel()
-        if current_render_task and not current_render_task.done():
-            current_render_task.cancel()
+    async def send_result(state: _RenderState, result: dict) -> None:
+        if state.result_sent:
+            return
+        state.result_sent = True
+        await send(
+            {
+                "type": "result",
+                "render_id": state.render_id,
+                "success": bool(result.get("success")),
+                "status": result.get("status", "unknown"),
+                "details": result,
+            }
+        )
+
+    async def settle(state: _RenderState, reason: str) -> None:
+        """Wait for a stopped render's task, and report it if it never could."""
+        if state.task is not None:
             try:
-                await current_render_task
+                await state.task
             except (asyncio.CancelledError, Exception):
                 pass
-        current_render_task = None
+        # A task cancelled before its first step never runs its own finally block.
+        await send_result(state, {"success": False, "status": "cancelled", "reason": reason})
 
-    # What the current render is doing: "preparing" (writing the scratch copy),
-    # "rendering" (Manim running), or "finishing" (moving/announcing the output).
-    phase: dict = {"value": None}
+    async def stop_render(state: _RenderState, reason: str) -> None:
+        task = state.task
+        if task is not None and not task.done():
+            if state.phase == "rendering":
+                # Stops Manim, or stops it as soon as it has been spawned. The task
+                # then finishes on its own and reports "cancelled".
+                await conn_executor.cancel()
+                _done, pending = await asyncio.wait({task}, timeout=STOP_GRACE_SECONDS)
+                if pending:
+                    task.cancel()
+            elif state.phase in ("pending", "preparing", "queued"):
+                # Not started, preparing, or waiting for a slot: nothing to kill yet.
+                task.cancel()
+        await settle(state, reason)
 
-    async def run_render(request: dict, render_id, manim_command: List[str]):
+    async def stop_current_render(reason: str = "cancelled") -> None:
+        nonlocal current
+        state, current = current, None
+        if state is not None:
+            await stop_render(state, reason)
+
+    async def run_render(state: _RenderState, request: dict, manim_command: List[str]):
+        render_id = state.render_id
         filename = request["filename"]
         download_only = request["download_only"]
         target_stem = os.path.splitext(filename)[0]
         script_name = filename
         temp_filepath: Optional[str] = None
+        temp_config: Optional[str] = None
         temp_stem: Optional[str] = None
+        output_stem: Optional[str] = None
+        extra_args: List[str] = []
+        stage: Optional[str] = None
         relocate = False
         held_output: List[str] = []
         result: dict = {"success": False, "status": "error"}
@@ -986,8 +2008,13 @@ async def websocket_render(websocket: WebSocket):
             if temp_stem and isinstance(outbound.get("message"), str):
                 # Show the user's filename instead of the scratch copy in tracebacks. Media
                 # folder names are rewritten too when the output is moved there afterwards.
-                message = outbound["message"].replace(script_name, filename)
-                outbound["message"] = message.replace(temp_stem, target_stem) if relocate else message
+                original = outbound["message"]
+                message = original.replace(script_name, filename)
+                message = message.replace(temp_stem, target_stem) if relocate else message
+                if stage:
+                    # Outputs are announced at their real place; hide the staging folder.
+                    message = message.replace("/" + stage, "").replace("\\" + stage, "")
+                outbound["message"] = keep_box_width(original, message)
 
             if outbound.get("type") == "file_ready" and abs_path:
                 if relocate:
@@ -1006,52 +2033,121 @@ async def websocket_render(websocket: WebSocket):
             if not await send(outbound):
                 await conn_executor.cancel()
 
-        phase["value"] = "preparing"
+        state.phase = "preparing"
         try:
-            # Unsaved code and download-only renders run from a scratch copy so that
-            # their output lands under media/*/_temp_run_*.
+            # Every render runs from a scratch copy made now, at enqueue time, so a
+            # queued render uses exactly the code that passed the checks below even
+            # if the file changes on disk while it waits.
             code_content = request["code"]
-            if download_only or code_content is not None:
-                if code_content is None:
-                    src_path = os.path.join(WORKSPACE_DIR, filename)
-                    if not os.path.isfile(src_path):
-                        await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
-                        result = {"success": False, "status": "rejected"}
-                        return
-                    with open(src_path, "r", encoding="utf-8", errors="replace") as f:
-                        code_content = f.read()
-                script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
-                temp_stem = os.path.splitext(script_name)[0]
-                relocate = not download_only
-                temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
-                with open(temp_filepath, "w", encoding="utf-8") as f:
-                    f.write(code_content)
-
-            checked = code_content
-            if checked is None:
-                src_path = os.path.join(WORKSPACE_DIR, filename)
-                if not os.path.isfile(src_path):
+            if code_content is None:
+                try:
+                    # Same escape check as the file endpoints: a link out of the
+                    # workspace is not rendered from.
+                    src_path = safe_join(WORKSPACE_DIR, filename)
+                except UnsafePathError:
+                    await send({
+                        "type": "error",
+                        "render_id": render_id,
+                        "message": f"{filename} is a link to a file outside the workspace, so it can't be rendered.",
+                    })
+                    result = {"success": False, "status": "rejected"}
+                    return
+                try:
+                    data = await asyncio.to_thread(read_bytes, src_path)
+                except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
                     await send({"type": "error", "render_id": render_id, "message": "Python script not found."})
                     result = {"success": False, "status": "rejected"}
                     return
-                with open(src_path, "r", encoding="utf-8", errors="replace") as f:
-                    checked = f.read()
+                if len(data) > MAX_CODE_BYTES:
+                    await send({
+                        "type": "error",
+                        "render_id": render_id,
+                        "message": (
+                            f"{filename} is {len(data)} bytes; scripts larger than {MAX_CODE_BYTES} bytes "
+                            "can't be rendered (MANIM_MAX_CODE_BYTES)."
+                        ),
+                    })
+                    result = {"success": False, "status": "rejected", "reason": "too_large"}
+                    return
+                checked = data.decode("utf-8", errors="replace")
+            else:
+                checked = code_content
+                data = code_content.encode("utf-8")
+
             blocked = _render_block_reason(checked, request["scene"])
             if blocked:
                 await send({"type": "error", "render_id": render_id, "message": blocked})
                 result = {"success": False, "status": "rejected"}
                 return
+            warning = _render_scene_warning(checked, request["scene"])
+            if warning:
+                await send({"type": "info", "render_id": render_id, "message": warning})
 
-            phase["value"] = "rendering"
+            script_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:8]}.py"
+            temp_stem = os.path.splitext(script_name)[0]
+            _active_temp_stems.add(temp_stem)
+            temp_filepath = os.path.join(WORKSPACE_DIR, script_name)
+            await asyncio.to_thread(_write_new_file, temp_filepath, data)
+            if download_only:
+                output_stem = temp_stem  # stays under media/*/_temp_run_* for the one-time download
+            elif _config_safe_stem(target_stem):
+                # A per-run config sends the output straight to the script's own media
+                # folder, so Manim's partial-movie cache keeps working.
+                config_name = f"{temp_stem}.cfg"
+                temp_config = os.path.join(WORKSPACE_DIR, config_name)
+                # Outputs are staged per run so a failed or cancelled render never
+                # replaces the previous good video.
+                stage = STAGE_PREFIX + temp_stem[len(TEMP_PREFIX):]
+                await asyncio.to_thread(_write_new_file, temp_config, _output_config(target_stem, stage))
+                extra_args = ["--config_file", config_name]
+                output_stem = target_stem
+            else:
+                relocate = True
+                output_stem = temp_stem
+
+            state.phase = "queued"
             slots = _render_semaphore()
-            if slots.locked():
-                await send({
-                    "type": "info",
-                    "render_id": render_id,
-                    "message": "Waiting for another render to finish…",
-                })
-            await slots.acquire()
+            waited = slots.locked()
+            if waited:
+                if len(_render_waiters) >= MAX_QUEUED_RENDERS:
+                    await send({
+                        "type": "error",
+                        "render_id": render_id,
+                        "message": (
+                            f"The render queue is full ({len(_render_waiters)} waiting). "
+                            "Try again when a render finishes."
+                        ),
+                    })
+                    result = {"success": False, "status": "rejected", "reason": "queue_full"}
+                    return
+
+                async def notify_position(position: int) -> None:
+                    if state.phase == "queued" and state in _render_waiters:
+                        await send({
+                            "type": "queued",
+                            "render_id": render_id,
+                            "position": position,
+                            "message": f"Waiting for another render to finish… (position {position} in queue)",
+                        })
+
+                _render_waiters.append(state)
+                try:
+                    position = state.position = _queue_position(state)
+                    state.notify = notify_position
+                    message = f"Waiting for another render to finish… (position {position} in queue)"
+                    await send({"type": "queued", "render_id": render_id, "position": position, "message": message})
+                    await send({"type": "info", "render_id": render_id, "message": message})
+                    await slots.acquire()
+                finally:
+                    state.notify = None
+                    _render_waiters.remove(state)
+                    _announce_queue_positions()
+            else:
+                await slots.acquire()
             try:
+                if waited:
+                    await send({"type": "started", "render_id": render_id, "waited": True})
+                state.phase = "rendering"
                 result = await conn_executor.execute(
                     manim_path=manim_command,
                     script_name=script_name,
@@ -1059,65 +2155,83 @@ async def websocket_render(websocket: WebSocket):
                     quality=request["quality"],
                     use_opengl=request["use_opengl"],
                     log_callback=log_callback,
+                    output_stem=output_stem,
+                    extra_args=extra_args,
+                    stage=stage,
                 )
             finally:
                 slots.release()
-            phase["value"] = "finishing"
+            state.phase = "finishing"
             if relocate and held_output and result.get("success"):
                 moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_stem)
                 final_path = moved or held_output[-1]
                 await send({**_file_ready_event(final_path, media_rel_path(final_path)), "render_id": render_id})
         except asyncio.CancelledError:
-            await conn_executor.cancel()
+            if state.phase == "rendering":
+                await conn_executor.cancel()
             result = {"success": False, "status": "cancelled"}
             raise
         except Exception as e:
             result = {"success": False, "status": "error", "error": str(e)}
             await send({"type": "error", "render_id": render_id, "message": f"Render execution error: {e}"})
         finally:
-            phase["value"] = None
+            state.phase = "finishing"
             # Clean up before the last await, so a cancellation during the send can't skip it.
-            if temp_filepath:
-                try:
-                    os.remove(temp_filepath)
-                except OSError:
-                    pass
+            for scratch in (temp_filepath, temp_config):
+                if scratch:
+                    try:
+                        os.remove(scratch)
+                    except OSError:
+                        pass
             if relocate and temp_stem:
                 _remove_temp_media(temp_stem)
-            await send(
-                {
-                    "type": "result",
-                    "render_id": render_id,
-                    "success": bool(result.get("success")),
-                    "status": result.get("status", "unknown"),
-                    "details": result,
-                }
-            )
+            _active_temp_stems.discard(temp_stem)
+            await send_result(state, result)
+
+    async def reject_oversized(data: str) -> None:
+        render_id, is_start = None, False
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, dict):
+                render_id, is_start = _echo_id(parsed.get("id")), parsed.get("type") == "start"
+        except (ValueError, RecursionError):
+            render_id = _sniff_render_id(data)
+            is_start = bool(re.search(r'"type"\s*:\s*"start"', data[:ID_SNIFF_CHARS]))
+        await send({
+            "type": "error",
+            "render_id": render_id,
+            "message": _body_too_large(),
+        })
+        if is_start:
+            await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
 
     try:
         while True:
             data = await websocket.receive_text()
-            if len(data.encode("utf-8")) > MAX_CODE_BYTES + 8192:
-                await send({
-                    "type": "error",
-                    "message": f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).",
-                })
+            if len(data.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
+                await reject_oversized(data)
                 continue
             try:
                 message = json.loads(data)
-            except json.JSONDecodeError:
-                await send({"type": "error", "message": "Invalid JSON message."})
+            except (ValueError, RecursionError):
+                # Not a render's error unless the broken message names one.
+                await send({"type": "error", "render_id": _sniff_render_id(data), "message": "Invalid JSON message."})
                 continue
             if not isinstance(message, dict):
-                await send({"type": "error", "message": "Message payload must be a JSON object."})
+                await send({"type": "error", "render_id": None, "message": "Message payload must be a JSON object."})
                 continue
 
             msg_type = message.get("type")
             if msg_type == "start":
-                render_id = message.get("id")
-                if current_render_task and not current_render_task.done():
-                    await stop_current_render()
+                render_id = _clean_render_id(message.get("id"))
+                # The previous render (if any) gets its own "cancelled" result first.
+                await stop_current_render("superseded")
                 try:
+                    if render_id is _INVALID_ID:
+                        render_id = None
+                        raise _RenderRequestError(
+                            f"Render id must be a string of at most {MAX_RENDER_ID_CHARS} characters or a number."
+                        )
                     request = _validate_start_message(message)
                     # PATH lookups can be slow (network drives); keep them off the event loop.
                     manim_command = _manim_command(await asyncio.to_thread(get_binary_paths))
@@ -1131,26 +2245,35 @@ async def websocket_render(websocket: WebSocket):
                     await send({"type": "result", "render_id": render_id, "success": False, "status": "rejected"})
                     continue
 
-                current_render_task = asyncio.create_task(run_render(request, render_id, manim_command))
+                state = _RenderState(render_id)
+                state.task = asyncio.create_task(run_render(state, request, manim_command))
+                current = state
 
             elif msg_type == "cancel":
-                if current_render_task and not current_render_task.done():
-                    if phase["value"] == "preparing":
-                        current_render_task.cancel()
-                    elif phase["value"] == "rendering":
-                        # Stops Manim (or stops it as soon as it has been spawned); the
-                        # render task then reports the "cancelled" result.
-                        await conn_executor.cancel()
-                    else:
-                        # Manim already finished; let the output and result through.
-                        continue
-                    await send({"type": "info", "message": "Stopping render..."})
+                state = current
+                if state is None or state.task is None or state.task.done():
+                    continue
+                if "id" in message and message.get("id") != state.render_id:
+                    # A cancel for a render that is no longer current must not stop this one.
+                    await send({
+                        "type": "info",
+                        "render_id": _echo_id(message.get("id")),
+                        "message": "That render is not running.",
+                    })
+                    continue
+                if state.phase == "finishing":
+                    # Manim already finished; let the output and result through.
+                    continue
+                await send({"type": "info", "render_id": state.render_id, "message": "Stopping render..."})
+                current = None
+                await stop_render(state, "cancelled")
 
     except WebSocketDisconnect:
-        await stop_current_render()
+        await stop_current_render("disconnected")
     except Exception as e:
-        await stop_current_render()
-        await send({"type": "error", "message": f"Server WebSocket error: {e}"})
+        failed_id = current.render_id if current is not None else None
+        await stop_current_render("error")
+        await send({"type": "error", "render_id": failed_id, "message": f"Server WebSocket error: {e}"})
 
 
 # Serve the built frontend (index.html + static files). /assets is handled above.
@@ -1163,7 +2286,87 @@ else:
         return read_status()
 
 
-if __name__ == "__main__":
+# Same wording as run.py (tests/test_cli.py keeps the two in sync).
+LAN_WARNING = (
+    "\n[warn] This process runs the Python you send it, with no login.\n"
+    "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
+    "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n"
+)
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _parse_port(value) -> int:
+    """An integer TCP port 1-65535, or ValueError."""
+    text = str(value).strip()
+    if not text.isdigit() or not text.isascii():
+        raise ValueError(value)
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise ValueError(value)
+    return port
+
+
+def _cli_address(argv=None) -> tuple:
+    """Host and port for ``python backend/main.py`` / ``npm run backend``.
+
+    ``--host``/``--port`` win, then MANIM_HOST/MANIM_PORT, then 127.0.0.1:8000.
+    A port that isn't an integer 1-65535 exits with status 2 and a one-line error.
+    """
+    import argparse
+
+    def port_type(value):
+        try:
+            return _parse_port(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"{value!r} is not a valid port (use an integer from 1 to 65535)")
+
+    parser = argparse.ArgumentParser(description="Run the Manim Composer API (no frontend build).")
+    parser.add_argument("--host", default=os.environ.get("MANIM_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=port_type, default=None)
+    args = parser.parse_args(argv)
+    port = args.port
+    if port is None:
+        raw = os.environ.get("MANIM_PORT", "8000")
+        try:
+            port = _parse_port(raw)
+        except ValueError:
+            parser.error(f"MANIM_PORT={raw!r} is not a valid port (use an integer from 1 to 65535)")
+    return args.host, port
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    """Something already accepts connections on *port* (same check as run.py)."""
+    import socket
+
+    probe = {"0.0.0.0": "127.0.0.1", "::": "::1", "": "127.0.0.1"}.get(host, host)
+    try:
+        with socket.create_connection((probe, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def ws_max_message_bytes() -> int:
+    """WebSocket frame limit for uvicorn: above the app's own cap, so an oversized
+    render request still reaches the app and gets an error plus a rejected result."""
+    return max(16 * 1024 * 1024, 2 * MAX_REQUEST_BODY_BYTES)
+
+
+def _cli_main(argv=None) -> None:
+    host, port = _cli_address(argv)
+    # Checked before uvicorn starts the app: a second copy that can't bind must not
+    # run the startup temp sweep and delete a running server's render files.
+    if _port_in_use(host, port):
+        print(f"\n[error] Port {port} is already in use.", file=sys.stderr)
+        print(f"Stop the other process or pick another port:\n    python backend/main.py --port {port + 1 if port < 65535 else port - 1}\n", file=sys.stderr)
+        sys.exit(1)
+    if host not in LOOPBACK_HOSTS:
+        print(LAN_WARNING, file=sys.stderr, flush=True)
+
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host=host, port=port, ws_max_size=ws_max_message_bytes())
+
+
+if __name__ == "__main__":
+    _cli_main()

@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { wsUrl } from "@/lib/api";
-import type { OutputKind, Quality } from "@/lib/types";
+import type { OutputKind, Quality, StorageMode } from "@/lib/types";
 import type { LogLevel } from "./useLogs";
 
 export type ConnectionState = "connecting" | "open" | "closed";
 
 export interface RenderRequest {
   filename: string;
+  /** Where *filename* lives: disk my_scene.py and browser-storage my_scene.py are different files. */
+  storage?: StorageMode;
   scene: string;
   quality: Quality;
   useOpenGL: boolean;
@@ -28,6 +30,14 @@ export interface ActiveRender {
   request: RenderRequest;
   progress: RenderProgress | null;
   startedAt: number;
+  /** Waiting for another render (any tab) to finish; Manim hasn't started yet. */
+  queued?: boolean;
+  /** Place in the server's render queue (1 = next), when the server reports it. */
+  queuePosition?: number;
+  /** The server sends typed "queued"/"started" events, so only "started" ends the wait. */
+  queueEvents?: boolean;
+  /** Manim was started for this render (it left the queue, or was never queued). */
+  started?: boolean;
 }
 
 export interface RenderOutput {
@@ -64,6 +74,8 @@ interface ServerEvent {
   kind?: OutputKind;
   is_temp_download?: boolean;
   success?: boolean;
+  /** "queued" events: place in the render queue, 1 = next. */
+  position?: number;
 }
 
 interface Options {
@@ -71,6 +83,14 @@ interface Options {
   onOutput: (output: RenderOutput, render: ActiveRender) => void;
   onFinished: (outcome: RenderOutcome) => void;
 }
+
+/**
+ * The legacy info line for a queued render. Servers since #10 also send typed
+ * "queued" and "started" events; the prefix is kept for older servers.
+ */
+export const QUEUED_MESSAGE_PREFIX = "Waiting for another render";
+/** Servers that don't confirm a queued cancel within this time are taken at their word. */
+export const QUEUED_CANCEL_FALLBACK_MS = 3000;
 
 const RECONNECT_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
 const CONNECT_TIMEOUT_MS = 8000;
@@ -88,6 +108,9 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
   const socketRef = useRef<WebSocket | null>(null);
   const activeRef = useRef<ActiveRender | null>(null);
   const outputRef = useRef<RenderOutput | null>(null);
+  // The render that finished last: a server error naming it after its result (the socket
+  // failing as it stopped) still belongs in its log, not in a later render's.
+  const finishedIdRef = useRef<string | null>(null);
   const queueRef = useRef<string[]>([]);
   const attemptRef = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,6 +130,7 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     (success: boolean, status: string) => {
       const render = activeRef.current;
       if (!render) return;
+      finishedIdRef.current = render.id;
       setStopping(false);
       updateActive(null);
       const output = outputRef.current;
@@ -127,8 +151,29 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
     (event: ServerEvent) => {
       const render = activeRef.current;
       const { log } = callbacks.current;
-      // Events from a render we already gave up on.
-      if (event.render_id != null && event.render_id !== render?.id) return;
+      // Events from a render we already gave up on. The one exception: an error naming the
+      // render that just finished, while nothing newer runs, is still shown (it explains that render).
+      if (event.render_id != null && event.render_id !== render?.id) {
+        if (event.type === "error" && !render && event.render_id === finishedIdRef.current) {
+          log("error", event.message ?? "Unknown server error.");
+        }
+        return;
+      }
+
+      if (render && event.render_id === render.id) {
+        if ((event.type === "queued" || event.type === "queue_position") && !render.started) {
+          // Sent again whenever the queue ahead moves (a render finished or was cancelled).
+          updateActive({ ...render, queued: true, queuePosition: event.position || undefined, queueEvents: true });
+        } else if (event.type === "info" && (event.message ?? "").startsWith(QUEUED_MESSAGE_PREFIX)) {
+          // Legacy queue notice (also sent after "queued", for older clients).
+          if (!render.queued) updateActive({ ...render, queued: true });
+        } else if (render.queued && (event.type === "started" || (!render.queueEvents && event.type !== "result"))) {
+          // "started", or for older servers anything else about this render (the "$ manim" line...).
+          updateActive({ ...render, queued: false, queuePosition: undefined, started: true });
+        } else if (event.type === "started" && !render.started) {
+          updateActive({ ...render, started: true });
+        }
+      }
 
       switch (event.type) {
         case "log":
@@ -146,14 +191,15 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           log("warning", event.message ?? "");
           break;
         case "error":
+          // The server names the render an error belongs to (render_id), and every render's
+          // error is followed by its result, which ends it. An error with no render_id is about
+          // the connection or a malformed message, not the running render: log it, keep the render.
           log("error", event.message ?? "Unknown server error.");
-          // Errors tied to a render are always followed by a result; others are not.
-          if (event.render_id == null) finish(false, "error");
           break;
         case "progress":
-          if (render) {
+          if (activeRef.current) {
             updateActive({
-              ...render,
+              ...activeRef.current,
               progress: { percent: event.percent ?? 0, animation: event.animation, label: event.label },
             });
           }
@@ -172,6 +218,8 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
           }
           break;
         case "result":
+          // A render cancelled while queued gets only a result; say what happened.
+          if (render && !render.started && render.queued && event.status === "cancelled") log("warning", "Cancelled before it started.");
           finish(Boolean(event.success), event.status ?? "unknown");
           break;
       }
@@ -307,21 +355,49 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
   );
 
   const cancel = useCallback(() => {
-    if (!activeRef.current) return;
+    const render = activeRef.current;
+    if (!render) return;
     setStopping(true);
     const socket = socketRef.current;
     if (socket && socket.readyState === WebSocket.OPEN && queueRef.current.length === 0) {
-      socket.send(JSON.stringify({ type: "cancel" }));
+      socket.send(JSON.stringify({ type: "cancel", id: render.id }));
+      if (render.queued && !render.started) {
+        // The server drops it from the queue and answers with one "cancelled" result.
+        // Fallback for servers that never answer: finish locally; a late result is
+        // then ignored by its id, so nothing is logged or toasted twice. If the render
+        // started in the meantime (cancel raced "started"), Manim is being stopped and
+        // its own result is on the way, so don't claim it never started.
+        setTimeout(() => {
+          const current = activeRef.current;
+          if (current?.id !== render.id || current.started) return;
+          callbacks.current.log("warning", "Cancelled before it started.");
+          finish(false, "cancelled");
+        }, QUEUED_CANCEL_FALLBACK_MS);
+      }
     } else {
       queueRef.current = [];
       finish(false, "cancelled");
     }
   }, [finish]);
 
+  /**
+   * The script being rendered was renamed: keep the job attached to it, so its progress,
+   * Cancel, and result follow the file under its new name. Only the client's label
+   * changes; the server keeps rendering the code it was given.
+   */
+  const retarget = useCallback(
+    (storage: StorageMode, from: string, to: string) => {
+      const render = activeRef.current;
+      if (!render || render.request.filename !== from || (render.request.storage ?? storage) !== storage) return;
+      updateActive({ ...render, request: { ...render.request, filename: to } });
+    },
+    [updateActive],
+  );
+
   const reconnect = useCallback(() => {
     attemptRef.current = 0;
     connect();
   }, [connect]);
 
-  return { connection, active, stopping, start, cancel, reconnect };
+  return { connection, active, stopping, start, cancel, reconnect, retarget };
 }

@@ -4,34 +4,75 @@ import { ApiError, apiUrl, errorMessage, OFFLINE_MESSAGE, postJson, requestJson,
 import {
   assetKind,
   assetUsageSnippet,
+  assetVariable,
   classNameFromFile,
   formatBytes,
   formatDuration,
   formatRelativeTime,
   pythonString,
   toScriptName,
+  dedupeExtension,
   validateScriptName,
 } from "./format";
-import { findErrorLocation, findLineReference } from "./logs";
+import { findErrorLocation, findLineReference, findLineReferenceMatch } from "./logs";
 import { overallPercent, risingPercent, stepSeconds } from "./progress";
 import { buildShapeCode, DEFAULT_SHAPE_OPTIONS, defaultVariableName, isFillable, toIdentifier } from "./shapeBuilder";
-import { BROWSER_STARTER, BROWSER_STARTER_NAME, loadBrowserFiles, readStored, saveBrowserFiles, STORAGE_KEYS, writeStored } from "./storage";
+import { BROWSER_STARTER, BROWSER_STARTER_NAME, deleteBrowserFile, loadBrowserFiles, readStored, STORAGE_KEYS, writeBrowserFile, writeStored } from "./storage";
 import { newSceneCode, SCENE_TEMPLATES } from "./templates";
 import type { ActiveRender } from "@/hooks/useRenderSession";
 
 describe("format", () => {
   it("normalizes and validates script names", () => {
     expect(toScriptName("  intro ")).toBe("intro.py");
-    expect(toScriptName("Intro.PY")).toBe("Intro.PY");
+    expect(toScriptName("Intro.PY")).toBe("Intro.py"); // exactly one lowercase .py
+    // Idempotent, even when a pasted name kept the old extension.
+    expect(toScriptName("intro.py.py")).toBe("intro.py");
+    expect(toScriptName(toScriptName("intro"))).toBe("intro.py");
+    expect(dedupeExtension("a:b.py.PY.py")).toBe("a:b.py");
+    expect(dedupeExtension("my.python.py")).toBe("my.python.py");
 
     expect(validateScriptName("intro.py")).toBeNull();
     expect(validateScriptName(".py")).toBe("Enter a file name.");
-    expect(validateScriptName("a/b.py")).toMatch(/can't contain/);
-    expect(validateScriptName("tab\there.py")).toMatch(/can't contain/);
-    expect(validateScriptName(" lead.py")).toMatch(/start or end/);
-    expect(validateScriptName("dot..py")).toMatch(/start or end/);
-    expect(validateScriptName("con.py")).toMatch(/reserved/);
-    expect(validateScriptName("Intro.py", ["intro.py"])).toBe("Intro.py already exists.");
+    expect(validateScriptName(" lead.py")).toBe("Filename cannot start or end with a dot or space.");
+    // No dot or space right before ".py" either.
+    expect(validateScriptName("dot..py")).toBe("Filename cannot end with a dot or space before the extension.");
+  });
+
+  // Same rules and messages as backend/workspace_paths.py.
+  it.each([
+    ["a/b.py", "Filename cannot contain folders or path separators."],
+    ["a\\b.py", "Filename cannot contain folders or path separators."],
+    ["tab\there.py", "Filename cannot contain control or invisible characters."],
+    ["del\u007f.py", "Filename cannot contain control or invisible characters."],
+    ["evil\u202Eyp.exe.py", "Filename cannot contain control or invisible characters."],
+    ["zero\u200Bwidth.py", "Filename cannot contain control or invisible characters."],
+    ['win<>:"|?*.py', 'Filename cannot contain " * : < > ? |.'],
+    ["a?.py", "Filename cannot contain ?."],
+    [`${"é".repeat(127)}.py`, "Filename is too long (max 255 bytes)."],
+    [`${"a".repeat(101)}.py`, "Filename is too long (max 100 characters before the extension)."],
+    ["..py", "Filename needs a name before the extension."],
+    ["....py", "Filename needs a name before the extension."],
+    ["-dash.py", "Filename cannot start with a dash."],
+    [".hidden.py", "Filename cannot start with a dot."],
+    ["con.py", "Filename 'con.py' is a reserved device name."],
+    ["CON.py", "Filename 'CON.py' is a reserved device name."],
+    ["Lpt9.py", "Filename 'Lpt9.py' is a reserved device name."],
+    ["com1.tar.py", "Filename 'com1.tar.py' is a reserved device name."],
+    ["nul .py", "Filename 'nul .py' is a reserved device name."],
+    ["_temp_run_abc.py", "Filenames starting with '_temp_run_' are reserved for scratch renders."],
+    ["_TEMP_RUN_x.py", "Filenames starting with '_temp_run_' are reserved for scratch renders."],
+  ])("rejects %j", (name, message) => {
+    expect(validateScriptName(name)).toBe(message);
+  });
+
+  it.each(["intro.py", `${"a".repeat(100)}.py`, "console.py", "com10.py", "retest_ünï_日本_🎬.py", "my_temp_run_x.py", "a.b.v1.2.py"])(
+    "accepts %j",
+    (name) => expect(validateScriptName(name)).toBeNull(),
+  );
+
+  it("reports existing names and case-only clashes like the server", () => {
+    expect(validateScriptName("intro.py", ["intro.py"])).toBe("intro.py already exists.");
+    expect(validateScriptName("Intro.py", ["intro.py"])).toBe("'intro.py' already exists. File names that differ only by case are not allowed.");
   });
 
   it("derives class names from file names", () => {
@@ -74,10 +115,25 @@ describe("format", () => {
     expect(assetKind("font.otf")).toBe("font");
     expect(assetKind("data.bin")).toBe("other");
 
-    expect(assetUsageSnippet("logo.svg")).toBe('SVGMobject("assets/logo.svg")');
-    expect(assetUsageSnippet("photo.png")).toBe('ImageMobject("assets/photo.png")');
+    expect(assetUsageSnippet("logo.svg")).toBe('logo = SVGMobject("assets/logo.svg")\nself.play(FadeIn(logo))');
+    expect(assetUsageSnippet("photo.png")).toBe('photo = ImageMobject("assets/photo.png")\nself.play(FadeIn(photo))');
     expect(assetUsageSnippet("beep.mp3")).toBe('self.add_sound("assets/beep.mp3")');
     expect(assetUsageSnippet("font.ttf")).toBe('"assets/font.ttf"');
+    expect(assetVariable("My Logo-2.svg", "graphic")).toBe("my_logo_2");
+    expect(assetVariable("3d.png", "picture")).toBe("_3d");
+    expect(assetVariable("class.svg", "graphic")).toBe("class_");
+    expect(assetVariable("日本.png", "picture")).toBe("picture");
+  });
+
+  it("finds just the file:line part of a console line", () => {
+    const text = '  File "/work/example.py", line 12, in construct';
+    const match = findLineReferenceMatch(text, ["example.py"])!;
+    expect(match.line).toBe(12);
+    expect(text.slice(match.start, match.end)).toBe('example.py", line 12');
+    const compact = "│ /work/example.py:7 in construct │";
+    const short = findLineReferenceMatch(compact, ["example.py"])!;
+    expect(compact.slice(short.start, short.end)).toBe("example.py:7");
+    expect(findLineReferenceMatch("manim/scene.py:7", ["example.py"])).toBeNull();
   });
 });
 
@@ -207,11 +263,12 @@ describe("storage", () => {
 
   it("seeds and saves browser scripts", () => {
     expect(loadBrowserFiles()).toEqual({ [BROWSER_STARTER_NAME]: BROWSER_STARTER });
-    expect(saveBrowserFiles({ "a.py": "x" })).toBe(true);
+    expect(writeBrowserFile("a.py", "x")).toBe(true);
+    deleteBrowserFile(BROWSER_STARTER_NAME);
     expect(loadBrowserFiles()).toEqual({ "a.py": "x" });
 
+    localStorage.clear();
     localStorage.setItem("manim_composer_browser_files", JSON.stringify({ "legacy.py": "y" }));
-    localStorage.removeItem(STORAGE_KEYS.browserFiles);
     expect(loadBrowserFiles()).toEqual({ "legacy.py": "y" });
   });
 
@@ -220,7 +277,7 @@ describe("storage", () => {
       throw new DOMException("full", "QuotaExceededError");
     });
     expect(() => writeStored("k", 1)).not.toThrow();
-    expect(saveBrowserFiles({ "a.py": "x" })).toBe(false);
+    expect(writeBrowserFile("a.py", "x")).toBe(false);
   });
 });
 

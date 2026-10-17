@@ -18,6 +18,14 @@ DIST_INDEX = os.path.join(FRONTEND_DIR, "dist", "index.html")
 FRONTEND_SOURCES = ("src", "public", "index.html", "package.json", "package-lock.json", "vite.config.ts")
 
 
+# backend/main.py prints the same warning (tests/test_cli.py keeps them in sync).
+LAN_WARNING = (
+    "\n[warn] This process runs the Python you send it, with no login.\n"
+    "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
+    "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n"
+)
+
+
 def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
     """Check if a given TCP port is already open/bound on the host."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -60,16 +68,16 @@ def build_frontend(force: bool = False) -> None:
     npm = shutil.which("npm")
     if npm is None:
         if os.path.exists(DIST_INDEX):
-            print("[warn] npm not found; serving the existing (possibly outdated) frontend build.")
+            print("[warn] npm not found; serving the existing (possibly outdated) frontend build.", flush=True)
             return
         raise FileNotFoundError("npm")
 
-    print("Building the frontend (first run or sources changed)...")
+    print("Building the frontend (first run or sources changed)...", flush=True)
     if not os.path.isdir(os.path.join(FRONTEND_DIR, "node_modules")):
-        print("Installing frontend dependencies (npm install)... this can take a minute.")
+        print("Installing frontend dependencies (npm install)... this can take a minute.", flush=True)
         subprocess.run([npm, "install", "--no-fund", "--no-audit"], cwd=FRONTEND_DIR, check=True)
     subprocess.run([npm, "run", "build"], cwd=FRONTEND_DIR, check=True)
-    print("Frontend built.")
+    print("Frontend built.", flush=True)
 
 
 def open_browser(url: str) -> None:
@@ -109,12 +117,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print(
-            "\n[warn] This process runs the Python you send it, with no login.\n"
-            "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
-            "       Remote clients are refused unless you set MANIM_ALLOW_LAN=1.\n",
-            file=sys.stderr,
-        )
+        print(LAN_WARNING, file=sys.stderr)
 
     browser_host = "localhost" if args.host in ("127.0.0.1", "0.0.0.0", "::") else args.host
     url = f"http://{browser_host}:{args.port}"
@@ -127,12 +130,21 @@ def main() -> None:
 
     import uvicorn
 
-    print(f"Manim Composer is running at {url}  (Ctrl+C to stop)")
+    print(f"Manim Composer is running at {url}  (Ctrl+C to stop)", flush=True)
     try:
-        uvicorn.run("backend.main:app", host=args.host, port=args.port, reload=False, log_level="warning")
+        from backend.main import ws_max_message_bytes
+
+        uvicorn.run(
+            "backend.main:app",
+            host=args.host,
+            port=args.port,
+            reload=False,
+            log_level="warning",
+            ws_max_size=ws_max_message_bytes(),
+        )
     except KeyboardInterrupt:
         pass
-    print("\nManim Composer stopped.")
+    print("\nManim Composer stopped.", flush=True)
 
 
 if __name__ == "__main__":

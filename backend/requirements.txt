@@ -7,3 +7,6 @@ python-multipart>=0.0.6
 # 0.19+ encodes video with PyAV, so a separate FFmpeg install is optional.
 # Capped below 0.23: 0.22 removed the OpenGL --write_to_movie flag this app used to pass.
 manim>=0.19.0,<0.23
+# Capped below 13: with Manim 0.22, Pillow 13.0.0 breaks every ImageMobject scene
+# ("ValueError: Invalid mode for data type"); 12.3.0 works.
+pillow<13

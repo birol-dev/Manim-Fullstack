@@ -5,6 +5,8 @@
  * languages and their (very large) language-service workers.
  */
 import * as monaco from "monaco-editor-esm/editor/editor.api.js";
+// Ctrl+M ("Toggle Tab Key Moves Focus") flips this global, not the editor's tabFocusMode option.
+import { TabFocus } from "monaco-editor-esm/editor/browser/config/tabFocus.js";
 import "monaco-editor-esm/editor/contrib/anchorSelect/browser/anchorSelect.js";
 import "monaco-editor-esm/editor/contrib/bracketMatching/browser/bracketMatching.js";
 import "monaco-editor-esm/editor/contrib/caretOperations/browser/transpose.js";
@@ -81,4 +83,4 @@ import "monaco-editor-esm/editor/common/standaloneStrings.js";
 import "monaco-editor-esm/base/browser/ui/codicons/codicon/codicon-modifiers.css";
 import "monaco-editor-esm/languages/definitions/python/register.js";
 
-export { monaco };
+export { monaco, TabFocus };

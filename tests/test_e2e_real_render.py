@@ -87,7 +87,7 @@ def test_unsaved_code_render_lands_in_script_media_folder(client, isolated_works
     # Scratch script and scratch media are cleaned up; logs never mention them.
     leftovers = [p for p in isolated_workspace.rglob("*") if main.TEMP_PREFIX in p.name]
     assert leftovers == []
-    assert not any(main.TEMP_PREFIX in (e.get("message") or "") for e in events)
+    assert not any(main.TEMP_PREFIX in (e.get("message") or "") for e in events), [e for e in events if main.TEMP_PREFIX in (e.get("message") or "")]
 
 
 def test_static_scene_produces_image(client, isolated_workspace):

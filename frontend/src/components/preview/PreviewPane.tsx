@@ -1,19 +1,28 @@
-import { Columns2, Download, ExternalLink, Film, History, Play, Square, XCircle } from "lucide-react";
+import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Loader2, Play, Square, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender, RenderOutcome } from "@/hooks/useRenderSession";
 import { MOD_KEY } from "@/lib/constants";
+import { useRenderAnnouncement } from "@/hooks/useRenderAnnouncement";
 import { overallPercent } from "@/lib/progress";
 import type { PreviewItem } from "@/lib/types";
 
 interface PreviewPaneProps {
   preview: PreviewItem | null;
+  /** The render of the open file, if one is running. */
   active: ActiveRender | null;
+  /** A render of another file, running while this one is open (shown as a slim banner, not the overlay). */
+  otherRender?: ActiveRender | null;
+  onOpenFile?: (name: string) => void;
+  /** Why Render won't run (size limit, syntax error), or null. */
+  renderBlocked?: string | null;
   /** Number of play()/wait() calls in the scene being rendered, when known. */
   stepCount: number;
   lastOutcome: RenderOutcome | null;
+  /** Cancel was requested and the render hasn't stopped yet. */
+  stopping?: boolean;
   loop: boolean;
   selectedScene: string;
   canRender: boolean;
@@ -51,11 +60,25 @@ function ProgressRing({ percent }: { percent: number | null }) {
   );
 }
 
-function RenderingOverlay({ active, stepCount, onCancel }: { active: ActiveRender; stepCount: number; onCancel: () => void }) {
+function RenderingOverlay({
+  active,
+  stepCount,
+  stopping,
+  onCancel,
+}: {
+  active: ActiveRender;
+  stepCount: number;
+  stopping: boolean;
+  onCancel: () => void;
+}) {
   const progress = active.progress;
-  const percent = overallPercent(active, stepCount);
+  const percent = active.queued ? null : overallPercent(active, stepCount);
   let detail = "Starting Manim…";
-  if (progress?.animation !== undefined) {
+  if (stopping) {
+    detail = active.queued ? "Leaving the queue…" : "Stopping Manim…";
+  } else if (active.queued) {
+    detail = "Waiting for another render to finish…";
+  } else if (progress?.animation !== undefined) {
     const total = Math.max(stepCount, progress.animation + 1);
     detail = `Animation ${progress.animation + 1} of ${total}${progress.label ? ` · ${progress.label}` : ""}`;
   } else if (progress) {
@@ -63,62 +86,104 @@ function RenderingOverlay({ active, stepCount, onCancel }: { active: ActiveRende
   }
 
   return (
+    // Not a live region: the percent changes on every tick. Milestones are announced by the
+    // pane's own status line (useRenderAnnouncement).
     <div
-      role="status"
-      aria-live="polite"
+      role="group"
+      aria-label="Render in progress"
       className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/75 p-6 text-center backdrop-blur-sm animate-in fade-in-0"
     >
       <ProgressRing percent={percent} />
       <div className="flex max-w-full flex-col gap-1">
-        <p className="text-[13px] font-medium text-fg">Rendering {active.request.scene}</p>
+        <p className="text-[13px] font-medium text-fg">
+          {active.queued ? "Queued" : "Rendering"} {active.request.scene}
+          {active.queued && active.queuePosition ? ` · position ${active.queuePosition}` : ""}
+        </p>
         <p className="max-w-80 truncate font-mono text-2xs text-fg-muted" title={detail}>
           {detail}
         </p>
       </div>
-      <Button size="sm" onClick={onCancel}>
-        <Square className="fill-current" />
-        Cancel
-      </Button>
+      <Tooltip content={stopping ? "Stopping the render…" : "Cancel render"} side="top" wrap>
+        <Button size="sm" onClick={onCancel} disabled={stopping}>
+          <Square className="fill-current" />
+          {stopping ? "Stopping…" : "Cancel"}
+        </Button>
+      </Tooltip>
     </div>
   );
+}
+
+/** "a/b/c.mp4" -> { dir: "a/b/", file: "c.mp4" } (the footer keeps the file name visible). */
+function splitPath(location: string): { dir: string; file: string } {
+  const cut = Math.max(location.lastIndexOf("/"), location.lastIndexOf("\\")) + 1;
+  return { dir: location.slice(0, cut), file: location.slice(cut) };
+}
+
+/** Save *url* under *name* without leaving the page (the hidden link never takes focus). */
+function downloadFile(url: string, name?: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  if (name) link.download = name;
+  else link.setAttribute("download", "");
+  link.rel = "noopener";
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 export function PreviewPane(props: PreviewPaneProps) {
   const { preview, active, lastOutcome } = props;
   const failed = lastOutcome && !lastOutcome.success && lastOutcome.status !== "cancelled";
+  // Manim writes a PNG instead of a video when a scene never calls play() or wait().
+  const still = preview?.kind === "image";
+  const announcement = useRenderAnnouncement(active, props.stepCount, Boolean(props.stopping), lastOutcome);
 
   return (
     <section aria-label="Preview" className="flex h-full min-h-0 flex-col bg-surface">
+      <p role="status" aria-live="polite" className="sr-only" data-testid="render-announcement">
+        {announcement}
+      </p>
       <PaneHeader className="h-10 justify-between pr-1.5">
         <div className="flex min-w-0 items-center gap-2">
           <PaneTitle>Preview</PaneTitle>
-          {preview && <span className="truncate text-xs text-fg-muted">{preview.title}</span>}
+          {/* While rendering, the header names the job, not the clip behind the overlay. */}
+          {active ? (
+            <span className="truncate text-xs text-fg-muted">
+              {active.request.scene} · {active.queued ? "queued" : "rendering"}
+            </span>
+          ) : (
+            preview && <span className="truncate text-xs text-fg-muted">{preview.title}</span>
+          )}
         </div>
         <div className="flex items-center gap-0.5">
+          {preview && !active && (
+            <>
+              {/* Real buttons (not links): Safari and macOS skip links on Tab by default. */}
+              <Tooltip content="Open in new tab">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Open in new tab"
+                  onClick={() => window.open(preview.url, "_blank", "noopener,noreferrer")}
+                >
+                  <ExternalLink />
+                </Button>
+              </Tooltip>
+              <Tooltip content="Download">
+                <Button variant="ghost" size="icon-sm" aria-label="Download" onClick={() => downloadFile(preview.url, preview.downloadName)}>
+                  <Download />
+                </Button>
+              </Tooltip>
+            </>
+          )}
+          {/* Last in the header (and the Tab order): Esc from the editor lands on Open in new tab. */}
           {props.canCompare && (
             <Tooltip content="Compare renders side by side">
               <Button variant="ghost" size="icon-sm" aria-label="Compare renders" onClick={props.onCompare}>
                 <Columns2 />
               </Button>
             </Tooltip>
-          )}
-          {preview && (
-            <>
-              <Tooltip content="Open in new tab">
-                <Button asChild variant="ghost" size="icon-sm">
-                  <a href={preview.url} target="_blank" rel="noreferrer" aria-label="Open in new tab">
-                    <ExternalLink />
-                  </a>
-                </Button>
-              </Tooltip>
-              <Tooltip content="Download">
-                <Button asChild variant="ghost" size="icon-sm">
-                  <a href={preview.url} download={preview.downloadName} aria-label="Download">
-                    <Download />
-                  </a>
-                </Button>
-              </Tooltip>
-            </>
           )}
         </div>
       </PaneHeader>
@@ -135,12 +200,20 @@ export function PreviewPane(props: PreviewPaneProps) {
               autoPlay
               muted
               playsInline
+              // Fewer unlabeled Tab stops in the native controls: no overflow menu (download,
+              // speed, cast) and no picture-in-picture button. Playback and looping are unchanged.
+              controlsList="nodownload noplaybackrate noremoteplayback"
+              disablePictureInPicture
+              aria-label={`Video preview: ${preview.title}`}
               loop={props.loop && !preview.stale}
               className="max-h-full max-w-full"
             />
           )
         ) : failed ? (
           <EmptyState
+            // The failure toast sits top-right over this pane (TOAST_TOP_PX, at most ~90 px tall); start the
+            // card below it so the toast never covers it, even on a 640 px tall window.
+            className="pt-24"
             icon={<XCircle className="text-danger" />}
             title="Render failed"
             description="Manim stopped with an error. The console shows the traceback; click a line reference to jump to it."
@@ -155,35 +228,98 @@ export function PreviewPane(props: PreviewPaneProps) {
             icon={<Film />}
             title="Nothing rendered yet"
             description={
-              <>
-                Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
-                here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
-              </>
+              props.renderBlocked && props.canRender ? (
+                // Same reason as the toolbar's Render, in plain sight (not only in a tooltip).
+                <span id="preview-render-blocked-reason" className="text-warning">
+                  {props.renderBlocked}
+                </span>
+              ) : (
+                <>
+                  Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
+                  here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
+                </>
+              )
             }
             action={
-              <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
-                <Play className="fill-current" />
-                Render
-              </Button>
+              props.renderBlocked && props.canRender ? (
+                <Tooltip content={props.renderBlocked} wrap>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={props.onRender}
+                    aria-label="Render"
+                    aria-disabled="true"
+                    aria-describedby="preview-render-blocked-reason"
+                    data-blocked="true"
+                    className="cursor-not-allowed opacity-40 saturate-0 hover:brightness-100"
+                  >
+                    <Play className="fill-current" />
+                    Render
+                  </Button>
+                </Tooltip>
+              ) : (
+                <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
+                  <Play className="fill-current" />
+                  Render
+                </Button>
+              )
             }
           />
         )}
 
-        {preview?.stale && !active && (
-          <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2 bg-warning-soft px-3 py-1.5 text-xs font-medium text-warning">
-            <History className="size-3.5 shrink-0" />
-            Out of date — the last render didn't replace this preview
+        {preview && !active && (preview.stale || still) && (
+          <div className="absolute inset-x-0 top-0 z-10 flex flex-col">
+            {preview.stale && (
+              <div className="flex items-center justify-center gap-2 bg-warning-soft px-3 py-1.5 text-xs font-medium text-warning">
+                <History className="size-3.5 shrink-0" />
+                Out of date — the last render didn't replace this preview
+              </div>
+            )}
+            {still && (
+              <div role="note" className="flex items-center justify-center gap-2 bg-accent-soft px-3 py-1.5 text-center text-xs font-medium text-accent">
+                <ImageIcon className="size-3.5 shrink-0" />
+                {preview.title} has no animations, so Manim saved a still image
+              </div>
+            )}
           </div>
         )}
 
-        {active && <RenderingOverlay active={active} stepCount={props.stepCount} onCancel={props.onCancel} />}
+        {active && (
+          <RenderingOverlay active={active} stepCount={props.stepCount} stopping={Boolean(props.stopping)} onCancel={props.onCancel} />
+        )}
+
+        {props.otherRender && (
+          <div
+            role="status"
+            data-testid="other-render"
+            className="absolute inset-x-0 bottom-0 z-10 flex items-center gap-2 border-t border-line bg-surface/95 px-3 py-1.5 text-xs text-fg-muted"
+          >
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-accent" />
+            <span className="min-w-0 flex-1 truncate">
+              {props.otherRender.queued ? "Queued" : "Rendering"} <span className="text-fg">{props.otherRender.request.scene}</span> from{" "}
+              <span className="font-mono">{props.otherRender.request.filename}</span>
+              {props.otherRender.queued && props.otherRender.queuePosition ? ` · position ${props.otherRender.queuePosition}` : ""}
+            </span>
+            {props.onOpenFile && (
+              <Button variant="ghost" size="xs" onClick={() => props.onOpenFile?.(props.otherRender!.request.filename)}>
+                Open
+              </Button>
+            )}
+            <Button variant="ghost" size="xs" onClick={props.onCancel} disabled={props.stopping}>
+              {props.stopping ? "Stopping…" : "Cancel"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {preview && (
         <div className="flex h-7 shrink-0 items-center gap-2 border-t border-line px-3">
           {preview.stale && <span className="shrink-0 text-2xs font-medium text-warning">Out of date</span>}
-          <span className="truncate font-mono text-2xs text-fg-subtle select-text" title={preview.location}>
-            {preview.location}
+          {still && <span className="shrink-0 text-2xs font-medium text-accent">Still image</span>}
+          {/* The folder truncates first, the file name stays whole; the full path is in the tooltip. */}
+          <span className="flex min-w-0 font-mono text-xs text-fg-muted select-text" title={preview.location}>
+            <span className="min-w-0 truncate">{splitPath(preview.location).dir}</span>
+            <span className="shrink-0">{splitPath(preview.location).file}</span>
           </span>
         </div>
       )}

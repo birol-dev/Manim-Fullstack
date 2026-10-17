@@ -1,15 +1,17 @@
-import { forwardRef, lazy, Suspense } from "react";
+import { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
 import type { SyntaxErrorInfo } from "@/lib/types";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/panel";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip } from "@/components/ui/tooltip";
 import type { ActiveRender } from "@/hooks/useRenderSession";
-import { MOD_KEY, QUALITY_OPTIONS } from "@/lib/constants";
+import { MOD_KEY, QUALITY_OPTIONS, qualityShortLabel, qualityTooltip } from "@/lib/constants";
 import type { Quality } from "@/lib/types";
+import { focusIsFree } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import type { CodeEditorHandle } from "./types";
 
@@ -18,6 +20,113 @@ const CodeEditor = lazy(() => import("./CodeEditor"));
 // Mobjects that are typeset with LaTeX under the hood.
 const USES_LATEX =
   /\b(MathTex|Tex|SingleStringMathTex|BulletedList|Title|DecimalNumber|Integer|Variable|Matrix|MathTable)\s*\(|\badd_coordinates\s*\(|\binclude_numbers\s*=\s*True/;
+
+// Select value for "Other scene…" (can't clash with a Python class name).
+const OTHER_SCENE = " other";
+const CLASS_NAME = /^[A-Za-z_]\w*$/;
+/** Button bottom to toolbar edge (6 px) + the reason row (29 px) + a gap. */
+const BLOCKED_TOOLTIP_OFFSET_PX = 41;
+
+/**
+ * Scene picker. The list holds the scenes the parser can prove; "Other scene…"
+ * lets you type any class name (aliased or factory-made bases, imported scenes).
+ */
+function ScenePicker({
+  scenes,
+  selectedScene,
+  placeholder,
+  disabled,
+  onSceneChange,
+}: {
+  scenes: string[];
+  selectedScene: string;
+  placeholder: string;
+  disabled: boolean;
+  onSceneChange: (scene: string) => void;
+}) {
+  const [typing, setTyping] = useState(false);
+  const [draft, setDraft] = useState("");
+  // Enter/Escape in the name box hand focus back to the picker (a click elsewhere keeps it there).
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (typing || !refocus.current) return;
+    refocus.current = false;
+    triggerRef.current?.focus();
+  }, [typing]);
+  const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
+  const valid = CLASS_NAME.test(draft.trim());
+  // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
+  // Narrowed only below 340 px: from 430 px down the toolbar wraps, so the controls have a full row.
+  const className = "w-auto min-w-[6.5rem] max-w-44 @max-[340px]:max-w-32 @max-[340px]:min-w-[5.5rem]";
+
+  if (typing) {
+    const commit = (keyboard = false) => {
+      if (valid) onSceneChange(draft.trim());
+      refocus.current = keyboard;
+      setTyping(false);
+    };
+    return (
+      <Input
+        autoFocus
+        aria-label="Scene class name"
+        aria-invalid={draft.trim() !== "" && !valid ? true : undefined}
+        title="Type the Scene class to render, then press Enter"
+        placeholder="ClassName"
+        value={draft}
+        spellCheck={false}
+        autoComplete="off"
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit(true);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            refocus.current = true;
+            setTyping(false);
+          }
+        }}
+        onBlur={() => commit()}
+        className={cn("h-7 w-36 font-mono text-xs @max-[340px]:w-28", className)}
+      />
+    );
+  }
+
+  return (
+    <Select
+      value={selectedScene}
+      onValueChange={(value) => {
+        if (value === OTHER_SCENE) {
+          setDraft(typed ?? "");
+          setTyping(true);
+        } else if (scenes.includes(value) || value === typed) {
+          // Only a scene this file lists: the Select (or its hidden native select, on autofill)
+          // must never write another file's scene, or "", back as this file's choice.
+          onSceneChange(value);
+        }
+      }}
+      disabled={disabled}
+    >
+      <Tooltip content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"} wrap>
+        <SelectTrigger ref={triggerRef} aria-label="Scene" className={className}>
+          <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
+        </SelectTrigger>
+      </Tooltip>
+      <SelectContent>
+        {scenes.map((scene) => (
+          <SelectItem key={scene} value={scene}>
+            {scene}
+          </SelectItem>
+        ))}
+        {typed && <SelectItem value={typed}>{typed}</SelectItem>}
+        {(scenes.length > 0 || typed) && <SelectSeparator />}
+        <SelectItem value={OTHER_SCENE}>Other scene…</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
 
 interface EditorPaneProps {
   storageKey: string;
@@ -28,9 +137,14 @@ interface EditorPaneProps {
   selectedScene: string;
   quality: Quality;
   autoRender: boolean;
+  /** This file's render (another file's job shows in the preview banner, not here). */
   active: ActiveRender | null;
   latexAvailable: boolean;
   canRender: boolean;
+  /** Why Render won't run this buffer (size limit, syntax error): the button says so instead of rendering. */
+  renderBlocked?: string | null;
+  /** The buffer is over the size limit (shown as a banner whatever else blocks Render). */
+  oversize?: string | null;
   fontSize: number;
   syntaxError?: SyntaxErrorInfo | null;
   stopping?: boolean;
@@ -49,24 +163,108 @@ interface EditorPaneProps {
 export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function EditorPane(props, ref) {
   const { activeFile, code, isDirty, scenes, selectedScene, quality, active } = props;
   const rendering = active !== null;
-  const qualityOption = QUALITY_OPTIONS.find((option) => option.value === quality);
+  // The handle App holds. The editor itself only exists while a file is open, after its lazy
+  // chunk loads and Monaco mounts, so a focus() that comes first (New script from the empty
+  // Scripts list) waits for it, and what is typed in the meantime goes into the editor too.
+  const inner = useRef<CodeEditorHandle | null>(null);
+  const ready = useRef(false);
+  const pending = useRef<{ typed: string; stop: () => void } | null>(null);
+  const flushPending = useCallback(() => {
+    const wait = pending.current;
+    if (!wait || !inner.current || !ready.current) return;
+    pending.current = null;
+    wait.stop();
+    if (!focusIsFree()) return;
+    inner.current.focus();
+    if (wait.typed) inner.current.insertText(wait.typed, "inline");
+  }, []);
+  const focusWhenReady = useCallback(() => {
+    if (inner.current && ready.current) {
+      inner.current.focus();
+      return;
+    }
+    if (pending.current) return;
+    // Keys pressed before the editor is there would land on the page and be lost: keep the
+    // plain text ones (nothing with Ctrl/Cmd/Alt) while nothing else has focus.
+    const onKeyDown = (event: KeyboardEvent) => {
+      const wait = pending.current;
+      if (!wait || !focusIsFree() || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+      if (event.key.length === 1) wait.typed += event.key;
+      else if (event.key === "Enter") wait.typed += "\n";
+      else if (event.key === "Backspace") wait.typed = wait.typed.slice(0, -1);
+      else return;
+      event.preventDefault();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    // Give up if the editor never comes (the file failed to open).
+    const timer = window.setTimeout(() => {
+      pending.current?.stop();
+      pending.current = null;
+    }, 5000);
+    pending.current = {
+      typed: "",
+      stop: () => {
+        document.removeEventListener("keydown", onKeyDown, true);
+        window.clearTimeout(timer);
+      },
+    };
+  }, []);
+  useEffect(() => () => pending.current?.stop(), []);
+  // The editor unmounts with the last open file; the next one reports ready again when it mounts.
+  const hasFile = Boolean(activeFile);
+  useLayoutEffect(() => {
+    if (!hasFile) ready.current = false;
+  }, [hasFile]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      insertText: (text, mode) => inner.current?.insertText(text, mode) ?? false,
+      revealLine: (line) => inner.current?.revealLine(line),
+      setErrorMarker: (line, message) => inner.current?.setErrorMarker(line, message),
+      clearMarkers: () => inner.current?.clearMarkers(),
+      focus: focusWhenReady,
+    }),
+    [focusWhenReady],
+  );
+  const attachEditor = useCallback(
+    (handle: CodeEditorHandle | null) => {
+      // (Called with null and a new handle on every render of the editor, not only on unmount.)
+      inner.current = handle;
+      if (handle) flushPending();
+    },
+    [flushPending],
+  );
+  const onEditorReady = useCallback(() => {
+    ready.current = true;
+    flushPending();
+  }, [flushPending]);
+
   const needsLatexWarning = !props.latexAvailable && USES_LATEX.test(code);
+  // Only when Render would otherwise be available (not while rendering, offline, ...).
+  const blocked = props.canRender && props.renderBlocked ? props.renderBlocked : null;
+  // Its own prop: the "another file is rendering" reason must never show in this banner.
+  const oversize = props.oversize ?? null;
 
   return (
     <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
-      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2">
+      {/* Below ~430 px (the 50/50 split at 1024) the file name gets its own row instead of being truncated. */}
+      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2 @max-[430px]:h-auto @max-[430px]:flex-wrap @max-[430px]:gap-y-0 @max-[430px]:pb-1.5">
         {activeFile && (
-          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg">
-            <FileCode2 className="size-3.5 shrink-0 text-accent" />
-            <span className="min-w-0 truncate font-medium" title={activeFile}>
+          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg @max-[430px]:h-8 @max-[430px]:basis-full">
+            <FileCode2 className="size-3.5 shrink-0 text-accent @max-[460px]:hidden" />
+            <span className="min-w-[2.5rem] truncate font-medium" title={activeFile}>
               {activeFile}
             </span>
             {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Tooltip content="Save" shortcut={`${MOD_KEY}+S`}>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Tooltip
+            content={!activeFile ? "Save (no script open)" : isDirty ? "Save" : "Saved (no unsaved changes)"}
+            shortcut={`${MOD_KEY}+S`}
+            wrap
+          >
             <Button
               variant="ghost"
               size="icon-sm"
@@ -91,65 +289,84 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
             </Button>
           </Tooltip>
 
-          <Select value={selectedScene} onValueChange={props.onSceneChange} disabled={scenes.length === 0}>
-            <SelectTrigger aria-label="Scene" className="w-36 min-w-0 @max-[720px]:w-28 @max-[420px]:w-24">
-              <SelectValue
-                placeholder={
-                  props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"
-                }
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {scenes.map((scene) => (
-                <SelectItem key={scene} value={scene}>
-                  {scene}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <ScenePicker
+            key={activeFile ?? ""}
+            scenes={scenes}
+            selectedScene={selectedScene}
+            disabled={!activeFile}
+            placeholder={props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"}
+            onSceneChange={props.onSceneChange}
+          />
 
+          {/* One quality for every file (a global preference since the first UI; see Settings > Rendering). */}
           <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
-            <SelectTrigger aria-label="Quality" className="w-[88px] @max-[420px]:w-16">
-              <SelectValue>{qualityOption?.detail.split(" · ")[0]}</SelectValue>
-            </SelectTrigger>
+            {/* wrap: merged onto the trigger, the tooltip's data-state ("closed") would replace the Select's ("open"). */}
+            <Tooltip content={qualityTooltip(quality)} wrap>
+              {/* 78 px with tighter padding: "1080p" / "2160p" fit (they showed as "108…"). */}
+              <SelectTrigger aria-label="Quality" aria-description="Applies to all files" className="w-[78px] shrink-0 gap-1 px-2">
+                <SelectValue>{qualityShortLabel(quality)}</SelectValue>
+              </SelectTrigger>
+            </Tooltip>
             <SelectContent align="end">
-              {QUALITY_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  <span className="flex w-36 items-center justify-between gap-3">
-                    {option.label}
-                    <span className="text-2xs text-fg-subtle">{option.detail}</span>
-                  </span>
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                <SelectLabel className="px-2 pb-1 pt-1 text-2xs font-normal text-fg-subtle">Quality for all files</SelectLabel>
+                {QUALITY_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    <span className="flex w-36 items-center justify-between gap-3">
+                      {option.label}
+                      <span className="text-2xs text-fg-subtle">{option.detail}</span>
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
 
           {rendering ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={props.onCancel}
-              disabled={props.stopping}
-              className="w-[104px] @max-[520px]:w-auto"
-              aria-label={props.stopping ? "Stopping" : "Cancel"}
-            >
-              <Square className="fill-current" />
-              <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
-            </Button>
+            <Tooltip key="cancel" content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={props.onCancel}
+                disabled={props.stopping}
+                className="w-[104px] @max-[520px]:w-auto"
+                aria-label={props.stopping ? "Stopping" : "Cancel"}
+              >
+                <Square className="fill-current" />
+                <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
+              </Button>
+            </Tooltip>
           ) : (
-            <Tooltip content="Render scene" shortcut={`${MOD_KEY}+Enter`}>
+            <Tooltip
+              key="render"
+              content={blocked ?? "Render scene"}
+              shortcut={blocked ? undefined : `${MOD_KEY}+Enter`}
+              wrap
+              // A blocked Render always has its reason row under the toolbar: open below that row and
+              // end at the button's right edge, so the hint covers neither the row nor the Preview header.
+              align={blocked ? "end" : undefined}
+              sideOffset={blocked ? BLOCKED_TOOLTIP_OFFSET_PX : undefined}
+            >
               <Button
                 variant="primary"
                 size="sm"
                 onClick={props.onRender}
                 disabled={!props.canRender}
-                className="w-[92px] @max-[520px]:w-auto"
+                // Still focusable when blocked, so the reason is reachable by keyboard and read out.
+                aria-disabled={blocked ? true : undefined}
+                aria-describedby={blocked ? "render-blocked-reason" : undefined}
+                className={cn("w-[92px] @max-[520px]:w-auto", blocked && "cursor-not-allowed opacity-40 saturate-0 hover:brightness-100")}
                 aria-label="Render"
               >
                 <Play className="fill-current" />
                 <span className="@max-[520px]:hidden">Render</span>
               </Button>
             </Tooltip>
+          )}
+          {blocked && (
+            <span id="render-blocked-reason" className="sr-only">
+              {blocked}
+            </span>
           )}
         </div>
       </div>
@@ -159,6 +376,18 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           <AlertTriangle className="size-3.5 shrink-0 text-danger" />
           <span className="min-w-0 flex-1 truncate" title={props.syntaxError.message}>
             Line {props.syntaxError.line}: {props.syntaxError.message}
+          </span>
+        </div>
+      )}
+
+      {oversize && (
+        <div
+          role="note"
+          className="flex shrink-0 items-center gap-2 border-b border-danger/20 bg-danger-soft px-3 py-1.5 text-xs text-fg-muted"
+        >
+          <AlertTriangle className="size-3.5 shrink-0 text-danger" />
+          <span className="min-w-0 flex-1 truncate" title={oversize}>
+            {oversize}
           </span>
         </div>
       )}
@@ -183,7 +412,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
             }
           >
             <CodeEditor
-              ref={ref}
+              ref={attachEditor}
               path={`${props.storageKey}/${activeFile}`}
               value={code}
               fontSize={props.fontSize}
@@ -191,6 +420,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               onCursorChange={props.onCursorChange}
               onSave={props.onSave}
               onRender={props.onRender}
+              onReady={onEditorReady}
               syntaxError={props.syntaxError ? { line: props.syntaxError.line, message: props.syntaxError.message } : null}
             />
           </Suspense>
