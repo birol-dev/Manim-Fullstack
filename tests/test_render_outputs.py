@@ -470,3 +470,42 @@ def test_parent_watch_main_in_process(monkeypatch):
     finally:
         for sig, handler in saved.items():
             signal.signal(sig, handler)
+
+
+# ---- browser-storage renders have their own folder ----------------------------------
+
+def test_browser_renders_are_listed_with_their_storage(media_dir):
+    write_media(media_dir / "videos" / "demo" / "480p15" / "S.mp4")
+    write_media(media_dir / "videos" / main.BROWSER_MEDIA_FOLDER / "demo" / "480p15" / "S.mp4")
+    write_media(media_dir / "images" / main.BROWSER_MEDIA_FOLDER / "demo" / "Still_ManimCE_v0.22.0.png", data=PNG)
+    items = {item["path"]: item for item in main._list_media()}
+    assert items["videos/demo/480p15/S.mp4"]["storage"] == "disk"
+    browser = items["videos/.browser/demo/480p15/S.mp4"]
+    assert (browser["storage"], browser["script"], browser["quality"], browser["scene"]) == ("browser", "demo", "480p15", "S")
+    still = items["images/.browser/demo/Still_ManimCE_v0.22.0.png"]
+    assert (still["storage"], still["script"], still["quality"], still["scene"]) == ("browser", "demo", None, "Still")
+
+
+def test_sweep_reaches_stale_staging_folders_of_browser_renders(media_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "WORKSPACE_DIR", str(tmp_path))
+    old = write_media(media_dir / "videos" / main.BROWSER_MEDIA_FOLDER / "demo" / (STAGE_PREFIX + "00000001") / "480p15" / "S.mp4", mtime=1000)
+    os.utime(old.parent, (1000, 1000)); os.utime(old.parent.parent, (1000, 1000))
+    keep = write_media(media_dir / "videos" / main.BROWSER_MEDIA_FOLDER / "demo" / "480p15" / "S.mp4", mtime=1000)
+    main._sweep_temp_renders(min_age=60)
+    assert not old.parent.parent.exists() and keep.exists()
+
+
+def test_browser_storage_render_needs_its_code_and_a_known_storage():
+    base = {"type": "start", "id": "x", "filename": "demo.py", "scene": "S", "quality": "l"}
+    assert main._validate_start_message({**base, "code": "x"})["storage"] == "disk"
+    assert main._validate_start_message({**base, "code": "x", "storage": "browser"})["storage"] == "browser"
+    with pytest.raises(main._RenderRequestError, match="must send its code"):
+        main._validate_start_message({**base, "storage": "browser"})
+    with pytest.raises(main._RenderRequestError, match="Storage must be"):
+        main._validate_start_message({**base, "code": "x", "storage": "cloud"})
+
+
+def test_browser_render_config_targets_the_browser_folder():
+    cfg = main._output_config(f"{main.BROWSER_MEDIA_FOLDER}/demo", STAGE)
+    assert f"video_dir = {{media_dir}}/videos/.browser/demo/{STAGE}/{{quality}}" in cfg
+    assert "partial_movie_dir = {media_dir}/videos/.browser/demo/{quality}/partial_movie_files/{scene_name}" in cfg

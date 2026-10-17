@@ -1,13 +1,13 @@
 import type { StorageMode } from "./types";
 
 // Which storage mode (and script name) each render output came from, kept client side.
-// The server writes every render to media/videos/<script stem>/..., whatever the script's
-// storage: a browser-storage my_scene.py and the workspace folder's my_scene.py share
-// one output folder. Recording the origin here keeps a disk render out of a browser file's
-// preview (and the other way round), and labels an output with the script's current name
-// after a rename mid-render (the folder keeps the name the render started under).
-// Outputs with no record (rendered before this was kept, or by another browser) count as
-// the workspace folder's.
+// The server puts browser-storage renders in media/<kind>/.browser/<stem>/ and says so in
+// each media item's `storage`, so a browser my_scene.py and the workspace folder's
+// my_scene.py no longer share an output folder. The record here still labels an output
+// with the script's current name after a rename mid-render (the folder keeps the name the
+// render started under), and tells apart outputs that older servers wrote to the shared
+// folder. Outputs with no record count as the storage the server reports, else the
+// workspace folder's.
 
 const KEY = "mc.renderOrigins";
 const MAX_ENTRIES = 500;
@@ -77,13 +77,23 @@ export function readRenderOrigins(): Readonly<Origins> {
   return read();
 }
 
-/** Where the output at *mediaPath* came from; unrecorded outputs are the workspace folder's. */
+/**
+ * Where the output at *mediaPath* came from. *serverStorage* is the media item's `storage`:
+ * an output in the browser folder is always a browser-storage render. Otherwise a recorded
+ * origin wins (older servers wrote browser renders to the shared folder), and unrecorded
+ * outputs are the workspace folder's.
+ */
 export function renderOrigin(
   mediaPath: string,
   stem: string | null,
   origins: Readonly<Origins> = read(),
+  serverStorage?: StorageMode,
 ): { storage: StorageMode; file: string | null } {
   const origin = origins[mediaPath];
+  const byStem = stem ? `${stem}.py` : null;
+  if (serverStorage === "browser") {
+    return { storage: "browser", file: origin?.storage === "browser" ? origin.file : byStem };
+  }
   if (origin) return { storage: origin.storage, file: origin.file };
-  return { storage: "disk", file: stem ? `${stem}.py` : null };
+  return { storage: "disk", file: byStem };
 }

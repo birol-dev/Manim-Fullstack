@@ -16,7 +16,12 @@ export interface AssetFile {
   name: string;
   size: number;
   type: "asset";
+  /** Empty for link entries, which can't be served. */
   url: string;
+  /** A symbolic link to a file outside the assets folder: it can only be deleted (only the link is removed). */
+  outside?: boolean;
+  /** A symbolic link that points nowhere: it can only be deleted. */
+  broken?: boolean;
 }
 
 export interface MediaFile {
@@ -31,6 +36,8 @@ export interface MediaFile {
   quality: string | null;
   /** Modification time, seconds since the epoch. */
   modified: number;
+  /** The storage of the script it was rendered from: browser-storage renders live in media/<kind>/.browser/. */
+  storage?: StorageMode;
 }
 
 export interface WorkspaceFiles {

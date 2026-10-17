@@ -339,6 +339,8 @@ export function useRenderSession({ log, onOutput, onFinished }: Options) {
         use_opengl: request.useOpenGL,
         download_only: request.downloadOnly,
         code: request.code,
+        // Browser-storage renders get their own output folder on the server.
+        storage: request.storage,
       });
 
       setTimeout(() => {
