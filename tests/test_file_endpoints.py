@@ -649,6 +649,23 @@ def test_shipped_requirements_line_is_used():
     assert main._manim_requirement() == "manim>=0.19.0,<0.23"
 
 
+def test_companion_pins_are_read_from_requirements(tmp_path):
+    path = tmp_path / "requirements.txt"
+    path.write_text("manim>=0.19,<0.23\nPillow < 13 , >= 10  # ImageMobject\nnumpy>=1.26\n# pillow<12\npillow\n")
+    assert main._companion_pins(str(path)) == ["Pillow<13,>=10"]
+    assert main._companion_pins(str(tmp_path / "missing.txt")) == []
+
+
+def test_install_manim_installs_the_shipped_pillow_cap_too(monkeypatch):
+    """A fresh install from the Setup dialog must not pull Pillow 13 (breaks ImageMobject)."""
+    started = []
+    monkeypatch.setattr(main, "_installers_allowed", lambda: None)
+    monkeypatch.setattr(main, "_start_background", started.append)
+    body = main.install_manim()
+    assert started == [[sys.executable, "-m", "pip", "install", "manim>=0.19.0,<0.23", "pillow<13"]]
+    assert "pillow<13" in body["message"]
+
+
 # --------------------------------------------------------------------------- #
 # 10. Overall body deadline
 # --------------------------------------------------------------------------- #
