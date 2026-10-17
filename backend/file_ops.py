@@ -140,6 +140,20 @@ _TRANSIENT_WINERRORS = frozenset({5, 32})
 WINDOWS_RETRY_SECONDS = 1.0
 
 
+def _is_busy_error(exc: PermissionError) -> bool:
+    """True for the transient Windows errors above.
+
+    os.replace / os.unlink / os.rename report the Win32 code in ``winerror``.
+    The built-in open() goes through the C runtime, which turns both codes into
+    a bare EACCES (errno 13) without ``winerror``, so that counts as busy too; a
+    file that is really unreadable is then reported after the retry deadline.
+    """
+    winerror = getattr(exc, "winerror", None)
+    if winerror is None:
+        return exc.errno == errno.EACCES
+    return winerror in _TRANSIENT_WINERRORS
+
+
 def _retry_if_busy(fn, *args):
     """Run fn(*args); on Windows retry briefly while the file is busy (see above)."""
     if not _WINDOWS:
@@ -150,7 +164,7 @@ def _retry_if_busy(fn, *args):
         try:
             return fn(*args)
         except PermissionError as exc:
-            if getattr(exc, "winerror", None) not in _TRANSIENT_WINERRORS or time.monotonic() >= deadline:
+            if not _is_busy_error(exc) or time.monotonic() >= deadline:
                 raise
         time.sleep(delay)
         delay = min(delay * 2, 0.05)

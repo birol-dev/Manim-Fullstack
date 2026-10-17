@@ -159,6 +159,7 @@ def test_readers_never_see_partial_content(tmp_path):
     atomic_write(str(target), contents[0])
     stop = threading.Event()
     seen = {"bad": 0, "ok": 0}
+    errors = []
 
     def writer():
         i = 0
@@ -168,7 +169,11 @@ def test_readers_never_see_partial_content(tmp_path):
 
     def reader():
         while not stop.is_set():
-            data = read_bytes(str(target))
+            try:
+                data = read_bytes(str(target))
+            except OSError as exc:  # e.g. a busy file on Windows that was not retried
+                errors.append(exc)
+                continue
             seen["ok" if data in contents else "bad"] += 1
 
     threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(2)]
@@ -178,4 +183,5 @@ def test_readers_never_see_partial_content(tmp_path):
     stop.set()
     for t in threads:
         t.join()
+    assert errors == []
     assert seen["bad"] == 0 and seen["ok"] > 0
