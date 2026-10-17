@@ -5,8 +5,7 @@ Thanks for helping out! Bug reports, feature ideas, docs fixes, and code are all
 ## Setup
 
 ```bash
-pip install -r backend/requirements.txt
-pip install pytest pytest-asyncio pytest-cov pytest-timeout httpx pyflakes
+pip install -r backend/requirements-dev.txt   # app + test tools
 cd frontend && npm install
 ```
 
