@@ -24,6 +24,8 @@ export interface ConfirmRequest {
   conflict?: boolean;
   /** Focus target on close when the opener no longer exists (e.g. the deleted row). */
   fallbackFocus?: () => void;
+  /** Where focus goes whenever it closes (instead of the element focused before it opened). */
+  returnFocus?: () => void;
 }
 
 interface ConfirmDialogProps {
@@ -68,6 +70,14 @@ export function ConfirmDialog({ request, onClose }: ConfirmDialogProps) {
           if (!target) return;
           event.preventDefault();
           focusWithRing(target);
+        }}
+        onCloseAutoFocus={(event) => {
+          const returnFocus = lastRequest.current?.returnFocus;
+          if (!returnFocus) return;
+          event.preventDefault();
+          returnFocus();
+          // The action's re-render (e.g. a storage switch) can land a moment later.
+          window.setTimeout(returnFocus, 0);
         }}
         onFocusFallback={() => lastRequest.current?.fallbackFocus?.()}
       >

@@ -592,7 +592,60 @@ export default function App() {
       editorFontSize: setEditorFontSize,
       quality: setQuality,
     };
+    if (key === "storageMode") {
+      requestStorageMode(value as StorageMode);
+      return;
+    }
     setters[key](value);
+  };
+
+  /**
+   * Switch where scripts are stored. Switching closes the open buffer, so unsaved edits
+   * (including text kept after a file vanished and Recreate was cancelled) are asked
+   * about first: Save then switch, Discard then switch, or Cancel and stay.
+   */
+  const requestStorageMode = (next: StorageMode) => {
+    if (next === storageMode) return;
+    const name = workspace.activeFile;
+    if (!name || !workspace.isDirty) {
+      setStorageMode(next);
+      return;
+    }
+    const focusStorageControl = () =>
+      document.querySelector<HTMLElement>('[aria-label="Where scripts are stored"] [aria-checked="true"]')?.focus();
+    const target = next === "browser" ? "browser storage" : "the workspace folder";
+    setConfirm({
+      title: `Save changes to ${name}?`,
+      description: `Switching to ${target} closes ${name}. Save your changes first, or discard them.`,
+      confirmLabel: "Save",
+      secondaryLabel: "Discard",
+      defaultFocus: "cancel",
+      returnFocus: focusStorageControl,
+      onConfirm: async () => {
+        try {
+          await workspace.save();
+        } catch (err) {
+          if (err instanceof SaveConflictError && err.reason === "missing") {
+            // Deleted or renamed elsewhere (e.g. Recreate was cancelled): Save recreates it.
+            try {
+              await workspace.save({ force: true });
+            } catch (again) {
+              reportSaveError(again, "Couldn't save the file.");
+              return;
+            }
+          } else {
+            // A conflict asks what to do; any failure keeps the mode (and the edits) as they are.
+            reportSaveError(err, "Couldn't save the file.");
+            return;
+          }
+        }
+        setStorageMode(next);
+      },
+      onSecondary: () => {
+        workspace.discardChanges();
+        setStorageMode(next);
+      },
+    });
   };
 
   const requestDeleteScript = (name: string) =>
