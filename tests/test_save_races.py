@@ -1,4 +1,4 @@
-"""Concurrent saves, creates, and renames (r2: lost updates, torn reads, create/rename races)."""
+"""Concurrent saves, creates, and renames: lost updates, torn reads, create/rename races."""
 
 import hashlib
 import os
@@ -86,7 +86,7 @@ def test_conflict_response_carries_current_version_and_etag(client, ws):
 
 
 def test_version_comes_from_the_bytes_written_not_a_reread(ws):
-    """r2: the version was re-read from disk, so a write landing in between was attributed to this save."""
+    """The version used to be re-read from disk, so a write landing in between was attributed to this save."""
     real_write = main.atomic_write
 
     def write_then_someone_else_writes(path, data, **kw):
@@ -138,7 +138,7 @@ def test_file_content_version_matches_the_code_returned(ws):
 
 
 def test_create_only_vs_rename_onto_the_same_name(ws):
-    """r2 (Fixer #1): both used to succeed and one file's content was lost (29/30)."""
+    """Both used to succeed and one file's content was lost (29/30)."""
     for _ in range(30):
         (ws / "src.py").write_text("SRC = 1\n")
         created, renamed = _run_together(

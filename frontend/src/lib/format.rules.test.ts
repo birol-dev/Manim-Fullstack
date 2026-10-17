@@ -1,5 +1,5 @@
-// Shared filename rule vectors, also checked by tests/test_filename_rules_r3.py against
-// backend/workspace_paths.py. See /workspace/manim-audit-compare/r3/FILENAME-RULE.md.
+// Shared filename rule vectors, also checked by tests/test_filename_rules.py against
+// backend/workspace_paths.py.
 import { describe, expect, it } from "vitest";
 import rules from "../../../tests/fixtures/filename_rules.json";
 import { foldFilename, toScriptName, validateScriptName } from "./format";
@@ -29,7 +29,7 @@ describe("shared filename rule (tests/fixtures/filename_rules.json)", () => {
     if (!collide) expect(problem).toBeNull();
   });
 
-  it("covers the round 3 cases", () => {
+  it("covers the core cases", () => {
     const inputs = vectors.map((vec) => vec.input);
     for (const needed of ["Foo.PY", "x.py.", "x .py", "COM¹.py", "ＣＯＭ１.py", "cafe\u0301.py"]) {
       expect(inputs).toContain(needed);
@@ -50,7 +50,7 @@ describe("shared filename rule (tests/fixtures/filename_rules.json)", () => {
     }
   });
 
-  describe("round 4: Unicode spaces and line separators", () => {
+  describe("Unicode spaces and line separators", () => {
     const spaces = (rules as { whitespace_chars: string[] }).whitespace_chars.map((code) =>
       String.fromCodePoint(parseInt(code.slice(2), 16)),
     );

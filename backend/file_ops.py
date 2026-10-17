@@ -59,9 +59,6 @@ def lock_key(path: str) -> str:
     return os.path.join(os.path.normcase(directory), fold_filename(name))
 
 
-_lock_key = lock_key  # round-3 name
-
-
 def _enter(key: str) -> threading.RLock:
     with _locks_guard:
         entry = _locks.get(key)
