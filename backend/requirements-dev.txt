@@ -1,0 +1,8 @@
+# Test and lint tools (what CI installs on top of the app requirements).
+-r requirements.txt
+httpx
+pytest
+pytest-asyncio
+pytest-cov
+pytest-timeout
+pyflakes
