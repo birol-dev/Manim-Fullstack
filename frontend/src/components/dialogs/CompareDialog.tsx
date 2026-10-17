@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { apiUrl } from "@/lib/api";
+import { mediaScriptLabel } from "@/lib/preview";
 import type { MediaFile } from "@/lib/types";
 
 interface CompareDialogProps {
@@ -16,7 +17,7 @@ interface CompareDialogProps {
 const DRIFT_TOLERANCE_S = 0.08;
 
 function label(video: MediaFile) {
-  return [video.scene, video.quality, video.script && `${video.script}.py`].filter(Boolean).join(" · ");
+  return [video.scene, video.quality, mediaScriptLabel(video)].filter(Boolean).join(" · ");
 }
 
 function formatTime(seconds: number) {
@@ -36,8 +37,11 @@ interface ComparePaneProps {
 
 function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata, onTimeUpdate, onEnded }: ComparePaneProps) {
   const video = videos.find((item) => item.path === path);
+  // 16:9 until the video reports its real size (portrait or square renders keep their shape).
+  const [ratio, setRatio] = useState<{ path: string; value: number } | null>(null);
+  const aspect = ratio?.path === path ? ratio.value : 16 / 9;
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+    <div className="flex min-w-0 flex-1 flex-col gap-2">
       <Select value={path} onValueChange={onChange}>
         <SelectTrigger aria-label={`Video ${side}`} className="h-8">
           <span className="flex min-w-0 items-center gap-2">
@@ -55,7 +59,10 @@ function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata,
           ))}
         </SelectContent>
       </Select>
-      <div className="flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-line bg-black">
+      <div
+        className="flex max-h-[calc(100dvh-15rem)] w-full items-center justify-center overflow-hidden rounded-lg border border-line bg-black"
+        style={{ aspectRatio: String(aspect) }}
+      >
         {video && (
           <video
             ref={videoRef}
@@ -64,10 +71,16 @@ function ComparePane({ side, path, videos, videoRef, onChange, onLoadedMetadata,
             muted
             playsInline
             preload="auto"
-            onLoadedMetadata={onLoadedMetadata}
+            onLoadedMetadata={(event) => {
+              const element = event.currentTarget;
+              if (element.videoWidth > 0 && element.videoHeight > 0) {
+                setRatio({ path: video.path, value: element.videoWidth / element.videoHeight });
+              }
+              onLoadedMetadata();
+            }}
             onTimeUpdate={onTimeUpdate}
             onEnded={onEnded}
-            className="max-h-full max-w-full"
+            className="size-full object-contain"
           />
         )}
       </div>
@@ -108,13 +121,16 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
   const finished = (video: HTMLVideoElement | null) =>
     !video || video.ended || (Number.isFinite(video.duration) && video.currentTime >= video.duration - 0.05);
 
-  const syncFromA = () => {
+  // Runs on either clip's timeupdate. The readout follows whichever clip is further
+  // along, so it keeps counting when the shorter clip (A or B) has ended.
+  const sync = () => {
     const a = videoA.current;
     const b = videoB.current;
-    if (!a) return;
-    setTime(a.currentTime);
+    const playing = both();
+    if (playing.length === 0) return;
+    setTime(Math.max(...playing.map((video) => video.currentTime)));
     // Once the shorter clip ends, leave it on its last frame and let the longer one continue.
-    if (!b || a.ended || b.ended || !Number.isFinite(b.duration) || a.currentTime > b.duration) return;
+    if (!a || !b || a.ended || b.ended || !Number.isFinite(b.duration) || a.currentTime > b.duration) return;
     if (Math.abs(b.currentTime - a.currentTime) > DRIFT_TOLERANCE_S) b.currentTime = a.currentTime;
   };
 
@@ -141,7 +157,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
 
   return (
     <>
-      <div className="flex min-h-0 flex-1 gap-3">
+      <div className="flex min-h-0 items-start gap-3">
         <ComparePane
           side="A"
           path={pathA}
@@ -149,7 +165,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
           videoRef={videoA}
           onChange={chooseA}
           onLoadedMetadata={updateDuration}
-          onTimeUpdate={syncFromA}
+          onTimeUpdate={sync}
           onEnded={noteEnded}
         />
         <ComparePane
@@ -159,6 +175,7 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
           videoRef={videoB}
           onChange={chooseB}
           onLoadedMetadata={updateDuration}
+          onTimeUpdate={sync}
           onEnded={noteEnded}
         />
       </div>
@@ -190,7 +207,10 @@ function CompareBody({ videos }: { videos: MediaFile[] }) {
 export function CompareDialog({ open, onOpenChange, videos }: CompareDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(760px,calc(100dvh-2rem))] max-w-6xl">
+      <DialogContent
+        // Sized so two 16:9 panes, the pickers and the transport all fit in the viewport without stretching the panes.
+        className="max-w-[min(72rem,calc((100dvh-15rem)*32/9+3.25rem))]"
+      >
         <DialogHeader>
           <DialogTitle>Compare renders</DialogTitle>
           <DialogDescription>Two renders, played in lockstep. Pick any pair from your workspace.</DialogDescription>

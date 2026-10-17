@@ -8,7 +8,7 @@ vi.mock("@/components/editor/CodeEditor", async () => {
 });
 
 import App from "./App";
-import { BROWSER_STARTER, STORAGE_KEYS } from "@/lib/storage";
+import { BROWSER_STARTER, loadBrowserFiles, STORAGE_KEYS } from "@/lib/storage";
 import { editorCalls } from "@/test/fakeEditor";
 import { DIAGNOSTICS, EXAMPLE_CODE, installFakeServer, media, type FakeServer } from "@/test/fakeServer";
 import { FakeWebSocket } from "@/test/fakeSocket";
@@ -67,7 +67,7 @@ describe("App", () => {
     act(() => socket.emit({ type: "progress", render_id: id, percent: 50, animation: 0, label: "Create(Circle())" }));
     expect(await screen.findByText("Animation 1 of 2 · Create(Circle())")).toBeInTheDocument();
     expect(document.title).toBe("25% · example.py — Manim Composer");
-    expect(within(screen.getByRole("status")).getByText("25%")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Render in progress" })).getByText("25%")).toBeInTheDocument();
 
     act(() => {
       socket.emit({
@@ -87,7 +87,8 @@ describe("App", () => {
       return element!;
     });
     expect(video.getAttribute("src")).toMatch(/^\/media\/videos\/example\/720p30\/Intro\.mp4\?v=\d+$/);
-    expect(screen.getByText("workspace/media/videos/example/720p30/Intro.mp4")).toBeInTheDocument();
+    // The footer splits folder and file name (the folder truncates first); the full path is the title.
+    expect(screen.getByTitle("workspace/media/videos/example/720p30/Intro.mp4")).toHaveTextContent("workspace/media/videos/example/720p30/Intro.mp4");
     expect(await screen.findByText(/Rendered Intro in/)).toBeInTheDocument();
   });
 
@@ -128,7 +129,8 @@ describe("App", () => {
     expect(editorCalls).toContainEqual(["marker", 7, "NameError: name 'x' is not defined"]);
     expect(screen.getByText("Render failed")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Line 7" }));
+    // The console row (and its link button) can commit a tick after the toast.
+    await user.click(await screen.findByRole("button", { name: "Go to line 7" }));
     expect(editorCalls).toContainEqual(["reveal", 7]);
   });
 
@@ -262,7 +264,7 @@ describe("App", () => {
     expect(calls(server, "GET", "/api/file-content")).toHaveLength(0);
 
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
-    await waitFor(() => expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.browserFiles)!)["my_scene.py"]).toContain("# local"));
+    await waitFor(() => expect(loadBrowserFiles()["my_scene.py"]).toContain("# local"));
   });
 
   it("saves with Ctrl+S", async () => {
@@ -347,12 +349,12 @@ describe("App", () => {
     expect(screen.getByLabelText("Formula preview").querySelector(".katex")).not.toBeNull();
 
     fireEvent.change(input, { target: { value: "\\frac{1" } });
-    expect(screen.getByLabelText("Formula preview")).toHaveTextContent(/expected '}'/i);
+    expect(screen.getByLabelText("Formula preview")).toHaveTextContent(/missing closing brace/i);
 
     fireEvent.change(input, { target: { value: "a^2" } });
     // KaTeX's MathML output trips jsdom's accessible-name computation, so avoid role queries here.
     await user.click(screen.getByText("Insert MathTex"));
-    expect(editorCalls).toContainEqual(["insert", 'MathTex(r"a^2")', "block"]);
+    expect(editorCalls).toContainEqual(["insert", 'tex = MathTex(r"a^2")\nself.play(Write(tex))', "block"]);
   });
 
   it("uploads assets, rejects unsupported types, and inserts usage code", async () => {
@@ -367,7 +369,7 @@ describe("App", () => {
     await user.upload(input, new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" }));
     await waitFor(() => expect(server.assets.map((asset) => asset.name)).toEqual(["logo.svg"]));
     await user.click(await screen.findByRole("button", { name: "Insert logo.svg" }));
-    expect(editorCalls).toContainEqual(["insert", 'SVGMobject("assets/logo.svg")', "block"]);
+    expect(editorCalls).toContainEqual(["insert", 'logo = SVGMobject("assets/logo.svg")\nself.play(FadeIn(logo))', "block"]);
   });
 
   it("opens setup when Manim is missing and starts installers", async () => {

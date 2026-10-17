@@ -6,6 +6,10 @@ export interface ScriptFile {
   name: string;
   size: number;
   type: "script";
+  /** A symbolic link to a file outside the workspace: it can only be deleted (only the link is removed). */
+  outside?: boolean;
+  /** A symbolic link that points nowhere: it can only be deleted. */
+  broken?: boolean;
 }
 
 export interface AssetFile {
@@ -41,6 +45,23 @@ export interface AnimationStep {
   line: number;
   /** Seconds when known; an expression string when computed at runtime. */
   duration?: number | string;
+  /**
+   * True when *duration* is the parser's guess from Manim's defaults (no explicit run_time),
+   * or when the step sits in an if/elif/else or match/case branch inside a loop (only one
+   * branch runs per pass, so its count is a guess).
+   */
+  estimated?: boolean;
+  /**
+   * A branch inside a loop that is not counted: the parser counts only the branch with the
+   * most animations per pass. Left out of the totals and the execution order.
+   */
+  alternative?: boolean;
+  /** Present for calls inside a for/while loop: total times the call runs, or null when unknown. */
+  repeat?: number | null;
+  /** Line of the outermost loop that repeats this call. */
+  loop_line?: number;
+  /** Enclosing loops, outermost first: [line, column, iterations or null when unknown]. */
+  loops?: Array<[number, number, number | null]>;
 }
 
 export type SceneAnimations = Record<string, AnimationStep[]>;
@@ -75,6 +96,8 @@ export interface Diagnostics {
   default_resolution: string;
   recommended_threads: number;
   opengl_supported: boolean;
+  /** Largest script the server accepts (MANIM_MAX_CODE_BYTES). */
+  max_code_bytes?: number;
   hardware: {
     cpu: { model: string; physical_cores: number; logical_threads: number };
     ram_gb: number;
@@ -97,4 +120,11 @@ export interface PreviewItem {
   downloadName: string;
   /** The clip is from an earlier render that has since failed or produced nothing. */
   stale?: boolean;
+  /** Script and scene the render came from, when known. The preview follows the open file. */
+  file?: string;
+  scene?: string;
+  /** Storage mode of that script (a browser-storage file and a workspace file can share a name). */
+  storage?: StorageMode;
+  /** Picked from the Renders list: kept when no script is open (a preview that followed a file is not). */
+  pinned?: boolean;
 }

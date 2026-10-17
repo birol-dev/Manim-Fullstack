@@ -8,19 +8,10 @@ import { Textarea } from "@/components/ui/input";
 import { Callout, Section } from "@/components/ui/panel";
 import { Tooltip } from "@/components/ui/tooltip";
 import { pythonString } from "@/lib/format";
+import { friendlyKatex } from "@/lib/katex";
 import { LATEX_TEMPLATES } from "@/lib/templates";
 import { cn } from "@/lib/utils";
 import { SidebarPanel } from "./SidebarPanel";
-
-function friendlyKatex(message: string): string {
-  const cleaned = message.replace(/^KaTeX parse error:\s*/i, "");
-  const match = cleaned.match(/Expected ('[^']*'|"[^"]*"), got ('[^']*'|"[^"]*")/i);
-  if (!match) return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
-  const expected = match[1];
-  const got = match[2].replace(/['"]/g, "");
-  const found = got === "EOF" ? "the end of the formula" : got;
-  return `Check the formula: expected ${expected}, but found ${found}.`;
-}
 
 function renderFormula(math: string, displayMode: boolean): { html: string; error: string | null } {
   try {
@@ -37,8 +28,9 @@ function Formula({ math, display = false, className }: { math: string; display?:
   return <span className={className} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
+/** Create the formula and show it, so an insert renders something. */
 function mathTexSnippet(latex: string): string {
-  return `MathTex(${pythonString(latex.trim(), { raw: true })})`;
+  return `tex = MathTex(${pythonString(latex.trim(), { raw: true })})\nself.play(Write(tex))`;
 }
 
 interface LatexPanelProps {
@@ -93,15 +85,22 @@ export function LatexPanel({ latexAvailable, canInsert, onInsert, onOpenSetup }:
                 <span dangerouslySetInnerHTML={{ __html: preview.html }} />
               )}
             </div>
-            <Button
-              variant="primary"
-              size="md"
-              disabled={!canInsert || !latex.trim()}
-              onClick={() => onInsert(mathTexSnippet(latex))}
+            {/* wrap: a disabled button gets no hover, so the span carries the hint saying why. */}
+            <Tooltip
+              content={!canInsert ? "Open a script to insert this formula" : !latex.trim() ? "Type a formula to insert" : "Insert MathTex into the open script"}
+              wrap
+              wrapClassName="flex w-full [&>button]:w-full"
             >
-              <CornerDownLeft />
-              Insert MathTex
-            </Button>
+              <Button
+                variant="primary"
+                size="md"
+                disabled={!canInsert || !latex.trim()}
+                onClick={() => onInsert(mathTexSnippet(latex))}
+              >
+                <CornerDownLeft />
+                Insert MathTex
+              </Button>
+            </Tooltip>
           </div>
         </Section>
 
@@ -117,7 +116,7 @@ export function LatexPanel({ latexAvailable, canInsert, onInsert, onOpenSetup }:
                   <span className="text-2xs text-fg-subtle">{template.name}</span>
                   <Formula math={template.code} className="max-w-full overflow-hidden text-[13px] text-fg" />
                 </button>
-                <Tooltip content="Insert MathTex">
+                <Tooltip content={canInsert ? "Insert MathTex" : "Open a script to insert this formula"} wrap>
                   <Button
                     variant="ghost"
                     size="icon-xs"
