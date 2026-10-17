@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 
-import { BottomPanel } from "./console/BottomPanel";
+import { BottomPanel, COPIED_MS } from "./console/BottomPanel";
 import { TimelineView } from "./console/TimelineView";
 import { LatexPanel } from "./sidebar/LatexPanel";
 import { Tooltip, TooltipProvider } from "./ui/tooltip";
@@ -158,6 +158,17 @@ describe("console queued line follows the live position", () => {
     rerender(panel({ logs, queuePosition: null, tab: "console" }));
     expect(screen.getByText("Waiting for another render to finish… (position 1 in queue)")).toBeInTheDocument();
   });
+
+  it("is copied with the position shown, not the one first logged", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const { rerender } = render(panel({ logs, queuePosition: 2 }));
+    rerender(panel({ logs, queuePosition: 1 }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy console output" }));
+    });
+    expect((writeText.mock.calls[0][0] as string).split("\n")[1]).toBe("Waiting for another render to finish… (position 1 in queue)");
+  });
 });
 
 describe("console Copy button", () => {
@@ -182,6 +193,26 @@ describe("console Copy button", () => {
     expect(text.split("\n")[0]).toBe("Traceback (most recent call last)");
     expect(text).toContain("❱ 7         self.play(Transform(c, x))");
     expect(text).not.toMatch(/[│╭╮╰╯─]/);
+  });
+
+  it("shows a check mark for a moment once copied, and none when copying fails", async () => {
+    vi.useFakeTimers();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const { rerender } = render(panel({ logs: [{ id: 1, level: "info", text: "hello" }] }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy console output" }));
+    });
+    expect(screen.getByTestId("console-copied")).toBeInTheDocument();
+    act(() => void vi.advanceTimersByTime(COPIED_MS));
+    expect(screen.queryByTestId("console-copied")).toBeNull();
+
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    rerender(panel({ logs: [{ id: 1, level: "info", text: "hello" }] }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy console output" }));
+    });
+    expect(screen.queryByTestId("console-copied")).toBeNull();
   });
 
   it("is not shown for an empty console", () => {

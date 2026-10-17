@@ -1,4 +1,5 @@
-import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Loader2, Play, Square, XCircle } from "lucide-react";
+import { useState } from "react";
+import { Columns2, Download, ExternalLink, Film, History, ImageIcon, Loader2, Play, Square, VideoOff, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState, Kbd, PaneHeader, PaneTitle } from "@/components/ui/panel";
@@ -132,8 +133,40 @@ function downloadFile(url: string, name?: string) {
   link.remove();
 }
 
+/** The browser decodes H.264, the codec of Manim's MP4s (some Chromium builds leave it out). */
+function playsH264(): boolean {
+  try {
+    return document.createElement("video").canPlayType('video/mp4; codecs="avc1.42E01E"') !== "";
+  } catch {
+    return true;
+  }
+}
+
+/** In place of a video the browser couldn't play (it would show an empty 300x150 box). */
+function UnplayableVideo({ url, downloadName }: { url: string; downloadName: string }) {
+  return (
+    <EmptyState
+      icon={<VideoOff />}
+      title="This video can't play here"
+      description={
+        playsH264()
+          ? "The browser couldn't load it. It may have been deleted or moved since; render it again or pick it from Renders."
+          : "This browser can't decode H.264, the format Manim saves videos in. Download the video, or open the app in Chrome, Edge, Firefox or Safari."
+      }
+      action={
+        <Button size="sm" onClick={() => downloadFile(url, downloadName)}>
+          <Download />
+          Download
+        </Button>
+      }
+    />
+  );
+}
+
 export function PreviewPane(props: PreviewPaneProps) {
   const { preview, active, lastOutcome } = props;
+  // The URL of a video that failed to load (a new render has a new URL, so it is tried again).
+  const [unplayable, setUnplayable] = useState<string | null>(null);
   const failed = lastOutcome && !lastOutcome.success && lastOutcome.status !== "cancelled";
   // Manim writes a PNG instead of a video when a scene never calls play() or wait().
   const still = preview?.kind === "image";
@@ -192,6 +225,8 @@ export function PreviewPane(props: PreviewPaneProps) {
         {preview ? (
           preview.kind === "image" ? (
             <img key={preview.url} src={preview.url} alt={preview.title} className="max-h-full max-w-full object-contain" />
+          ) : unplayable === preview.url ? (
+            <UnplayableVideo url={preview.url} downloadName={preview.downloadName} />
           ) : (
             <video
               key={preview.url}
@@ -206,6 +241,7 @@ export function PreviewPane(props: PreviewPaneProps) {
               disablePictureInPicture
               aria-label={`Video preview: ${preview.title}`}
               loop={props.loop && !preview.stale}
+              onError={() => setUnplayable(preview.url)}
               className="max-h-full max-w-full"
             />
           )

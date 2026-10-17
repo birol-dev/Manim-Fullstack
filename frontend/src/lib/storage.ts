@@ -2,6 +2,8 @@
  * localStorage access that never throws (private windows, blocked storage,
  * quota errors). Values are JSON encoded.
  */
+import { validateScriptName } from "./format";
+
 export const STORAGE_KEYS = {
   storageMode: "mc.storageMode",
   quality: "mc.quality",
@@ -71,11 +73,15 @@ class MyScene(Scene):
 // One localStorage key per script ("mc.browserFile:<name>"), so a tab whose view of
 // storage is stale can only ever write the file it saves, never another tab's file.
 // Older versions kept every script in one JSON map (mc.browserFiles, before that
-// manim_composer_browser_files); it is migrated on first read and removed.
+// manim_composer_browser_files); it is migrated on first read and removed. A tab still
+// running an older version can write the map again: see migrateBrowserMap.
 
 const BROWSER_FILE_PREFIX = "mc.browserFile:";
 /** Set once the starter script has been offered, so deleting every script leaves an empty list. */
 const BROWSER_SEEDED_KEY = "mc.browserSeeded";
+/** Name -> hash of each script as it was last migrated from a one-map key. */
+const BROWSER_MIGRATED_KEY = "mc.browserFilesMigrated";
+const LEGACY_BROWSER_MAP_KEYS = [STORAGE_KEYS.browserFiles, LEGACY_KEYS[STORAGE_KEYS.browserFiles]!];
 
 /** localStorage key that holds the browser-storage script *name*. */
 export function browserFileKey(name: string): string {
@@ -84,7 +90,7 @@ export function browserFileKey(name: string): string {
 
 /** True for a "storage" event key that can change the browser-storage scripts. */
 export function isBrowserFilesKey(key: string | null): boolean {
-  return key === null || key.startsWith(BROWSER_FILE_PREFIX) || key === STORAGE_KEYS.browserFiles;
+  return key === null || key.startsWith(BROWSER_FILE_PREFIX) || LEGACY_BROWSER_MAP_KEYS.includes(key);
 }
 
 function storage(): Storage | null {
@@ -104,10 +110,49 @@ function storedNames(store: Storage): string[] {
   return names;
 }
 
-/** Move the old one-map format into per-file keys (files already stored per key win). */
+/** A short hash of *text* (cyrb53): enough to tell two versions of a script apart. */
+function contentHash(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    h1 = Math.imul(h1 ^ code, 2654435761);
+    h2 = Math.imul(h2 ^ code, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** A free script name for an older tab's version of *name*: "scene (older tab).py", "scene (older tab 2).py"... */
+function olderTabCopyName(name: string, taken: readonly string[]): string {
+  const stem = name.replace(/\.py$/i, "").slice(0, 80);
+  for (let count = 1; count < 1000; count += 1) {
+    const candidate = `${stem} (older tab${count > 1 ? ` ${count}` : ""}).py`;
+    if (validateScriptName(candidate, taken) === null) return candidate;
+  }
+  return `older_tab_${Date.now()}.py`;
+}
+
+function readMigratedHashes(store: Storage): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(store.getItem(BROWSER_MIGRATED_KEY) ?? "{}");
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Move the old one-map format into per-file keys. A tab still running an older version
+ * writes the whole map again when it saves: its edit, plus stale copies of scripts that
+ * may have been edited here since. So, per script, against its hash when last migrated:
+ * a copy that is still as migrated is stale and skipped; one changed only in the map
+ * replaces the stored script; one changed on both sides (or with no hash to go by) is
+ * kept next to it as "<name> (older tab).py". No version is ever dropped.
+ */
 function migrateBrowserMap(store: Storage): void {
-  const legacyKeys = [STORAGE_KEYS.browserFiles, "manim_composer_browser_files"];
-  for (const key of legacyKeys) {
+  for (const key of LEGACY_BROWSER_MAP_KEYS) {
     let raw: string | null;
     try {
       raw = store.getItem(key);
@@ -122,12 +167,28 @@ function migrateBrowserMap(store: Storage): void {
       map = null;
     }
     try {
+      const migrated = readMigratedHashes(store);
+      const hashes = { ...migrated };
       if (map && typeof map === "object") {
+        const names = storedNames(store);
         for (const [name, content] of Object.entries(map as Record<string, unknown>)) {
-          if (typeof content !== "string" || store.getItem(browserFileKey(name)) !== null) continue;
-          store.setItem(browserFileKey(name), content);
+          if (typeof content !== "string") continue;
+          const hash = contentHash(content);
+          const current = store.getItem(browserFileKey(name));
+          if (current === null || (current !== content && migrated[name] !== undefined && migrated[name] === contentHash(current))) {
+            store.setItem(browserFileKey(name), content);
+          } else if (current !== content && migrated[name] !== hash) {
+            // Already kept (e.g. this map was half migrated before storage filled up): nothing to add.
+            if (!names.some((other) => store.getItem(browserFileKey(other)) === content)) {
+              const copy = olderTabCopyName(name, names);
+              store.setItem(browserFileKey(copy), content);
+              names.push(copy);
+            }
+          }
+          hashes[name] = hash;
         }
       }
+      store.setItem(BROWSER_MIGRATED_KEY, JSON.stringify(hashes));
       store.setItem(BROWSER_SEEDED_KEY, "true");
       store.removeItem(key);
     } catch {

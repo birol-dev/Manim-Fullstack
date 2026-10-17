@@ -60,7 +60,7 @@ async function switchStorage(user: ReturnType<typeof userEvent.setup>, mode: "Br
 const myScene = (path = "videos/my_scene/720p30/MyScene.mp4") =>
   media("MyScene", { path, url: `/media/${path}`, script: "my_scene" });
 
-describe("gap 1: the scene picker switches with the file", () => {
+describe("the scene picker switches with the file", () => {
   it("never shows one browser file's scene while another file is open", async () => {
     localStorage.setItem(STORAGE_KEYS.storageMode, JSON.stringify("browser"));
     const code = (scene: string) => `from manim import *\n\nclass ${scene}(Scene):\n    def construct(self):\n        self.wait()\n`;
@@ -91,7 +91,7 @@ describe("gap 1: the scene picker switches with the file", () => {
   });
 });
 
-describe("gap 2: a workspace render stays out of the browser-storage file of the same name", () => {
+describe("a workspace render stays out of the browser-storage file of the same name", () => {
   it("shows none of its banner, Cancel, console, or video on browser my_scene.py, even with no script left", async () => {
     const { user, server } = await renderApp({ scripts: { "my_scene.py": BROWSER_STARTER } });
     const { socket, id } = await startRender(user);
@@ -155,7 +155,7 @@ describe("gap 2: a workspace render stays out of the browser-storage file of the
   });
 });
 
-describe("gap 3: focus reaches the editor after New script from the empty Scripts list", () => {
+describe("focus reaches the editor after New script from the empty Scripts list", () => {
   it("lands in the editor once it mounts for the first file, so typing goes into the new script", async () => {
     localStorage.setItem(STORAGE_KEYS.storageMode, JSON.stringify("browser"));
     localStorage.setItem("mc.browserSeeded", "true");
@@ -176,7 +176,7 @@ describe("gap 3: focus reaches the editor after New script from the empty Script
   });
 });
 
-describe("gap 4: the Renders list names the script as it is now called", () => {
+describe("the Renders list names the script as it is now called", () => {
   it("labels a render renamed mid-render with the new name", async () => {
     const { user, server } = await renderApp();
     const { socket, id } = await startRender(user);

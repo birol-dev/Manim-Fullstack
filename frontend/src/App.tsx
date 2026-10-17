@@ -30,7 +30,7 @@ import { SaveConflictError, useWorkspace, type SaveOptions } from "@/hooks/useWo
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE, getMaxCodeBytes, renderBlockReason, utf8ByteLength } from "@/lib/constants";
 import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
-import { horizontalDefaults, TOAST_TOP_PX, workPanelSizes } from "@/lib/layout";
+import { horizontalDefaults, toastTopPx, workPanelSizes } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
@@ -83,11 +83,13 @@ function triggerDownload(url: string, filename: string) {
   anchor.remove();
 }
 
-function ResizeHandle({ direction }: { direction: "horizontal" | "vertical" }) {
+function ResizeHandle({ direction, label }: { direction: "horizontal" | "vertical"; label: string }) {
   // A 1 px line, with a 3 px accent bar and a grip on keyboard focus / drag, so the focused
   // handle is as easy to see as any other focus ring (it was only the 1 px line turning blue).
+  // Named: each handle is a Tab stop (arrow keys resize), and a bare "separator" says nothing.
   return (
     <Separator
+      aria-label={label}
       // Styles in index.css (.resize-handle): a 1 px line, plus a 3 px accent bar with a grip on focus / drag.
       className={cn(
         "resize-handle relative z-10 bg-line outline-none transition-colors data-[separator=hover]:bg-accent/60 data-[separator=active]:bg-accent data-[separator=focus]:bg-accent",
@@ -98,16 +100,21 @@ function ResizeHandle({ direction }: { direction: "horizontal" | "vertical" }) {
   );
 }
 
+/** Toasts about the open file: its size, a refused save, render or Insert, a reload, a syntax error. */
+const FILE_TOASTS = ["code-size", "render-blocked", "save-error", "insert-refused", "external-change", "syntax-error"];
+
 export default function App() {
   // ---- Preferences -------------------------------------------------------
   const [storageMode, setStorageMode] = usePersistentState<StorageMode>(STORAGE_KEYS.storageMode, "disk");
-  const [autoSave, setAutoSave] = usePersistentState(STORAGE_KEYS.autoSave, true);
-  const [downloadOnly, setDownloadOnly] = usePersistentState(STORAGE_KEYS.downloadOnly, false);
-  const [useOpenGL, setUseOpenGL] = usePersistentState(STORAGE_KEYS.useOpenGL, false);
-  const [autoRender, setAutoRender] = usePersistentState(STORAGE_KEYS.autoRender, false);
-  const [loopPreview, setLoopPreview] = usePersistentState(STORAGE_KEYS.loopPreview, true);
-  const [editorFontSize, setEditorFontSize] = usePersistentState(STORAGE_KEYS.editorFontSize, 13);
-  const [storedQuality, setQuality] = usePersistentState<Quality | null>(STORAGE_KEYS.quality, null);
+  // Settings follow other tabs (storage mode too, below, unless that would close unsaved edits).
+  const sync = { sync: true };
+  const [autoSave, setAutoSave] = usePersistentState(STORAGE_KEYS.autoSave, true, sync);
+  const [downloadOnly, setDownloadOnly] = usePersistentState(STORAGE_KEYS.downloadOnly, false, sync);
+  const [useOpenGL, setUseOpenGL] = usePersistentState(STORAGE_KEYS.useOpenGL, false, sync);
+  const [autoRender, setAutoRender] = usePersistentState(STORAGE_KEYS.autoRender, false, sync);
+  const [loopPreview, setLoopPreview] = usePersistentState(STORAGE_KEYS.loopPreview, true, sync);
+  const [editorFontSize, setEditorFontSize] = usePersistentState(STORAGE_KEYS.editorFontSize, 13, sync);
+  const [storedQuality, setQuality] = usePersistentState<Quality | null>(STORAGE_KEYS.quality, null, sync);
   const [sidebarView, setSidebarView] = usePersistentState<SidebarView>(STORAGE_KEYS.sidebarView, "files");
 
   // ---- Data --------------------------------------------------------------
@@ -368,7 +375,8 @@ export default function App() {
       // so nothing else measures it before Manim would render the copy on disk.
       const tooLarge = renderBlockReason({ codeBytes: utf8ByteLength(buffer), maxCodeBytes: getMaxCodeBytes(), syntaxError: null });
       if (tooLarge) {
-        toast.error("Can't render this script", { id: "render-blocked", description: tooLarge });
+        // Shares its id with the size toast from parsing, so the two never stack.
+        toast.error("Can't render this script", { id: "code-size", description: tooLarge });
         return;
       }
       try {
@@ -467,6 +475,12 @@ export default function App() {
   useEffect(() => {
     if (!hasSyntaxError) toast.dismiss("syntax-error");
   }, [hasSyntaxError]);
+
+  // Toasts about the open file are stale once another file (or the other storage) is shown.
+  const shownFile = `${storageMode}:${workspace.activeFile ?? ""}`;
+  useEffect(() => {
+    for (const id of FILE_TOASTS) toast.dismiss(id);
+  }, [shownFile]);
 
   // ---- Preview follows the open file ---------------------------------------
   // Opening a file (or reloading the page) shows that scene's newest render
@@ -648,6 +662,40 @@ export default function App() {
     });
   };
 
+  // Another tab switched where scripts are stored: follow it, unless that closes unsaved edits
+  // here. Then this tab stays where it is and offers the switch (which asks about them first).
+  const followStorageModeRef = useRef<(next: StorageMode, ask?: boolean) => void>(() => {});
+  useEffect(() => {
+    followStorageModeRef.current = (next, ask = false) => {
+      if (next === storageMode) return;
+      if (ask) {
+        requestStorageMode(next);
+        return;
+      }
+      const target = next === "browser" ? "browser storage" : "the workspace folder";
+      const name = workspace.activeFile;
+      if (!name || !workspace.isDirty) {
+        setStorageMode(next);
+        toast.info(`Switched to ${target}`, { id: "storage-mode", description: "It was changed in another tab." });
+        return;
+      }
+      toast.warning(`Another tab switched to ${target}`, {
+        id: "storage-mode",
+        description: `This tab stays where it is until you save or discard your changes to ${name}.`,
+        action: { label: "Switch", onClick: () => followStorageModeRef.current(next, true) },
+      });
+    };
+  });
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage || event.key !== STORAGE_KEYS.storageMode) return;
+      if (event.newValue === JSON.stringify("browser")) followStorageModeRef.current("browser");
+      else if (event.newValue === JSON.stringify("disk")) followStorageModeRef.current("disk");
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
   const requestDeleteScript = (name: string) =>
     setConfirm({
       title: `Delete ${name}?`,
@@ -715,6 +763,8 @@ export default function App() {
   // From the displayed render, so a quick cancel's "Stopping…" stays up (useMinimumStopping).
   const shown = shownRender.active;
   const ownRender = shown && isFor(shown.request, storageMode, workspace.activeFile) ? shown : null;
+  // Note rows across the top of the preview (PreviewPane shows them when nothing renders).
+  const previewNoteRows = preview && !ownRender ? Number(Boolean(preview.stale)) + Number(preview.kind === "image") : 0;
   // Another file's job in this storage mode gets the preview banner (with Cancel). One from the
   // other mode doesn't: it isn't about any file shown here (the status bar and Render's blocked
   // reason still say what is running and where).
@@ -898,7 +948,7 @@ export default function App() {
             >
               {sidebarContent}
             </Panel>
-            <ResizeHandle direction="horizontal" />
+            <ResizeHandle direction="horizontal" label="Resize the sidebar" />
             {/* Must cover the editor + preview minimums below, or the group fights itself at 1024 px. */}
             <Panel id="work" minSize="568px">
               <Group orientation="vertical" id="mc-layout-work" {...workLayout}>
@@ -935,7 +985,7 @@ export default function App() {
                         onOpenSetup={() => setSetupOpen(true)}
                       />
                     </Panel>
-                    <ResizeHandle direction="horizontal" />
+                    <ResizeHandle direction="horizontal" label="Resize the editor and preview" />
                     <Panel id="preview" defaultSize={`${horizontal.previewPercent}%`} minSize="260px">
                       <PreviewPane
                         preview={preview}
@@ -962,7 +1012,7 @@ export default function App() {
                     </Panel>
                   </Group>
                 </Panel>
-                <ResizeHandle direction="vertical" />
+                <ResizeHandle direction="vertical" label="Resize the console" />
                 <Panel
                   id="bottom"
                   panelRef={bottomPanelRef}
@@ -1051,7 +1101,8 @@ export default function App() {
         // Top right, just under the preview header: clear of the preview's path footer, the console
         // tab bar and the traceback an error toast points to (and of the Render failed card's button).
         position="top-right"
-        offset={{ top: TOAST_TOP_PX, right: 16 }}
+        // Below the preview's "Out of date" / still-image notes, which sit right there.
+        offset={{ top: toastTopPx(previewNoteRows), right: 16 }}
         toastOptions={{
           classNames: {
             toast: "!bg-overlay !border-line-strong !text-fg !shadow-popover !rounded-lg !text-[13px]",
