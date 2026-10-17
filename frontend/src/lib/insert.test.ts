@@ -95,8 +95,8 @@ describe("insert planning", () => {
     expect(planBlockInsert(["x = 1", ""], 2, "y = 2")).toEqual({ line: 2, replace: true, text: "y = 2" });
   });
 
-  // ---- Round 3: logical statements, indentation style, strings ----------------
-  describe("multi-line statements (R2 shots 07a-07d)", () => {
+  // ---- Logical statements, indentation style, strings -------------------------
+  describe("multi-line statements", () => {
     it("goes after a multi-line self.play( call when the cursor is on an argument line (07a)", () => {
       const src = "from manim import *\nclass A(Scene):\n    def construct(self):\n        self.play(\n            Create(Circle()),\n            run_time=2,\n        )\n";
       for (const cursor of [4, 5, 6, 7]) {
@@ -207,7 +207,7 @@ describe("insert planning", () => {
     });
   });
 
-  it("keeps the round-1 cases working", () => {
+  it("keeps the basic cases working", () => {
     const plan = planBlockInsert(SCENE, 5, "dot = Dot()") as BlockInsertPlan;
     expect(plan.text).toBe("        dot = Dot()");
     expect(opensBlock("    for x in y:  # note")).toBe(true);
@@ -215,7 +215,7 @@ describe("insert planning", () => {
   });
 });
 
-describe("planBlockInsert refuses broken code at or before the cursor (R3 verify A)", () => {
+describe("planBlockInsert refuses broken code at or before the cursor", () => {
   const file = (bad: string, at: "class" | "construct") => {
     const lines = ["from manim import *", "", "", "class A(Scene):", "    def construct(self):", "        c = Circle()", "        self.play(Create(c))", ""];
     if (at === "construct") lines.splice(7, 0, `        ${bad}`);

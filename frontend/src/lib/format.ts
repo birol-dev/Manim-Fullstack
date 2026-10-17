@@ -21,13 +21,6 @@ export function dedupeExtension(input: string): string {
 }
 
 /**
- * The file name for *input*: trimmed, NFC, with exactly one lowercase ".py"
- * ("Foo.PY" -> "Foo.py", "intro" -> "intro.py"). A name ending with a dot is left
- * alone so validateScriptName refuses it. Idempotent. Same rule as
- * to_script_name() in backend/workspace_paths.py, which does not trim; see
- * FILENAME-RULE.md and tests/fixtures/filename_rules.json.
- */
-/**
  * What counts as a space in a file name: the characters Python's str.isspace()
  * accepts (WHITESPACE_CHARS in backend/workspace_paths.py): ASCII whitespace,
  * U+001C-U+001F, U+0085, every Zs space (NBSP, U+1680, U+2000-U+200A, U+202F,
@@ -41,6 +34,13 @@ const TRAILING_DOTS_SPACES = new RegExp(`[.${WHITESPACE}]+$`, "u");
 const TRAILING_SPACES = new RegExp(`[${WHITESPACE}]+$`, "u");
 const ALL_SPACE = new RegExp(`[${WHITESPACE}]`, "gu");
 
+/**
+ * The file name for *input*: trimmed, NFC, with exactly one lowercase ".py"
+ * ("Foo.PY" -> "Foo.py", "intro" -> "intro.py"). A name ending with a dot is left
+ * alone so validateScriptName refuses it. Idempotent. Same rule as
+ * to_script_name() in backend/workspace_paths.py, which does not trim; both are
+ * checked against tests/fixtures/filename_rules.json.
+ */
 export function toScriptName(input: string): string {
   const name = dedupeExtension(input.trim().replace(EDGE_SPACE, "")).normalize("NFC");
   if (name.endsWith(".") || TRAILING_SPACE.test(name)) return name;

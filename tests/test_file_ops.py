@@ -121,7 +121,7 @@ def test_case_only_rename_on_a_case_insensitive_filesystem(tmp_path, monkeypatch
 
 
 def test_locks_fold_case(tmp_path):
-    # Round 4: entries only exist while held, so compare keys and the held lock.
+    # Entries only exist while held, so compare keys and the held lock.
     assert lock_key(str(tmp_path / "Foo.py")) == lock_key(str(tmp_path / "foo.py"))
     assert lock_key(str(tmp_path / "foo.py")) != lock_key(str(tmp_path / "bar.py"))
     with locked(str(tmp_path / "Foo.py")):

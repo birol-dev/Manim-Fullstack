@@ -42,7 +42,7 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     // The App-level tests take 1-2 s each when idle and came close to the 5 s default
-    // on a loaded machine (round 2). Generous limits keep them about behaviour, not speed.
+    // on a loaded machine. Generous limits keep them about behaviour, not speed.
     testTimeout: 15_000,
     hookTimeout: 15_000,
     setupFiles: [path.resolve(__dirname, './src/test/setup.ts')],

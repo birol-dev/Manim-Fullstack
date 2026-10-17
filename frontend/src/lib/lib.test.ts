@@ -24,7 +24,7 @@ import type { ActiveRender } from "@/hooks/useRenderSession";
 describe("format", () => {
   it("normalizes and validates script names", () => {
     expect(toScriptName("  intro ")).toBe("intro.py");
-    expect(toScriptName("Intro.PY")).toBe("Intro.py"); // round 3: one lowercase .py (FILENAME-RULE.md)
+    expect(toScriptName("Intro.PY")).toBe("Intro.py"); // exactly one lowercase .py
     // Idempotent, even when a pasted name kept the old extension.
     expect(toScriptName("intro.py.py")).toBe("intro.py");
     expect(toScriptName(toScriptName("intro"))).toBe("intro.py");
@@ -34,7 +34,7 @@ describe("format", () => {
     expect(validateScriptName("intro.py")).toBeNull();
     expect(validateScriptName(".py")).toBe("Enter a file name.");
     expect(validateScriptName(" lead.py")).toBe("Filename cannot start or end with a dot or space.");
-    // Round 3 rule: no dot or space right before ".py" either (FILENAME-RULE.md).
+    // No dot or space right before ".py" either.
     expect(validateScriptName("dot..py")).toBe("Filename cannot end with a dot or space before the extension.");
   });
 

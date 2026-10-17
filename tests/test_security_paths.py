@@ -13,7 +13,7 @@ from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 
 
 # --------------------------------------------------------------------------- #
-# LimitCodeBodyMiddleware (raw ASGI, so disconnects can be simulated exactly)
+# RequestBodyLimitMiddleware (raw ASGI, so disconnects can be simulated exactly)
 # --------------------------------------------------------------------------- #
 
 
@@ -44,7 +44,7 @@ class _Recorder:
 
 def _run_middleware(scope, messages):
     downstream = _Recorder()
-    middleware = main.LimitCodeBodyMiddleware(downstream)
+    middleware = main.RequestBodyLimitMiddleware(downstream)
     queue = list(messages)
     calls = {"receive": 0}
     sent = []
@@ -127,7 +127,7 @@ def test_bad_content_length_is_400_before_reading(headers):
 
 
 def test_content_length_with_transfer_encoding_is_refused():
-    """CL + TE (request smuggling, and the r2 size-cap bypass): 400, nothing read."""
+    """CL + TE (request smuggling, and a size-cap bypass): 400, nothing read."""
     downstream, sent, reads = _run_middleware(
         _scope(headers=[(b"content-length", b"10"), (b"transfer-encoding", b"chunked")]),
         [{"type": "http.request", "body": b"x" * 100, "more_body": False}],

@@ -1,4 +1,5 @@
-# Test and lint tools (what CI installs on top of the app requirements).
+# App requirements plus the test and lint tools. CI installs the same tools but skips
+# Manim itself, so tests/test_e2e_real_render.py is skipped there.
 -r requirements.txt
 httpx
 pytest

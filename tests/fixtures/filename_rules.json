@@ -1,5 +1,5 @@
 {
- "_comment": "Shared filename rule vectors: to_script_name()/toScriptName() then validate_new_filename()/validateScriptName(). See /workspace/manim-audit-compare/r3/FILENAME-RULE.md. Regenerate only together with both implementations. ui_script_name: what the UI's toScriptName gives when it differs (the UI also trims and collapses a doubled .py). Round 4: every character in whitespace_chars (exactly Python's str.isspace(): ASCII whitespace, U+001C-U+001F, U+0085, all of Zs incl. NBSP and U+3000, U+2028/U+2029) counts as a space for the leading/trailing and before-.py rules on new names; U+2028/U+2029 (Zl/Zp) count as control/invisible.",
+ "_comment": "Shared filename rule vectors: to_script_name()/toScriptName() then validate_new_filename()/validateScriptName(). The rule lives in backend/workspace_paths.py and frontend/src/lib/format.ts; regenerate only together with both implementations. ui_script_name: what the UI's toScriptName gives when it differs (the UI also trims and collapses a doubled .py). Every character in whitespace_chars (exactly Python's str.isspace(): ASCII whitespace, U+001C-U+001F, U+0085, all of Zs incl. NBSP and U+3000, U+2028/U+2029) counts as a space for the leading/trailing and before-.py rules on new names; U+2028/U+2029 (Zl/Zp) count as control/invisible.",
  "vectors": [
   {
    "input": "intro",

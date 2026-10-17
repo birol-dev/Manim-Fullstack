@@ -474,10 +474,6 @@ class RequestBodyLimitMiddleware:
             await refuse(*abort)
 
 
-# Kept for callers and tests written against the round-1 name.
-LimitCodeBodyMiddleware = RequestBodyLimitMiddleware
-
-
 app.add_middleware(RequestBodyLimitMiddleware)
 
 
@@ -2263,7 +2259,7 @@ else:
         return read_status()
 
 
-# Same wording as run.py (tests/test_cli_r3.py keeps the two in sync).
+# Same wording as run.py (tests/test_cli.py keeps the two in sync).
 LAN_WARNING = (
     "\n[warn] This process runs the Python you send it, with no login.\n"
     "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"

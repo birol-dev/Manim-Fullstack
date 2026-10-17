@@ -18,7 +18,7 @@ DIST_INDEX = os.path.join(FRONTEND_DIR, "dist", "index.html")
 FRONTEND_SOURCES = ("src", "public", "index.html", "package.json", "package-lock.json", "vite.config.ts")
 
 
-# backend/main.py prints the same warning (tests/test_cli_r3.py keeps them in sync).
+# backend/main.py prints the same warning (tests/test_cli.py keeps them in sync).
 LAN_WARNING = (
     "\n[warn] This process runs the Python you send it, with no login.\n"
     "       Binding beyond 127.0.0.1 lets anyone who can reach the port do that.\n"
