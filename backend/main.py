@@ -87,6 +87,11 @@ FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIR, "assets")
 
 TEMP_PREFIX = "_temp_run_"
 MEDIA_SUBDIRS = ("videos", "images")
+# Renders of browser-storage scripts go to media/{videos,images}/.browser/<stem>/, so a
+# browser my_scene.py never overwrites the workspace my_scene.py's video. New script
+# names can't start with a dot, so no script's own folder can be named like this.
+BROWSER_MEDIA_FOLDER = ".browser"
+STORAGE_MODES = ("disk", "browser")
 
 # Max size for code sent to /api/save, /api/parse-code, and the render socket.
 MAX_CODE_BYTES = int(os.environ.get("MANIM_MAX_CODE_BYTES", str(2 * 1024 * 1024)))
@@ -540,6 +545,14 @@ def _sweep_temp_renders(min_age: Optional[float] = None) -> None:
         except OSError:
             continue
         for entry in entries:
+            if entry.name == BROWSER_MEDIA_FOLDER and entry.is_dir(follow_symlinks=False):
+                try:
+                    stems = list(os.scandir(entry.path))
+                except OSError:
+                    stems = []
+                for stem_entry in stems:
+                    _sweep_stale_stages(stem_entry, cutoff)
+                continue
             if not entry.name.startswith(TEMP_PREFIX):
                 _sweep_stale_stages(entry, cutoff)
                 continue
@@ -764,7 +777,14 @@ def _list_assets() -> list:
     try:
         with os.scandir(ASSETS_DIR) as entries:
             for entry in entries:
-                if entry.is_file() and not is_upload_partial(entry.name):
+                if is_upload_partial(entry.name):
+                    continue
+                link = _link_status(entry.path, ASSETS_DIR) if entry.is_symlink() else None
+                if link:
+                    # Shown so it can be deleted; it can't be served or inserted.
+                    assets.append({"name": entry.name, "size": 0, "type": "asset", "url": "", link: True})
+                    continue
+                if entry.is_file():
                     try:
                         assets.append(
                             {
@@ -790,8 +810,13 @@ def _media_item(full_path: str) -> Optional[dict]:
         return None
     name = parts[-1]
     stem = os.path.splitext(name)[0]
-    script = parts[1] if len(parts) >= 3 else None
-    quality = parts[2] if parts[0] == "videos" and len(parts) >= 4 else None
+    storage = "disk"
+    folders = parts
+    if len(parts) >= 3 and parts[1] == BROWSER_MEDIA_FOLDER:
+        storage = "browser"
+        folders = [parts[0], *parts[2:]]
+    script = folders[1] if len(folders) >= 3 else None
+    quality = folders[2] if folders[0] == "videos" and len(folders) >= 4 else None
     return {
         "name": name,
         "size": stat.st_size,
@@ -802,6 +827,7 @@ def _media_item(full_path: str) -> Optional[dict]:
         "scene": stem.split("_ManimCE_")[0],
         "quality": quality,
         "modified": stat.st_mtime,
+        "storage": storage,
     }
 
 
@@ -910,6 +936,20 @@ def _os_error_detail(exc: OSError, action: str) -> str:
     """A 500 message without the host path that ``str(OSError)`` would include."""
     reason = exc.strerror or exc.__class__.__name__
     return f"Could not {action}: {reason}."
+
+
+def _write_error(exc: OSError, action: str, folder: str) -> HTTPException:
+    """403 when the OS refused the change (a read-only folder, a file in use), else 500.
+
+    A save, upload, rename, or delete in a folder this server may not write to
+    raises PermissionError; that is the user's setup to fix, not a server bug.
+    """
+    if isinstance(exc, PermissionError):
+        return HTTPException(
+            status_code=403,
+            detail=f"Could not {action}: permission denied. Check that the server may change files in the {folder} folder.",
+        )
+    return HTTPException(status_code=500, detail=_os_error_detail(exc, action))
 
 
 def _file_version(filepath: str) -> str:
@@ -1036,14 +1076,18 @@ def save_file(req: SaveRequest):
                     return {"success": True, "filename": filename, "message": "File saved.", "version": current, **_parsed(req.code)}
                 return _version_conflict("This file was changed outside this tab since you opened it.", current)
         _reject_case_collision(WORKSPACE_DIR, filename)
+        if os.path.isdir(filepath):
+            raise HTTPException(status_code=409, detail=_folder_in_the_way_detail(filename))
         try:
             version = atomic_write(filepath, data, exclusive=req.create_only)
         except FileExistsError:
             raise HTTPException(status_code=409, detail=f"{filename} already exists.")
         except ReadOnlyFileError:
             raise HTTPException(status_code=403, detail=READ_ONLY_DETAIL)
+        except IsADirectoryError:
+            raise HTTPException(status_code=409, detail=_folder_in_the_way_detail(filename))
         except OSError as e:
-            raise HTTPException(status_code=500, detail=_os_error_detail(e, "save the script"))
+            raise _write_error(e, "save the script", "workspace")
     return {"success": True, "filename": filename, "message": "File saved.", "version": version, **_parsed(req.code)}
 
 
@@ -1075,7 +1119,7 @@ def rename_file(req: RenameRequest):
                 raise HTTPException(status_code=409, detail=f"'{new_name}' already exists.")
             raise HTTPException(status_code=400, detail="A file with the target name already exists.")
         except OSError as e:
-            raise HTTPException(status_code=500, detail=_os_error_detail(e, "rename the script"))
+            raise _write_error(e, "rename the script", "workspace")
 
     return {"success": True, "old_name": old_name, "new_name": new_name, "message": f"Renamed {old_name} to {new_name}."}
 
@@ -1117,7 +1161,7 @@ def delete_script(filename: str, request: Request = None):  # type: ignore[assig
             except FileNotFoundError:
                 raise HTTPException(status_code=404, detail="Python script not found.")
             except OSError as e:
-                raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the link"))
+                raise _write_error(e, "delete the link", "workspace")
         return {"success": True, "filename": os.path.basename(link), "link_removed": True}
     arrived = request.scope.get("manim_arrived") if request is not None else None
     if arrived is None:
@@ -1146,7 +1190,7 @@ def delete_script(filename: str, request: Request = None):  # type: ignore[assig
             except FileNotFoundError:
                 raise HTTPException(status_code=404, detail="Python script not found.")
             except OSError as e:
-                raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the script"))
+                raise _write_error(e, "delete the script", "workspace")
     except LockBusyError:
         raise HTTPException(status_code=409, detail=DELETE_RACE_DETAIL)
     return {"success": True, "filename": filename}
@@ -1155,30 +1199,36 @@ def delete_script(filename: str, request: Request = None):  # type: ignore[assig
 DELETE_RACE_DETAIL = "This file is being saved or renamed right now, so it was not deleted. Refresh and try again."
 
 
-def _link_status(path: str) -> Optional[str]:
-    """For a symlink in the workspace: "outside" (resolves outside it), "broken"
-    (points nowhere), or None (a regular file, or a link that stays inside)."""
+def _folder_in_the_way_detail(name: str) -> str:
+    return f"A folder named '{name}' is in the way; rename or remove that folder first."
+
+
+def _link_status(path: str, root: Optional[str] = None) -> Optional[str]:
+    """For a symlink in *root* (the workspace by default): "outside" (resolves
+    outside it), "broken" (points nowhere), or None (a regular file, or a link
+    that stays inside)."""
     if not os.path.islink(path):
         return None
     if not os.path.exists(path):
         return "broken"
-    if not is_within_directory(path, WORKSPACE_DIR):
+    if not is_within_directory(path, root or WORKSPACE_DIR):
         return "outside"
     return None
 
 
-def _stray_link_path(filename) -> Optional[str]:
-    """Path of the workspace entry *filename* if it is a link that points outside
-    the workspace or nowhere, else None. The path is built from a single checked
-    name segment directly in the workspace folder, so it can't name anything else."""
+def _stray_link_path(filename, root: Optional[str] = None, required_suffix: Optional[str] = ".py") -> Optional[str]:
+    """Path of the entry *filename* in *root* (the workspace by default) if it is a
+    link that points outside *root* or nowhere, else None. The path is built from a
+    single checked name segment directly in *root*, so it can't name anything else."""
+    root = os.path.abspath(root or WORKSPACE_DIR)
     try:
-        name = safe_basename(filename, required_suffix=".py")
+        name = safe_basename(filename, required_suffix=required_suffix)
     except (UnsafePathError, TypeError, ValueError):
         return None
-    path = os.path.join(os.path.abspath(WORKSPACE_DIR), name)
-    if os.path.dirname(path) != os.path.abspath(WORKSPACE_DIR):
+    path = os.path.join(root, name)
+    if os.path.dirname(path) != root:
         return None
-    return path if _link_status(path) else None
+    return path if _link_status(path, root) else None
 
 
 # An upload is written to "<name>.uploading-<32 hex>" next to its target and
@@ -1188,6 +1238,11 @@ UPLOAD_PARTIAL_MARK = ".uploading-"
 _UPLOAD_PARTIAL_PATTERN = re.compile(r"\.uploading-[0-9a-f]{32}$")
 UPLOAD_PARTIAL_MIN_AGE_SECONDS = float(os.environ.get("MANIM_UPLOAD_PARTIAL_AGE", "900"))
 _active_upload_partials: set = set()
+
+
+def _is_real_dir(path: str) -> bool:
+    """A folder (not a link to one) sits at *path*."""
+    return os.path.isdir(path) and not os.path.islink(path)
 
 
 def is_upload_partial(name: str) -> bool:
@@ -1227,6 +1282,8 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
 
     # Early answers so a doomed upload isn't copied first; the commit re-checks.
     _reject_case_collision(ASSETS_DIR, filename)
+    if _is_real_dir(dest_path):
+        raise HTTPException(status_code=409, detail=_folder_in_the_way_detail(filename))
     if os.path.lexists(dest_path) and not overwrite:
         raise HTTPException(status_code=409, detail=_asset_exists_detail(filename))
 
@@ -1243,6 +1300,8 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
     def commit() -> bool:
         with locked(dest_path):
             _reject_case_collision(ASSETS_DIR, filename)
+            if _is_real_dir(dest_path):
+                raise IsADirectoryError(dest_path)
             existed = os.path.lexists(dest_path)
             if existed and not overwrite:
                 raise FileExistsError(dest_path)
@@ -1251,28 +1310,35 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
 
     try:
         size = 0
-        with open(partial_path, "wb") as buffer:
+        # File writes run on a worker thread so a slow disk never stalls the event
+        # loop (and with it every other request and render socket).
+        buffer = await asyncio.to_thread(open, partial_path, "wb")
+        try:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_ASSET_SIZE_BYTES:
                     break
-                buffer.write(chunk)
+                await asyncio.to_thread(buffer.write, chunk)
+        finally:
+            await asyncio.to_thread(buffer.close)
         if size > MAX_ASSET_SIZE_BYTES:
             raise HTTPException(status_code=413, detail="File size exceeds maximum allowed size (50MB).")
         # The lock is a thread lock: wait for it on a worker thread, not the event loop.
         existed = await asyncio.to_thread(commit)
     except FileExistsError:
         raise HTTPException(status_code=409, detail=_asset_exists_detail(filename))
+    except IsADirectoryError:
+        raise HTTPException(status_code=409, detail=_folder_in_the_way_detail(filename))
     except ReadOnlyFileError:
         raise HTTPException(status_code=403, detail="This asset is read-only; change its permissions to replace it.")
     except HTTPException:
         raise
     except OSError as e:
-        raise HTTPException(status_code=500, detail=_os_error_detail(e, "store the upload"))
+        raise _write_error(e, "store the upload", "assets")
     except Exception:
         raise HTTPException(status_code=500, detail="Could not store the upload.")
     finally:
-        discard_partial()
+        await asyncio.to_thread(discard_partial)
         _active_upload_partials.discard(partial_path)
 
     return {"success": True, "filename": filename, "url": f"/assets/{quote(filename)}", "replaced": existed}
@@ -1280,7 +1346,23 @@ async def upload_asset(file: UploadFile = File(...), overwrite: bool = False):
 
 @app.delete("/api/assets")
 def delete_asset(filename: str):
-    """Delete an uploaded asset."""
+    """Delete an uploaded asset.
+
+    A link that points outside the assets folder or nowhere is removed itself,
+    never its target (like a link entry among the scripts).
+    """
+    link = _stray_link_path(filename, ASSETS_DIR, required_suffix=None)
+    if link is not None:
+        with locked(link):
+            if _stray_link_path(filename, ASSETS_DIR, required_suffix=None) != link:
+                raise HTTPException(status_code=404, detail="Asset not found.")
+            try:
+                os.unlink(link)  # the link entry only
+            except FileNotFoundError:
+                raise HTTPException(status_code=404, detail="Asset not found.")
+            except OSError as e:
+                raise _write_error(e, "delete the link", "assets")
+        return {"success": True, "filename": os.path.basename(link), "link_removed": True}
     try:
         filename = safe_basename(filename)
         filepath = safe_join(ASSETS_DIR, filename)
@@ -1294,7 +1376,7 @@ def delete_asset(filename: str):
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Asset not found.")
         except OSError as e:
-            raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the asset"))
+            raise _write_error(e, "delete the asset", "assets")
     return {"success": True, "filename": filename}
 
 
@@ -1402,7 +1484,7 @@ def delete_media(path: str):
     try:
         os.remove(abs_path)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=_os_error_detail(e, "delete the render"))
+        raise _write_error(e, "delete the render", "media")
 
     parent = os.path.dirname(abs_path)
     if top == "videos":
@@ -1642,13 +1724,14 @@ def _manim_command(binaries: dict) -> Optional[List[str]]:
     return None
 
 
-def _relocate_temp_output(abs_path: str, temp_stem: str, target_stem: str) -> Optional[str]:
-    """Move a render of a scratch script into the media folder of the script it came from."""
+def _relocate_temp_output(abs_path: str, temp_stem: str, target_folder: str) -> Optional[str]:
+    """Move a render of a scratch script into the media folder of the script it came from
+    (*target_folder* is the stem, or ``.browser/<stem>`` for a browser-storage script)."""
     try:
         rel_parts = os.path.relpath(abs_path, MEDIA_DIR).replace("\\", "/").split("/")
         if temp_stem not in rel_parts:
             return None
-        dest = safe_join(MEDIA_DIR, *[target_stem if part == temp_stem else part for part in rel_parts])
+        dest = safe_join(MEDIA_DIR, *[target_folder if part == temp_stem else part for part in rel_parts])
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         os.replace(abs_path, dest)
         return dest
@@ -1725,7 +1808,8 @@ def _config_safe_stem(stem: str) -> bool:
 
 
 def _output_config(target_stem: str, stage: Optional[str] = None) -> str:
-    """Per-run Manim config: write the scratch copy's output under *target_stem*.
+    """Per-run Manim config: write the scratch copy's output under *target_stem* (a
+    script's stem, or ``.browser/<stem>`` for a browser-storage script).
 
     With *stage*, final outputs go to ``<stem>/<stage>/`` first and the executor
     moves them over the real ones only after a successful, complete render. The
@@ -1766,6 +1850,11 @@ def _validate_start_message(message: dict) -> dict:
         raise _RenderRequestError(_bad_script_name_detail(filename, exc))
     except UnicodeEncodeError:
         raise _RenderRequestError(f"Invalid script filename: the name {_SURROGATE_MESSAGE}")
+    storage = message.get("storage") or "disk"
+    if storage not in STORAGE_MODES:
+        raise _RenderRequestError("Storage must be 'disk' or 'browser'.")
+    if storage == "browser" and code_content is None:
+        raise _RenderRequestError("A browser-storage render must send its code.")
     if code_content is not None:
         if not isinstance(code_content, str):
             raise _RenderRequestError("Code payload must be a string.")
@@ -1783,6 +1872,7 @@ def _validate_start_message(message: dict) -> dict:
         "use_opengl": _coerce_flag(message.get("use_opengl"), "use_opengl"),
         "download_only": _coerce_flag(message.get("download_only"), "download_only"),
         "code": code_content,
+        "storage": storage,
     }
 
 
@@ -1991,6 +2081,11 @@ async def websocket_render(websocket: WebSocket):
         filename = request["filename"]
         download_only = request["download_only"]
         target_stem = os.path.splitext(filename)[0]
+        # Where the output lands under media/{videos,images}: the script's own folder, or
+        # .browser/<stem> for a browser-storage script of the same name.
+        target_folder = (
+            f"{BROWSER_MEDIA_FOLDER}/{target_stem}" if request.get("storage") == "browser" else target_stem
+        )
         script_name = filename
         temp_filepath: Optional[str] = None
         temp_config: Optional[str] = None
@@ -2010,7 +2105,7 @@ async def websocket_render(websocket: WebSocket):
                 # folder names are rewritten too when the output is moved there afterwards.
                 original = outbound["message"]
                 message = original.replace(script_name, filename)
-                message = message.replace(temp_stem, target_stem) if relocate else message
+                message = message.replace(temp_stem, target_folder) if relocate else message
                 if stage:
                     # Outputs are announced at their real place; hide the staging folder.
                     message = message.replace("/" + stage, "").replace("\\" + stage, "")
@@ -2098,9 +2193,9 @@ async def websocket_render(websocket: WebSocket):
                 # Outputs are staged per run so a failed or cancelled render never
                 # replaces the previous good video.
                 stage = STAGE_PREFIX + temp_stem[len(TEMP_PREFIX):]
-                await asyncio.to_thread(_write_new_file, temp_config, _output_config(target_stem, stage))
+                await asyncio.to_thread(_write_new_file, temp_config, _output_config(target_folder, stage))
                 extra_args = ["--config_file", config_name]
-                output_stem = target_stem
+                output_stem = target_folder
             else:
                 relocate = True
                 output_stem = temp_stem
@@ -2163,7 +2258,7 @@ async def websocket_render(websocket: WebSocket):
                 slots.release()
             state.phase = "finishing"
             if relocate and held_output and result.get("success"):
-                moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_stem)
+                moved = await asyncio.to_thread(_relocate_temp_output, held_output[-1], temp_stem, target_folder)
                 final_path = moved or held_output[-1]
                 await send({**_file_ready_event(final_path, media_rel_path(final_path)), "render_id": render_id})
         except asyncio.CancelledError:

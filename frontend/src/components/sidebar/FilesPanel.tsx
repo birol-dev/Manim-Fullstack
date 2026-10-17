@@ -8,7 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { apiUrl, errorMessage } from "@/lib/api";
 import { dedupeExtension, formatBytes, formatRelativeTime, toScriptName, validateScriptName } from "@/lib/format";
 import type { MediaFile, StorageMode, WorkspaceFiles } from "@/lib/types";
-import { mediaScriptLabel } from "@/lib/preview";
+import { mediaScriptLabel, mediaStorage } from "@/lib/preview";
 import { cn } from "@/lib/utils";
 import { RowActions, SidebarPanel } from "./SidebarPanel";
 
@@ -358,6 +358,8 @@ export function FilesPanel(props: FilesPanelProps) {
                 const when = [item.quality, formatRelativeTime(item.modified)].filter(Boolean).join(" · ");
                 // The script's current name (a rename mid-render keeps the old output folder).
                 const script = mediaScriptLabel(item);
+                // A browser-storage script can share its name with a workspace file.
+                const fromBrowser = mediaStorage(item) === "browser";
                 return (
                   <li
                     key={item.path}
@@ -397,6 +399,12 @@ export function FilesPanel(props: FilesPanelProps) {
                           {script && (
                             <span className="code-wrap min-w-0">
                               <FileNameText name={script} />
+                              {fromBrowser && (
+                                <>
+                                  <Globe aria-hidden className="ml-1 inline size-3 align-[-2px] text-fg-subtle" />
+                                  <span className="sr-only"> (browser storage)</span>
+                                </>
+                              )}
                             </span>
                           )}
                         </span>

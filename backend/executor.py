@@ -129,7 +129,19 @@ WORKSPACE_MARKER = "<workspace>"
 APP_MARKER = "<app>"
 
 
-def _redaction_candidates(workspace_dir, app_root):
+def _temp_dir_names_user() -> bool:
+    """Whether the temp folder's path can identify the user, so it must be hidden.
+
+    On Windows it lives in the profile (C:\\Users\\<name>\\AppData\\Local\\Temp),
+    often spelled with 8.3 short names (RUNNER~1) that the home rule can't match.
+    Elsewhere (/tmp, macOS' /var/folders/...) it names nobody, and a script that
+    prints a temp path should see it as it is; a temp folder inside the home
+    folder is still covered by the "~" rule.
+    """
+    return os.name == "nt"
+
+
+def _redaction_candidates(workspace_dir, app_root, tmp=None):
     """(path, replacement) pairs; the workspace with a separator becomes "" (relative paths)."""
     paths = sysconfig.get_paths()
     candidates = [(workspace_dir, WORKSPACE_MARKER)]
@@ -139,17 +151,19 @@ def _redaction_candidates(workspace_dir, app_root):
         candidates.append((sys.prefix, "<venv>"))  # a virtualenv's own root, never /usr
     if app_root:
         candidates.append((app_root, APP_MARKER))
-    candidates += [(tempfile.gettempdir(), "<tmp>"), (os.path.expanduser("~"), "~")]
+    if tmp:
+        candidates.append((tmp, "<tmp>"))
+    candidates.append((os.path.expanduser("~"), "~"))
     return candidates
 
 
 @functools.lru_cache(maxsize=32)
 def _compile_redaction(workspace_dir, app_root, home, tmp):
-    del home, tmp  # cache keys only: rules change when HOME or TMPDIR change
+    del home  # cache key only: rules change when HOME changes
     fold = os.path.normcase("A") == "a"  # case-insensitive paths (Windows)
     lookup = {}
     with_separator = set()
-    for raw, replacement in _redaction_candidates(workspace_dir, app_root):
+    for raw, replacement in _redaction_candidates(workspace_dir, app_root, tmp):
         if not raw:
             continue
         path = os.path.abspath(raw).rstrip("\\/")
@@ -191,7 +205,7 @@ def _redaction_for(workspace_dir, app_root=None):
         os.path.abspath(workspace_dir) if workspace_dir else "",
         os.path.abspath(app_root) if app_root else None,
         os.path.expanduser("~"),
-        tempfile.gettempdir(),
+        tempfile.gettempdir() if _temp_dir_names_user() else None,
     )
 
 
@@ -881,8 +895,8 @@ class ManimExecutor:
         relative ("scene.py:5", "media/videos/..."), and the bare workspace folder
         becomes ``<workspace>``; the app folder ``<app>``; site-packages, the
         standard library, and the virtualenv root ``<site-packages>``,
-        ``<python-lib>``, and ``<venv>``; the temp dir ``<tmp>``; and the home
-        directory ``~``. Both separator styles are matched; nothing else in the
+        ``<python-lib>``, and ``<venv>``; the temp dir ``<tmp>`` (on Windows only,
+        where it sits in the user's profile); and the home directory ``~``. Both separator styles are matched; nothing else in the
         line is touched, so ``\\frac`` or ``C:\\Users`` typed by the user survive.
         """
         return _redaction_for(self.workspace_dir, self.app_root)

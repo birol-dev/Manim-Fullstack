@@ -48,9 +48,25 @@ def test_redaction_hides_host_paths_but_keeps_backslashes(tmp_path, monkeypatch)
     assert r"\frac{a}{b} \t C:\Users\me" in out
     assert " demo.py:5" in out and "/demo.py" not in out  # relative, like #9
     assert "<site-packages>/manim/scene.py:12" in out
-    assert "<tmp>/Tex/abc.tex" in out or str(tmp_path) not in out
+    if os.name == "nt":
+        assert "<tmp>/Tex/abc.tex" in out  # the temp folder sits in the user's profile
+    else:
+        assert f"{tempfile.gettempdir()}/Tex/abc.tex" in out  # /tmp names nobody
     assert "~/notes" in out
     assert str(workspace) not in out and str(home) not in out
+
+
+def test_temp_paths_printed_by_user_code_are_kept_where_they_name_nobody(tmp_path, monkeypatch):
+    import tempfile
+
+    import executor as executor_module
+
+    executor = ManimExecutor(str(tmp_path / "ws"))
+    line = f"saved to {tempfile.gettempdir()}/out.txt"
+    monkeypatch.setattr(executor_module, "_temp_dir_names_user", lambda: False)
+    assert executor._redact_paths(line) == line
+    monkeypatch.setattr(executor_module, "_temp_dir_names_user", lambda: True)
+    assert executor._redact_paths(line) == "saved to <tmp>/out.txt"
 
 
 def test_redaction_matches_whole_paths_only(tmp_path):

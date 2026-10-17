@@ -716,3 +716,100 @@ def test_uploads_get_a_longer_deadline(monkeypatch):
 def test_a_body_inside_the_deadline_is_untouched(monkeypatch):
     status, body, _ = _trickle("/api/save", monkeypatch, deadline=5, chunks=10)
     assert status == 200 and body == b"ok"
+
+
+# --------------------------------------------------------------------------- #
+# 11. Folders in the way, writes the OS refuses, links among the assets
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_upload_onto_a_folder_name_is_a_409(ws, overwrite):
+    (ws / "assets" / "pic.png").mkdir()
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_upload("pic.png", b"\x89PNG\r\n\x1a\nx", overwrite=overwrite))
+    assert exc.value.status_code == 409 and "folder named 'pic.png'" in exc.value.detail
+    assert (ws / "assets" / "pic.png").is_dir()
+    assert [p.name for p in (ws / "assets").iterdir()] == ["pic.png"]  # no partial left
+
+
+def test_save_onto_a_folder_name_is_a_409(ws):
+    (ws / "scene.py").mkdir()
+    code, body = _call(main.save_file, main.SaveRequest(filename="scene.py", code="x = 1\n"))
+    assert code == 409 and "folder named 'scene.py'" in body["detail"]
+    assert (ws / "scene.py").is_dir()
+
+
+def _refuse(*_args, **_kwargs):
+    raise PermissionError(13, "Permission denied")
+
+
+def test_writes_into_a_read_only_folder_are_a_403_not_a_500(ws, monkeypatch):
+    """A folder the server may not write to (chmod a-w, a read-only mount) is the user's setup."""
+    (ws / "a.py").write_text("x = 1\n")
+    (ws / "assets" / "pic.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    monkeypatch.setattr(main, "atomic_write", _refuse)
+    code, body = _call(main.save_file, main.SaveRequest(filename="b.py", code="y = 2\n"))
+    assert code == 403 and "workspace folder" in body["detail"] and str(ws) not in body["detail"]
+    monkeypatch.setattr(main, "rename_no_replace", _refuse)
+    code, body = _call(main.rename_file, main.RenameRequest(old_name="a.py", new_name="c.py"))
+    assert code == 403 and "workspace folder" in body["detail"]
+    monkeypatch.setattr(main, "move_into_place", _refuse)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(_upload("new.png", b"\x89PNG\r\n\x1a\nx"))
+    assert exc.value.status_code == 403 and "assets folder" in exc.value.detail
+    assert sorted(p.name for p in (ws / "assets").iterdir()) == ["pic.png"]  # partial removed
+    monkeypatch.setattr(main.os, "remove", _refuse)
+    code, body = _call(main.delete_script, "a.py")
+    assert code == 403 and "workspace folder" in body["detail"]
+    code, body = _call(main.delete_asset, "pic.png")
+    assert code == 403 and "assets folder" in body["detail"]
+
+
+def test_other_os_errors_are_still_a_500(ws, monkeypatch):
+    def broken(*_args, **_kwargs):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(main, "atomic_write", broken)
+    code, body = _call(main.save_file, main.SaveRequest(filename="b.py", code="y = 2\n"))
+    assert code == 500 and body["detail"] == "Could not save the script: Input/output error."
+
+
+@pytest.mark.skipif(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), reason="POSIX, non-root")
+def test_really_read_only_folders_are_a_403(ws, client):
+    (ws / "a.py").write_text("x = 1\n")
+    ws.chmod(0o555)
+    try:
+        assert client.post("/api/save", json={"filename": "b.py", "code": "y = 2\n"}).status_code == 403
+        assert client.post("/api/save", json={"filename": "a.py", "code": "y = 2\n"}).status_code == 403
+        assert client.post("/api/rename", json={"old_name": "a.py", "new_name": "c.py"}).status_code == 403
+        assert client.delete("/api/scripts", params={"filename": "a.py"}).status_code == 403
+    finally:
+        ws.chmod(0o755)
+    assert (ws / "a.py").read_text() == "x = 1\n"
+
+
+@needs_symlinks
+def test_asset_links_out_of_the_assets_folder_are_listed_and_only_the_link_is_deleted(ws, client, tmp_path_factory):
+    outside_dir = tmp_path_factory.mktemp("outside")
+    target = outside_dir / "pic.png"
+    target.write_bytes(b"\x89PNG\r\n\x1a\nx")
+    os.symlink(target, ws / "assets" / "out.png")
+    os.symlink(ws / "assets" / "missing.png", ws / "assets" / "gone.png")
+    (ws / "assets" / "real.png").write_bytes(b"\x89PNG\r\n\x1a\nx")
+    os.symlink(ws / "assets" / "real.png", ws / "assets" / "inside.png")
+
+    assets = {a["name"]: a for a in client.get("/api/files").json()["assets"]}
+    assert assets["out.png"]["outside"] is True and assets["out.png"]["url"] == ""
+    assert assets["gone.png"]["broken"] is True
+    assert "outside" not in assets["inside.png"] and assets["inside.png"]["url"] == "/assets/inside.png"
+    assert client.get("/assets/out.png").status_code == 400  # never served
+
+    for name in ("out.png", "gone.png"):
+        res = client.delete("/api/assets", params={"filename": name})
+        assert res.status_code == 200 and res.json()["link_removed"] is True
+        assert not os.path.lexists(ws / "assets" / name)
+    assert target.read_bytes() == b"\x89PNG\r\n\x1a\nx"  # the target is never touched
+    res = client.delete("/api/assets", params={"filename": "inside.png"})
+    assert res.status_code == 200 and "link_removed" not in res.json()
+    assert (ws / "assets" / "real.png").exists()

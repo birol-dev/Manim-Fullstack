@@ -130,3 +130,33 @@ def test_script_error_reports_user_line(client, isolated_workspace):
     log_text = "\n".join(e.get("message") or "" for e in events)
     assert "broken.py" in log_text
     assert "undefined_name" in log_text
+
+
+def test_browser_and_workspace_scripts_of_one_name_keep_separate_renders(client, isolated_workspace):
+    """A browser-storage demo.py must never overwrite the workspace demo.py's video."""
+    (isolated_workspace / "demo.py").write_text(ANIMATED)
+    browser_code = ANIMATED.replace("Dot()", "Dot(color=RED)")
+    with client.websocket_connect("/api/render") as ws:
+        ws.send_json({"type": "start", "id": "disk", "filename": "demo.py", "scene": "Dot1", "quality": "l"})
+        disk_events = _collect(ws, "disk")
+        ws.send_json({
+            "type": "start", "id": "browser", "filename": "demo.py", "scene": "Dot1", "quality": "l",
+            "code": browser_code, "storage": "browser",
+        })
+        browser_events = _collect(ws, "browser")
+
+    assert disk_events[-1]["success"] is True, disk_events
+    assert browser_events[-1]["success"] is True, browser_events
+    disk_ready = [e for e in disk_events if e["type"] == "file_ready"][-1]
+    browser_ready = [e for e in browser_events if e["type"] == "file_ready"][-1]
+    assert disk_ready["rel_path"] == "media/videos/demo/480p15/Dot1.mp4"
+    assert browser_ready["rel_path"] == "media/videos/.browser/demo/480p15/Dot1.mp4"
+    disk_video = isolated_workspace / "media" / "videos" / "demo" / "480p15" / "Dot1.mp4"
+    browser_video = isolated_workspace / "media" / "videos" / ".browser" / "demo" / "480p15" / "Dot1.mp4"
+    assert disk_video.read_bytes() != browser_video.read_bytes()
+
+    media = {item["path"]: item for item in client.get("/api/files").json()["media"]}
+    assert media["videos/demo/480p15/Dot1.mp4"]["storage"] == "disk"
+    item = media["videos/.browser/demo/480p15/Dot1.mp4"]
+    assert item["storage"] == "browser" and item["script"] == "demo" and item["quality"] == "480p15"
+    assert not [p for p in (isolated_workspace / "media" / "videos" / ".browser" / "demo").iterdir() if p.name.startswith(".~run-")]

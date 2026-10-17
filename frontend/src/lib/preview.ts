@@ -7,7 +7,7 @@ export function scriptStem(filename: string): string {
 }
 
 export function previewFromMedia(item: MediaFile): PreviewItem {
-  const origin = renderOrigin(item.path, item.script);
+  const origin = renderOrigin(item.path, item.script, undefined, item.storage);
   return {
     url: `${apiUrl(item.url)}?v=${Math.round(item.modified)}`,
     kind: item.type,
@@ -23,7 +23,12 @@ export function previewFromMedia(item: MediaFile): PreviewItem {
 
 /** The script name to show for a render output: its current name if it was renamed while rendering. */
 export function mediaScriptLabel(item: MediaFile): string | null {
-  return renderOrigin(item.path, item.script).file;
+  return renderOrigin(item.path, item.script, undefined, item.storage).file;
+}
+
+/** The storage of the script a render output came from. */
+export function mediaStorage(item: MediaFile): StorageMode {
+  return renderOrigin(item.path, item.script, undefined, item.storage).storage;
 }
 
 /**
@@ -35,7 +40,7 @@ export function latestRenderFor(media: readonly MediaFile[], filename: string, s
   let best: MediaFile | null = null;
   for (const item of media) {
     if (scene && item.scene !== scene) continue;
-    const origin = renderOrigin(item.path, item.script, origins);
+    const origin = renderOrigin(item.path, item.script, origins, item.storage);
     if (origin.storage !== storage || origin.file === null || scriptStem(origin.file) !== scriptStem(filename)) continue;
     if (!best || item.modified > best.modified) best = item;
   }

@@ -51,14 +51,14 @@ All endpoints return JSON. Errors use FastAPI's `{"detail": "..."}` shape.
 | ------------- | ------------ | ------- |
 | `GET /api/health` (`/api/status`) | — | `{status, service, version}` |
 | `GET /api/diagnostics` | — | Profile, hardware, `platform`, `python_version`, `max_code_bytes` (the server's `MANIM_MAX_CODE_BYTES`; the frontend uses it for its size check and falls back to 2 MB), and `dependencies` (`manim`, `ffmpeg`, `latex`, `dvisvgm` paths or `"Not Found"`, plus `latex_available`). |
-| `GET /api/files` | — | `{scripts, assets, media}`. On first setup only, seeds `example.py` into an empty workspace and writes `workspace/.composer-initialized`; deleting `example.py` later is permanent. Also removes download-only outputs nobody fetched within `MANIM_TEMP_DOWNLOAD_TTL` seconds. Media items: `name, size, type ("video"\|"image"), url, path, script, scene, quality, modified`, newest first. |
+| `GET /api/files` | — | `{scripts, assets, media}`. On first setup only, seeds `example.py` into an empty workspace and writes `workspace/.composer-initialized`; deleting `example.py` later is permanent. Also removes download-only outputs nobody fetched within `MANIM_TEMP_DOWNLOAD_TTL` seconds. Media items: `name, size, type ("video"\|"image"), url, path, script, scene, quality, modified, storage ("disk"\|"browser")`, newest first. Asset links that point outside `assets/` or nowhere are listed with `outside: true` / `broken: true` and an empty `url`. |
 | `GET /api/file-content` | `?filename=` | `{filename, code, version, scenes, animations, syntax_error?}`. Works for existing files whose names the [file name rules](#file-names) now forbid. 403 when the server may not read the file (e.g. mode 0000). |
 | `POST /api/parse-code` | `{code}` | `{scenes, animations, syntax_error?}` without touching disk. `syntax_error` is `{message, line, column}` when the code doesn't parse. |
 | `POST /api/save` | `{filename, code, base_version?, create_only?}` | `{success, filename, message, version, scenes, animations, syntax_error?}`. `filename` is the name actually stored (see [Saving and versions](#saving-and-versions)). |
 | `POST /api/rename` | `{old_name, new_name}` | `{success, old_name, new_name, message}`; handles case-only renames. `new_name` is normalized like a save name and follows the [file name rules](#file-names). 400 when `new_name` is invalid or another file already has exactly that name, 404 when `old_name` doesn't exist, 409 when another file differs from `new_name` only by letter case or Unicode form. `old_name` may be a legacy name the rules now forbid. |
 | `DELETE /api/scripts` | `?filename=` | `{success, filename}`. Deletes a script; 404 when it doesn't exist, **409** while a save or rename of that name is in progress, or when a rename created that name after the delete request arrived (try again). For a [link entry](#links-in-the-workspace) that points outside the workspace or nowhere, removes the link itself (`link_removed: true`), never its target. |
 | `POST /api/upload-asset` | multipart `file`, `?overwrite=` | `{filename, url, replaced}`; images, SVG, audio, and fonts up to 50 MB. If the name exists the server answers 409 ("Confirm to replace it…"); send the upload again with `overwrite=true` to replace it. Without `overwrite` the file is created exclusively, so of several uploads racing for one new name exactly one wins and the rest get 409. `replaced` is true only when a file was actually overwritten. 403 when the existing file is read-only. The upload is written to `assets/<name>.uploading-<hex>` first and moved into place when complete; those partial files are never listed or served, and the startup cleanup removes leftovers (`MANIM_UPLOAD_PARTIAL_AGE`). |
-| `DELETE /api/assets` | `?filename=` | Deletes an upload |
+| `DELETE /api/assets` | `?filename=` | Deletes an upload. For a link entry (`outside` / `broken`) only the link is removed (`link_removed: true`), never its target. |
 | `DELETE /api/media` | `?path=` (relative to `workspace/media`) | Deletes a render and its cached chunks |
 | `GET /api/download-temp` | `?path=` | Serves a download-only render once, then deletes it |
 | `POST /api/install-manim` \| `-latex` \| `-ffmpeg` | — | Starts a `pip install` of the `manim` and `pillow` lines of `backend/requirements.txt` (so the version caps apply) or a `winget` install in the background. Refused (403) in containers or with `MANIM_ALLOW_INSTALLS=0`. |
@@ -89,6 +89,11 @@ Scenes defined inside `if`/`try`/`with`/loop/`match`-`case` blocks at module lev
 - **403** `"This file is read-only; change its permissions to save it."` when the existing file is not writable by the
   server (no owner-write bit, or `os.access(W_OK)` fails); the file is left untouched and its permissions are never
   changed. Unreadable files (mode 0000) get the same 403 instead of a 500.
+- **403** `"Could not save the script: permission denied. Check that the server may change files in the workspace
+  folder."` when the folder itself is read-only (or a file is locked). Rename, delete, upload, asset and render deletes
+  answer the same way for their folder, instead of a 500.
+- **409** `"A folder named '<name>' is in the way; rename or remove that folder first."` when a folder has the name a
+  save or upload would write (uploads too, even with `overwrite=true`).
 - **400** for an invalid name (`Invalid script filename: <reason>`), or `Rename this file to save or render it:
   <reason>` when the file already exists under a name the rules now forbid. **413** when the UTF-8 code exceeds
   `MANIM_MAX_CODE_BYTES`.
@@ -110,6 +115,8 @@ Each connection has its own executor, so tabs never interfere. All frames are JS
 - `code` is optional. When present (unsaved buffer or browser storage) the server renders a scratch copy named
   `_temp_run_<hex>.py`, rewrites that name to `filename` in logs and tracebacks, and moves the output into the
   script's own media folder afterwards.
+- `storage` is `"disk"` (the default) or `"browser"`. A browser-storage render must send `code`; its output goes to
+  `media/{videos,images}/.browser/<stem>/`, so it never overwrites the workspace file of the same name.
 - `download_only` renders to a scratch folder and returns a one-time `/api/download-temp` URL. If the link is never
   fetched, the folder is removed at the next server start or after `MANIM_TEMP_DOWNLOAD_TTL` seconds (default 3600);
   a render that is still running is never swept.
@@ -172,7 +179,8 @@ The server executes arbitrary Python, so it has to make sure only the user's own
   refuses `..` segments.
 - Events never carry `abs_path`. In Manim's log lines the workspace prefix is removed (paths are shown relative to
   the workspace), and site-packages, the standard library, the virtualenv root, the temp folder, and the home folder
-  become `<site-packages>`, `<python-lib>`, `<venv>`, `<tmp>`, and `~`. Other absolute paths can still appear, such
+  become `<site-packages>`, `<python-lib>`, `<venv>`, `<tmp>` (Windows only, where the temp folder is in the user's
+  profile), and `~`. Other absolute paths can still appear, such
   as a LaTeX or ffmpeg location or a file your script opens elsewhere. API error messages don't include host paths.
 - Script size: `MANIM_MAX_CODE_BYTES` (default 2 MB) is measured on the code as UTF-8. The raw request body or
   WebSocket message has a separate, larger cap (`MANIM_MAX_REQUEST_BYTES`, default 6 × the code limit + 64 KB) so that
