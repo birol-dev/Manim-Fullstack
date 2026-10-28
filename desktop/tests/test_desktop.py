@@ -1,0 +1,175 @@
+"""Windows integration tests. Run with desktop/.runtime/python.exe -m unittest discover -s desktop/tests -v."""
+from __future__ import annotations
+
+import http.cookiejar
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+DESKTOP = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(DESKTOP))
+from launcher import Backend, WorkspaceLock, configure_logging, smoke
+from win_job import Job
+import psutil
+
+
+def wait_until(predicate, timeout=10):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.1)
+    raise AssertionError("Condition did not become true before the deadline")
+
+
+class WindowsTreeTests(unittest.TestCase):
+    def test_embedded_runtime_ignores_user_packages(self):
+        self.assertTrue(sys.flags.isolated)
+        self.assertTrue(sys.flags.no_site)
+        self.assertFalse(any("AppData\\Roaming\\Python" in path for path in sys.path))
+
+    def test_job_kills_orphaned_grandchild(self):
+        with tempfile.TemporaryDirectory(prefix="studio-job-") as temporary:
+            pidfile = Path(temporary) / "pid.json"
+            # Parent exits after creating the grandchild; PID-tree enumeration would lose it.
+            code = ("import sys,subprocess,json,pathlib; "
+                    "sys.stdin.readline(); "
+                    "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'],creationflags=0x08000000); "
+                    "pathlib.Path(sys.argv[1]).write_text(json.dumps(p.pid))")
+            process = subprocess.Popen([sys.executable, "-c", code, str(pidfile)], stdin=subprocess.PIPE,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+            job = Job()
+            try:
+                job.assign(process.pid)
+                process.stdin.write(b"start\n")
+                process.stdin.close()
+                process.wait(timeout=10)
+                pid = json.loads(pidfile.read_text())
+                self.assertTrue(psutil.pid_exists(pid))
+                job.close()
+                wait_until(lambda: not psutil.pid_exists(pid))
+            finally:
+                job.close()
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
+    def test_workspace_lock_releases(self):
+        with tempfile.TemporaryDirectory(prefix="studio-lock-") as temporary:
+            first = WorkspaceLock(Path(temporary))
+            try:
+                with self.assertRaises(RuntimeError):
+                    WorkspaceLock(Path(temporary))
+            finally:
+                first.close()
+            WorkspaceLock(Path(temporary)).close()
+
+
+class BackendTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="studio-desktop-")
+        cls.data = Path(cls.temporary.name)
+        configure_logging(cls.data)
+        cls.backend = Backend(DESKTOP.parent, cls.data).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        pid = cls.backend.process.pid
+        port = int(cls.backend.url.rsplit(":", 1)[1])
+        cls.backend.stop()
+        assert not psutil.pid_exists(pid), "Backend survived graceful shell exit"
+        with socket.socket() as probe:
+            assert probe.connect_ex(("127.0.0.1", port)) != 0, "Listener survived shell exit"
+        # Logging holds the log open, so leave the temporary data under the generated build folder instead.
+        import logging
+        logging.shutdown()
+        cls.temporary.cleanup()
+
+    def status(self, path, *, headers=None, method="GET"):
+        request = urllib.request.Request(self.backend.url + path, headers=headers or {}, method=method)
+        try:
+            with self.backend.http.open(request, timeout=10) as response:
+                return response.status
+        except urllib.error.HTTPError as error:
+            return error.code
+
+    def test_auth_cookie_frontend_and_catalog(self):
+        smoke(self.backend)
+        for path in ("/", "/api/status", "/api/studio/catalog", "/media/missing.png", "/assets/missing.png"):
+            self.assertIn(self.status(path), (401, 403), path)
+        self.assertIn(self.status("/api/desktop/session?token=wrong"), (401, 403))
+        self.assertEqual(self.status("/__desktop__/ping"), 403)
+        self.assertEqual(self.status("/__desktop__/shutdown", method="POST"), 403)
+
+    def test_origin_and_host_rejected_even_with_token(self):
+        for path in ("/api/studio/catalog", "/__desktop__/ping"):
+            for extra in ({"Origin": "https://example.invalid"}, {"Host": "example.invalid"}):
+                headers = {"Authorization": f"Bearer {self.backend.token}", **extra}
+                self.assertEqual(self.status(path, headers=headers), 403)
+
+    def test_mcp_does_not_accept_desktop_bearer(self):
+        headers = {"Authorization": f"Bearer {self.backend.token}"}
+        self.assertIn(self.status("/mcp/", headers=headers), (401, 403))
+
+    def test_websocket_uses_session_cookie(self):
+        from websockets.sync.client import connect
+        from websockets.exceptions import InvalidStatus
+        address = self.backend.url.replace("http://", "ws://") + "/api/render"
+        with self.assertRaises(InvalidStatus):
+            with connect(address, origin=self.backend.url, proxy=None, open_timeout=5):
+                pass
+        cookies = http.cookiejar.CookieJar()
+        client = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(cookies))
+        client.open(self.backend.session_url, timeout=10).close()
+        cookie = "; ".join(f"{item.name}={item.value}" for item in cookies)
+        with connect(address, origin=self.backend.url, additional_headers={"Cookie": cookie}, proxy=None, open_timeout=5) as ws:
+            ws.send('{"type":"ping"}')
+
+    def test_two_sessions_have_distinct_ports_and_credentials(self):
+        with tempfile.TemporaryDirectory(prefix="studio-second-") as temporary:
+            with Backend(DESKTOP.parent, Path(temporary)) as second:
+                self.assertNotEqual(second.url, self.backend.url)
+                self.assertNotEqual(second.instance, self.backend.instance)
+                self.assertNotEqual(second.token, self.backend.token)
+                with self.assertRaises(urllib.error.HTTPError) as error:
+                    second.http.open(urllib.request.Request(second.url + "/__desktop__/ping",
+                                     headers={"Authorization": f"Bearer {self.backend.token}"}))
+                self.assertEqual(error.exception.code, 403)
+
+    def test_token_never_in_log(self):
+        self.assertNotIn(self.backend.token, (self.data / "logs/desktop.log").read_text(encoding="utf-8"))
+
+
+class CrashTests(unittest.TestCase):
+    def test_owner_crash_closes_backend(self):
+        with tempfile.TemporaryDirectory(prefix="studio-crash-") as temporary:
+            folder = Path(temporary)
+            ready = folder / "ready.json"
+            code = ("import pathlib,json,time,sys; from launcher import Backend; "
+                    "b=Backend(pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])).start(); "
+                    "pathlib.Path(sys.argv[3]).write_text(json.dumps({'pid':b.process.pid})); time.sleep(120)")
+            owner = subprocess.Popen([sys.executable, "-c", code, str(DESKTOP.parent), str(folder), str(ready)],
+                                     creationflags=subprocess.CREATE_NO_WINDOW)
+            try:
+                wait_until(ready.exists, timeout=90)
+                pid = json.loads(ready.read_text())["pid"]
+                owner.kill()
+                owner.wait(timeout=5)
+                wait_until(lambda: not psutil.pid_exists(pid), timeout=15)
+            finally:
+                if owner.poll() is None:
+                    owner.kill()
+                    owner.wait()
+
+
+if __name__ == "__main__":
+    unittest.main()

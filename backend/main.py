@@ -50,6 +50,9 @@ from executor import (
     redact_host_paths,
 )
 from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
+from studio import api as studio_api
+from studio.service import service as studio_service
+from studio.auth import COOKIE, agent_token, app_allowed, bearer, matches
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
     UnsafePathError,
@@ -72,17 +75,17 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 APP_VERSION = "1.1.0"
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
+WORKSPACE_DIR = os.path.abspath(os.path.expanduser(os.environ.get("MANIM_WORKSPACE") or os.path.join(BASE_DIR, "workspace")))
 MEDIA_DIR = os.path.join(WORKSPACE_DIR, "media")
 ASSETS_DIR = os.path.join(WORKSPACE_DIR, "assets")
-FRONTEND_DIR = os.path.join(BASE_DIR, "frontend", "dist")
+FRONTEND_DIR = os.environ.get("MANIM_FRONTEND_DIR") or os.path.join(BASE_DIR, "frontend", "dist")
 FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIR, "assets")
 
 TEMP_PREFIX = "_temp_run_"
@@ -289,16 +292,26 @@ async def _maintenance_after_bind(wait_seconds: float = BIND_WAIT_SECONDS, poll:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    global studio_mcp
     task = None
     if RUN_STARTUP_MAINTENANCE:
         # Harmless when another server is running: the same profile, rewritten.
         write_manim_config_file(WORKSPACE_DIR, get_cached_profile())
         task = asyncio.create_task(_maintenance_after_bind())
     try:
-        yield
+        if studio_mcp is not None:
+            # MCP session managers are single-use. Recreate the transport when the
+            # same ASGI application starts again (tests and embedded hosts do this).
+            studio_mcp = create_server(studio_service)
+            studio_mcp_gateway.app = studio_mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
+            async with studio_mcp.session_manager.run():
+                yield
+        else:
+            yield
     finally:
         if task is not None and not task.done():
             task.cancel()
+        await studio_service.shutdown()  # the preview worker and a running studio export
 
 
 app = FastAPI(title="Manim Composer API", version=APP_VERSION, lifespan=_lifespan)
@@ -334,6 +347,21 @@ async def reject_untrusted_requests(request: Request, call_next):
     request.scope.setdefault("manim_arrived", time.perf_counter())
     if not _request_allowed(request.headers, _peer_host(request.client)):
         return JSONResponse({"detail": "Request origin or host not allowed."}, status_code=403)
+    if request.url.path == "/api/desktop/session":
+        expected = os.environ.get("MANIM_API_TOKEN", "")
+        if request.method != "GET" or not matches(request.query_params.get("token", ""), expected):
+            return JSONResponse({"detail": "Invalid desktop session."}, status_code=401)
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(COOKIE, expected, httponly=True, samesite="strict", path="/")
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+    # Native clients use the agent token only on Studio routes. The IDE retains its
+    # separate desktop session; MCP exposes no arbitrary-code tool.
+    agent_route = request.url.path.startswith(("/api/studio/", "/media/studio/"))
+    agent_allowed = agent_route and bool(bearer(request.headers)) and matches(bearer(request.headers), agent_token(WORKSPACE_DIR))
+    if not request.url.path.startswith("/mcp") and not app_allowed(request) and not agent_allowed:
+        return JSONResponse({"detail": "Open the desktop app to start a session."}, status_code=401)
     return await call_next(request)
 
 
@@ -2009,7 +2037,7 @@ async def websocket_render(websocket: WebSocket):
     ``{"type": "started", "render_id", "waited"}`` once it leaves the queue.
     Each connection gets its own executor so clients never interfere.
     """
-    if not _request_allowed(websocket.headers, _peer_host(websocket.client)):
+    if not _request_allowed(websocket.headers, _peer_host(websocket.client)) or not app_allowed(websocket):
         await websocket.close(code=1008)
         return
 
@@ -2370,6 +2398,30 @@ async def websocket_render(websocket: WebSocket):
         await stop_current_render("error")
         await send({"type": "error", "render_id": failed_id, "message": f"Server WebSocket error: {e}"})
 
+
+# Template studio (/api/studio): previews under media/studio, data under workspace/studio.
+studio_service.configure(WORKSPACE_DIR, MEDIA_DIR, ASSETS_DIR, app_root=BASE_DIR, prewarm=True)
+app.include_router(studio_api.router)
+
+# The SDK is optional for source checkouts that only use the GUI.
+studio_mcp = None
+try:
+    from studio.mcp_server import create_server
+    from studio.mcp_transport import AgentAuth
+    studio_mcp = create_server(studio_service)
+    mcp_app = studio_mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
+    studio_mcp_gateway = AgentAuth(mcp_app, WORKSPACE_DIR)
+    app.mount("/mcp", studio_mcp_gateway)
+except ImportError:
+    logger.info("MCP unavailable; install the mcp dependency to enable agent connections.")
+
+
+@app.get("/api/studio/connection")
+async def studio_connection(request: Request):
+    """Local connection details for the app's Connect to AI dialog."""
+    base = str(request.base_url).rstrip("/")
+    return JSONResponse({"available": studio_mcp is not None, "url": base + "/mcp/",
+                         "token": agent_token(WORKSPACE_DIR)}, headers={"Cache-Control": "no-store"})
 
 # Serve the built frontend (index.html + static files). /assets is handled above.
 if os.path.isdir(FRONTEND_DIR):

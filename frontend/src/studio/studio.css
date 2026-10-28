@@ -1,0 +1,40 @@
+/* Studio-only helpers (the design tokens come from src/index.css). */
+
+.studio-shimmer {
+  background: linear-gradient(100deg, var(--color-raised) 30%, var(--color-overlay) 50%, var(--color-raised) 70%);
+  background-size: 300% 100%;
+  animation: studio-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes studio-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0 0; }
+}
+
+/* Shown behind see-through pictures. */
+.studio-checker {
+  background-color: #2a2a31;
+  background-image:
+    linear-gradient(45deg, #3a3a44 25%, transparent 25%),
+    linear-gradient(-45deg, #3a3a44 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #3a3a44 75%),
+    linear-gradient(-45deg, transparent 75%, #3a3a44 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* Icons are drawn in the current text color whatever color the SVG file uses. */
+.studio-icon {
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.studio-preview-stage {
+  container-type: size;
+}
+
+.studio-range {
+  accent-color: var(--color-accent);
+}

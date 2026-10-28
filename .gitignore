@@ -84,3 +84,7 @@ BUGFIX_LOG.md
 .vercel/
 .opencode/
 workspace/.composer-initialized
+
+# Template studio: dev renders and per-user studio data
+workspace/.studio-dev/
+workspace/studio/

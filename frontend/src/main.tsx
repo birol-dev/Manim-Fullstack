@@ -3,10 +3,11 @@ import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
 import "./index.css";
-import App from "./App.tsx";
+import StudioApp from "./studio/StudioApp.tsx";
 
+// The studio (gallery, editor, export) is the app; the code editor lives at #/author.
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <StudioApp />
   </StrictMode>,
 );

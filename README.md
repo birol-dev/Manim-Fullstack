@@ -1,12 +1,33 @@
 # Manim Composer
 
-A local, browser-based IDE for [Manim Community Edition](https://www.manim.community/). Write a scene, press
-<kbd>Ctrl</kbd>+<kbd>Enter</kbd>, and watch it render: live progress, errors that link back to the line that caused
-them, and the result playing next to your code.
+A local animation studio powered by [Manim Community Edition](https://www.manim.community/).
+Choose a design, change its words, pictures and colors, then export a video or image.
+The gallery opens by default; **Author mode** opens the Python scene editor.
+
+## Template Studio
+
+- **Announcements:** sale, event invitation, hiring, holiday hours, coming soon and product launch.
+- **Celebrations:** birthday, follower milestone, work anniversary, thank-you and welcome.
+- **Year in review:** personal, small business, creator, fitness and family recaps.
+- **Timers:** classroom, coffee break and launch countdown.
+- **Quotes:** inspirational post, customer review, hot take, book quote and team value.
+- **Quizzes:** general knowledge, vocabulary, mental math, true/false and kids' questions.
+
+Edit a form with a poster preview or storyboard, save projects, and export MP4, GIF,
+WebM, MOV or PNG. Choose landscape, vertical, square or portrait formats and bundled
+themes, fonts and icons. Templates use ordinary text and need no LaTeX.
+
+**AI agents:** click **Connect to AI** in the gallery for a local MCP connection.
+Agents can find templates, edit saved projects, inspect storyboard images, and queue
+exports. Keep the app running; use **Reload saved** to bring agent edits into an open
+project. See [the Studio guide](backend/studio/README.md) for the API and stdio setup.
+
+**Windows desktop:** see [desktop/README.md](desktop/README.md) for the launcher and
+packaging instructions. The source quick start below also serves the Studio in a browser.
 
 ![Manim Composer: code editor, render preview, and console](docs/screenshot.png)
 
-## Features
+## Author mode features
 
 - **Editor** — Monaco with Python highlighting, live scene detection, unsaved drafts kept per file,
   <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> to save and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> to render.
