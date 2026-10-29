@@ -99,13 +99,9 @@ function ProjectTile({ project, library, onDelete }: { project: ProjectSummary; 
   </li>;
 }
 
-function YourVideos({ library, home = false }: { library: Library; home?: boolean }) {
+function ProjectTiles({ projects, library, home = false }: { projects: ProjectSummary[]; library: Library; home?: boolean }) {
   const [confirm, setConfirm] = useState<ProjectSummary | null>(null);
   const [busy, setBusy] = useState(false);
-  const [sort, setSort] = useState("edited");
-  const { projects, error, retry } = library;
-  const sorted = [...(projects ?? [])].sort((a, b) => !home && sort === "name" ? (a.title || "Untitled video").localeCompare(b.title || "Untitled video") : (toDate(b.updated)?.getTime() ?? 0) - (toDate(a.updated)?.getTime() ?? 0));
-  if (home && projects?.length === 0 && !error) return <p className="studio-welcome">Welcome to your studio. Pick a template below to make your first video.</p>;
   const remove = async () => {
     if (!confirm) return;
     setBusy(true);
@@ -113,6 +109,31 @@ function YourVideos({ library, home = false }: { library: Library; home?: boolea
     catch (error) { toast.error(friendlyError(error, "Couldn't delete that video.")); }
     finally { setBusy(false); }
   };
+  return <>
+    <ul className={`studio-template-grid${home ? " studio-home-row" : ""}`}>{projects.map((project) => <ProjectTile key={project.id} project={project} library={library} onDelete={setConfirm} />)}</ul>
+    <Dialog open={!!confirm} onOpenChange={(open) => { if (!open && !busy) setConfirm(null); }}>
+      <DialogContent onFocusFallback={() => document.getElementById("studio-main")?.focus()} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}>
+        <DialogHeader><DialogTitle>Delete "{confirm?.title || "Untitled video"}"?</DialogTitle><DialogDescription>This removes the video from Your videos. Files you've already downloaded are kept.</DialogDescription></DialogHeader>
+        <DialogFooter><Button variant="ghost" size="md" onClick={() => setConfirm(null)} disabled={busy}>Keep it</Button><Button variant="danger" size="md" onClick={remove} disabled={busy}>Delete</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>;
+}
+
+const WELCOME_STEPS = ["Pick a template", "Change the words, colours and format", "Export a video"];
+
+/** A quiet three-step nudge for a library with nothing in it yet. */
+function WelcomeSteps() {
+  return <ol className="studio-welcome-steps" aria-label="How making a video works">
+    {WELCOME_STEPS.map((step, index) => <li key={step}><span className="studio-welcome-number">{index + 1}</span><span>{step}</span></li>)}
+  </ol>;
+}
+
+function YourVideos({ library, home = false }: { library: Library; home?: boolean }) {
+  const [sort, setSort] = useState("edited");
+  const { projects, error, retry } = library;
+  const sorted = [...(projects ?? [])].sort((a, b) => !home && sort === "name" ? (a.title || "Untitled video").localeCompare(b.title || "Untitled video") : (toDate(b.updated)?.getTime() ?? 0) - (toDate(a.updated)?.getTime() ?? 0));
+  if (home && projects?.length === 0 && !error) return <WelcomeSteps />;
   return <section aria-labelledby="your-videos" className="studio-gallery-section">
     <SectionHeading id="your-videos" action={home ? <a href="#/videos" className="studio-see-all">See all <ArrowRight aria-hidden /></a> : <div className="studio-video-sort"><label htmlFor="video-sort">Sort by</label><Select value={sort} onValueChange={setSort}><SelectTrigger id="video-sort" aria-label="Sort videos"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="edited">Last edited</SelectItem><SelectItem value="name">Name</SelectItem></SelectContent></Select></div>}>
       {home ? "Continue editing" : projects ? `${projects.length} ${projects.length === 1 ? "video" : "videos"}` : "Your library"}
@@ -120,14 +141,16 @@ function YourVideos({ library, home = false }: { library: Library; home?: boolea
     {!!error && <div role="alert" className="studio-inline-error"><span>Couldn't load your videos. {friendlyError(error)}</span><Button size="sm" variant="secondary" onClick={retry}><RotateCw /> Try again</Button></div>}
     {projects === null && !error ? <div role="status" aria-label="Loading your videos"><ul className="studio-template-grid">{[0, 1, 2, 3].map((key) => <CardSkeleton key={key} />)}</ul></div> : projects?.length === 0 && !error ? <div className="studio-empty-state">
       <Video aria-hidden /><h2>No videos yet</h2><p>Pick a template to make your first one.</p><Button asChild size="md"><a href="#/templates">Browse templates <ArrowRight /></a></Button>
-    </div> : <ul className={`studio-template-grid${home ? " studio-home-row" : ""}`}>{(home ? sorted.slice(0, 4) : sorted).map((project) => <ProjectTile key={project.id} project={project} library={library} onDelete={setConfirm} />)}</ul>}
-    <Dialog open={!!confirm} onOpenChange={(open) => { if (!open && !busy) setConfirm(null); }}>
-      <DialogContent onFocusFallback={() => document.getElementById("studio-main")?.focus()} onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}>
-        <DialogHeader><DialogTitle>Delete "{confirm?.title || "Untitled video"}"?</DialogTitle><DialogDescription>This removes the video from Your videos. Files you've already downloaded are kept.</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="ghost" size="md" onClick={() => setConfirm(null)} disabled={busy}>Keep it</Button><Button variant="danger" size="md" onClick={remove} disabled={busy}>Delete</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    </div> : <ProjectTiles projects={home ? sorted.slice(0, 4) : sorted} library={library} home={home} />}
   </section>;
+}
+
+/** Every typed word must appear in the video's title. */
+function matchesVideo(project: ProjectSummary, query: string) {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const title = (project.title || "Untitled video").toLowerCase();
+  return words.every((word) => title.includes(word));
 }
 
 export function Gallery({ catalog, route, library, exports }: { catalog: Catalog; route: Route; library: Library; exports: ReturnType<typeof useExports> }) {
@@ -139,6 +162,13 @@ export function Gallery({ catalog, route, library, exports }: { catalog: Catalog
   const query = route.kind === "templates" ? route.query ?? "" : "";
   const sections = catalog.sections.filter((section) => !category || section.id === category).map((section) => ({ ...section, cards: filterCards(section.cards, query, templates) })).filter((section) => section.cards.length);
   const cards = sections.flatMap((section) => section.cards);
+  const videos = query ? (library.projects ?? []).filter((project) => matchesVideo(project, query)) : [];
+  const summary = query
+    ? `${[
+      videos.length ? `${videos.length} ${videos.length === 1 ? "video" : "videos"}` : "",
+      cards.length ? `${cards.length} ${cards.length === 1 ? "template" : "templates"}` : "",
+    ].filter(Boolean).join(" and ")} matching “${query}”`
+    : `${cards.length} ${cards.length === 1 ? "template" : "templates"}`;
   return <div className="studio-gallery-content">
     {home ? <>
       <header className="studio-gallery-hero"><h1>What are you making?</h1><p>Pick a starting point. You can change every word, color and format, then export a video.</p></header>
@@ -148,10 +178,16 @@ export function Gallery({ catalog, route, library, exports }: { catalog: Catalog
         <SectionHeading id={`section-${section.id}`} action={<a href={routeHash({ kind: "templates", category: section.id })} className="studio-see-all" aria-label={`See all ${section.title}`}>See all <ArrowRight aria-hidden /></a>}>{section.title}</SectionHeading>
         <ul className="studio-template-grid studio-home-row">{section.cards.slice(0, 4).map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
       </section>)}
-    </> : cards.length === 0 ? <div className="studio-empty-state" role="status"><Search aria-hidden /><p>{query ? `Nothing matches "${query}". Try another word.` : "No designs in this category yet."}</p><Button asChild variant="secondary" size="md"><a href="#/templates">Show all designs</a></Button></div> : <section className="studio-gallery-section" aria-label="Templates">
-      <p className="studio-results-count" role="status">{cards.length} {cards.length === 1 ? "template" : "templates"}{query && <> matching “{query}”</>}</p>
-      <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
-    </section>}
+    </> : cards.length === 0 && videos.length === 0 ? <div className="studio-empty-state" role="status"><Search aria-hidden /><p>{query ? `Nothing matches "${query}". Try another word.` : "No designs in this category yet."}</p><Button asChild variant="secondary" size="md"><a href="#/templates">Show all designs</a></Button></div> : <div className="studio-search-results">
+      <p className="studio-results-count" role="status">{summary}</p>
+      {videos.length > 0 && <section className="studio-gallery-section" aria-labelledby="studio-video-results">
+        <SectionHeading id="studio-video-results">Your videos</SectionHeading>
+        <ProjectTiles projects={videos} library={library} />
+      </section>}
+      {cards.length > 0 && <section className="studio-gallery-section" aria-label="Templates">
+        <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
+      </section>}
+    </div>}
   </div>;
 }
 

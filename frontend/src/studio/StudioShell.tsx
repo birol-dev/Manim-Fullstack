@@ -63,9 +63,9 @@ function Sidebar({ route, catalog, appearance, onAppearance, collapsed, collapsi
       {collapsible && !collapsed && <button type="button" className="studio-shell-icon studio-sidebar-collapse" aria-label="Collapse sidebar" onClick={onToggle}><PanelLeftClose /></button>}
     </div>
     <div className="studio-sidebar-search">
-      {collapsed ? <Tooltip content="Search templates" shortcut="Ctrl+K" side="right"><button type="button" className="studio-shell-icon" aria-label="Search templates" onClick={onFocusSearch}><Search /></button></Tooltip> : <>
+      {collapsed ? <Tooltip content="Search videos and templates" shortcut="Ctrl+K" side="right"><button type="button" className="studio-shell-icon" aria-label="Search videos and templates" onClick={onFocusSearch}><Search /></button></Tooltip> : <>
         <Search aria-hidden />
-        <input ref={searchRef} type="search" value={query} onChange={(event) => onSearch(event.target.value)} placeholder="Search templates" aria-label="Search designs" aria-keyshortcuts="Control+k Meta+k /" />
+        <input ref={searchRef} type="search" value={query} onChange={(event) => onSearch(event.target.value)} placeholder="Search videos and templates" aria-label="Search designs" aria-keyshortcuts="Control+k Meta+k /" />
         {query ? <button type="button" aria-label="Clear search" onClick={() => onSearch("")}><X /></button> : <kbd aria-hidden>Ctrl K</kbd>}
       </>}
     </div>

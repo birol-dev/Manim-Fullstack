@@ -154,12 +154,18 @@ describe("gallery", () => {
   it("shows a first-run welcome, the latest four videos, then the full sorted video library", async () => {
     const user = userEvent.setup();
     const view = open("#/");
-    expect(await screen.findByText(/Welcome to your studio/)).toBeInTheDocument();
+    const steps = await screen.findByRole("list", { name: "How making a video works" });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(steps).getByText("Pick a template")).toBeInTheDocument();
+    expect(within(steps).getByText("Change the words, colours and format")).toBeInTheDocument();
+    expect(within(steps).getByText("Export a video")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Continue editing" })).not.toBeInTheDocument();
     view.unmount();
     for (let i = 1; i <= 5; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, created: i, updated: i });
     open("#/");
-    const recent = await screen.findByRole("region", { name: "Continue editing" });
+    expect(await screen.findByRole("heading", { name: "Continue editing" })).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "How making a video works" })).not.toBeInTheDocument();
+    const recent = screen.getByRole("region", { name: "Continue editing" });
     await within(recent).findByRole("link", { name: /Video 5/ });
     expect(within(recent).getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("#/project/"))).toHaveLength(4);
     expect(within(recent).queryByRole("link", { name: /Video 1/ })).not.toBeInTheDocument();
@@ -399,6 +405,38 @@ describe("gallery", () => {
     await user.clear(search);
     await user.type(search, "zebra");
     expect(screen.getByText(/Nothing matches "zebra"/)).toBeInTheDocument();
+  });
+
+  it("finds saved videos by title alongside templates", async () => {
+    const user = userEvent.setup();
+    studio.projects.push(
+      { id: "p9", title: "Weekend sale", template: "countdown", params: {}, settings: {}, created: 1, updated: 2 },
+      { id: "p8", title: "Sale recap", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 },
+      { id: "p7", title: "Classroom timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 0 },
+    );
+    open("#/");
+    const search = await screen.findByRole("searchbox", { name: "Search designs" });
+    await user.type(search, "sale");
+
+    const videos = await screen.findByRole("region", { name: "Your videos" });
+    expect(within(videos).getByRole("link", { name: /Weekend sale/ })).toHaveAttribute("href", "#/project/p9");
+    expect(within(videos).getByRole("link", { name: /Sale recap/ })).toHaveAttribute("href", "#/project/p8");
+    expect(within(videos).queryByRole("link", { name: /Classroom timer/ })).not.toBeInTheDocument();
+    expect(within(videos).getByRole("button", { name: "Options for Weekend sale" })).toBeInTheDocument();
+    expect(screen.getByText("2 videos and 1 template matching “sale”")).toBeInTheDocument();
+    const templates = screen.getByRole("region", { name: "Templates" });
+    expect(within(templates).getByRole("link", { name: /Sales chart/ })).toBeInTheDocument();
+    expect(videos.compareDocumentPosition(templates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.clear(search);
+    await user.type(search, "weekend");
+    expect(await screen.findByText("1 video matching “weekend”")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Templates" })).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.type(search, "zebra");
+    expect(screen.getByText(/Nothing matches "zebra"/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Your videos" })).not.toBeInTheDocument();
   });
 
   it("lists saved videos and links to author mode", async () => {
