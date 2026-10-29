@@ -1,8 +1,10 @@
 # Studio desktop shell (Windows x64)
 
-Gallery posters are shipped under `backend/studio/assets/posters/`. Before packaging,
+Gallery posters and silent motion peeks are shipped under `backend/studio/assets/posters/`
+and `backend/studio/assets/peeks/`. Before packaging,
 run `python -m backend.studio.bake_posters` at the repository root. `scripts/package.py`
-rejects missing/stale bakes and copies the entire backend, including this folder.
+rejects missing/stale bakes and oversized peeks, and copies the entire backend, including
+both folders. The same command bakes both; commit both manifests and their assets.
 
 This directory owns the desktop host only. The static React build is served by the existing FastAPI backend at a loopback origin remembered for each data folder. Development build output, embedded Python, and portable output stay inside `desktop/`. No root package, frontend source/config, backend source, or requirements are modified by these scripts.
 

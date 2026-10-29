@@ -1,5 +1,5 @@
 /** Library pages inside the persistent Studio shell. */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, Check, Clapperboard, RotateCw, Search, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -17,14 +17,18 @@ import { ProjectMenu } from "./ProjectMenu";
 import { routeHash, type Route } from "./router";
 import type { Card, Catalog, PreviewRequest, PreviewResponse, ProjectSummary, TemplateInfo } from "./types";
 import type { Library } from "./useLibrary";
+import { useCardPeek } from "./useCardPeek";
 
-function PosterImage({ url, response, error }: { url?: string | null; response?: PreviewResponse | null; error?: unknown }) {
+function PosterImage({ url, response, error, peek }: { url?: string | null; response?: PreviewResponse | null; error?: unknown; peek?: ReactNode }) {
   const source = url || response?.url;
   const [loaded, setLoaded] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const ready = loaded === source;
   if (source && failed !== source) return <>
-    <img src={apiUrl(source)} alt="" width={response?.width} height={response?.height} loading="lazy" decoding="async" className="studio-poster-image" data-ready={ready} onLoad={() => setLoaded(source)} onError={() => setFailed(source)} />
+    <span className="studio-poster-artwork">
+      <img src={apiUrl(source)} alt="" width={response?.width} height={response?.height} loading="lazy" decoding="async" className="studio-poster-image" data-ready={ready} onLoad={() => setLoaded(source)} onError={() => setFailed(source)} />
+      {peek}
+    </span>
     <img src={apiUrl(source)} alt="" aria-hidden loading="lazy" decoding="async" className="studio-poster-ambient" data-ready={ready} />
     {!ready && <span className="studio-shimmer absolute inset-0" aria-hidden />}
   </>;
@@ -32,17 +36,18 @@ function PosterImage({ url, response, error }: { url?: string | null; response?:
   return <span className="studio-shimmer absolute inset-0" aria-hidden />;
 }
 
-function Poster({ card, template }: { card: Card; template: TemplateInfo | undefined }) {
+function Poster({ card, template, peek }: { card: Card; template: TemplateInfo | undefined; peek: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearViewport(ref);
   const request = near ? { template: card.template, params: card.params, settings: cardSettings(card, template), mode: "poster" as const } : null;
   const { response, error } = usePoster(request);
-  return <div ref={ref} className="studio-poster-well"><PosterImage response={response} error={error} /></div>;
+  return <div ref={ref} className="studio-poster-well"><PosterImage response={response} error={error} peek={peek} /></div>;
 }
 
 function CardTile({ card, template }: { card: Card; template: TemplateInfo | undefined }) {
-  return <li><a href={routeHash({ kind: "new", template: card.template, preset: card.id })} className="studio-card">
-    <Poster card={card} template={template} />
+  const { video, visible, onCanPlay, onError, cardEvents } = useCardPeek(card.peek_url);
+  return <li><a href={routeHash({ kind: "new", template: card.template, preset: card.id })} className="studio-card" {...cardEvents}>
+    <Poster card={card} template={template} peek={card.peek_url && <video ref={video} className="studio-card-peek" data-visible={visible} preload="none" muted playsInline aria-hidden="true" tabIndex={-1} onCanPlay={onCanPlay} onError={onError} />} />
     <span className="studio-card-copy"><span className="studio-card-title">{card.title}</span><span className="studio-card-summary">{card.summary}</span></span>
   </a></li>;
 }

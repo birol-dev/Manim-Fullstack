@@ -1,4 +1,4 @@
-"""Bake gallery posters: run ``python -m backend.studio.bake_posters`` at the repo root."""
+"""Bake gallery posters AND motion peeks: ``python -m backend.studio.bake_posters`` at the repo root."""
 from __future__ import annotations
 
 import argparse
@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--work-dir", type=Path,
                         default=Path(STUDIO_DIR).parents[1] / "workspace" / "studio" / "tmp" / "poster-bake")
     args = parser.parse_args()
+    from .bake_peeks import bake as bake_peeks
     POSTERS_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {}
     service = StudioService(str(args.work_dir))
@@ -52,6 +53,7 @@ def main():
             name = f'{card["template"]}/{card["id"]}'
             manifest[name] = key
             print(f"Baked {name}: {key}", flush=True)
+        bake_peeks(service)
     finally:
         service.shutdown_sync()
     temporary = POSTERS_DIR / ".manifest.json"

@@ -42,6 +42,38 @@ def test_catalog(api):
     assert any(t["id"] == "countdown" for t in body["templates"])
 
 
+def test_baked_peek_catalog_and_serving(api, studio, tmp_path, monkeypatch):
+    import json
+    from studio import peeks
+    from studio.bake_posters import preset_requests
+    from tests.media_bytes import MP4
+
+    folder = tmp_path / "peeks"
+    folder.mkdir()
+    monkeypatch.setattr(peeks, "PEEKS_DIR", folder)
+    card, settings = next(preset_requests(studio))
+    key = peeks.peek_key(studio, card, settings)
+    name = f'{card["template"]}/{card["id"]}'
+    url = f"/api/studio/peeks/{key}.mp4"
+    (folder / f"{key}.mp4").write_bytes(MP4)
+    manifest = folder / "manifest.json"
+    manifest.write_text(json.dumps({name: key}), encoding="utf-8")
+    cards = api.get("/api/studio/catalog").json()["sections"]
+    assert any(c["peek_url"] == url for s in cards for c in s["cards"])
+    video = api.get(url)
+    assert video.status_code == 200 and video.content == MP4
+    assert video.headers["content-type"] == "video/mp4"
+    assert api.get(url, headers={"Range": "bytes=0-9"}).status_code == 206
+    manifest.write_text(json.dumps({name: "stale"}), encoding="utf-8")
+    cards = api.get("/api/studio/catalog").json()["sections"]
+    assert all(c["peek_url"] is None for s in cards for c in s["cards"])
+    assert api.get(url).status_code == 404
+    manifest.unlink()
+    assert api.get(url).status_code == 404
+    assert api.get("/api/studio/peeks/invalid.mp4").status_code == 404
+    assert not studio.fake.calls and studio._motion is None
+
+
 def test_motion_routes_and_media(api, studio, media_in_tmp):
     worker = FakeMotionWorker()
     studio._motion_worker_factory = lambda: worker

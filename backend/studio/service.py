@@ -40,7 +40,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import registry
+from . import peeks, registry
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import EXPORT_FORMATS, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -231,7 +231,7 @@ class StudioService:
         key = tuple((tid, self._refresh_template(tid)) for tid in ids)
         with self._state_lock:
             if self._catalog_cache is not None and self._catalog_cache[0] == key:
-                return copy.deepcopy(self._catalog_cache[1])
+                return self._with_peeks(copy.deepcopy(self._catalog_cache[1]))
         sections = {name: [] for name in CATEGORY_TITLES}
         templates = []
         for tid in ids:
@@ -254,7 +254,24 @@ class StudioService:
         }
         with self._state_lock:
             self._catalog_cache = (key, result)
-        return copy.deepcopy(result)
+        return self._with_peeks(copy.deepcopy(result))
+
+    def _with_peeks(self, catalog):
+        manifest = peeks.read_manifest()
+        for template in catalog["templates"]:
+            for card in template["presets"]:
+                settings = {"aspect": template["default_aspect"], **card["settings"]}
+                path = peeks.current_path(self, card, settings, manifest)
+                card["peek_url"] = f"/api/studio/peeks/{path.name}" if path else None
+        return catalog
+
+    def peek_path(self, key):
+        if isinstance(key, str) and re.fullmatch(r"[a-f0-9]{32}", key):
+            url = f"/api/studio/peeks/{key}.mp4"
+            if any(card.get("peek_url") == url for template in self._catalog_sync()["templates"]
+                   for card in template["presets"]):
+                return peeks.PEEKS_DIR / f"{key}.mp4"
+        raise NotFoundError("That gallery peek is no longer available.")
 
     async def catalog(self) -> dict:
         """Gallery sections, templates (schema, defaults, presets), themes, aspects, qualities, formats."""

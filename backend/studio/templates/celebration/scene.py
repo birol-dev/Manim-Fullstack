@@ -422,7 +422,7 @@ class Template(StudioScene):
         lay = self.layout
         mode = mode or self.flavor["confetti"]
         count = {"cannons": 56, "burst": 54, "rain": 48}[mode]
-        if self.mode == "poster":
+        if self.mode == "poster" or self.is_peek:
             count = int(count * 0.55)  # a thumbnail should keep the text readable
         party = fx.Party(self.clock, start, colors=self.accents, frame_w=lay.frame_width, frame_h=lay.frame_height,
                          mode=mode, origin=tuple(hero.center[:2]), count=count, seed=seed, size=0.27)
@@ -490,6 +490,24 @@ class Template(StudioScene):
         # 2. name
         party = None
         parties = []
+
+        def peek_clock(name_duration=0.0):
+            if not self.is_peek or party is None:
+                return
+            # Let the decoration progress forward to the thumbnail's selected
+            # phase over the remaining entrance. Never rewind a live effect.
+            closing = [T(0.5)] if t.counter is not None else [0.0]
+            if t.message is not None:
+                closing.append(T(0.55 + 0.1 * (len(t.message.lines) - 1)))
+            if t.signoff is not None:
+                delay = T(0.35 + 0.1 * len(t.message.lines)) if t.message is not None else 0.0
+                closing.append(delay + T(0.55))
+            duration = name_duration + (T(2.0) if t.counter is not None else 0.0) + max(closing)
+            start, end, at = self.clock.t, party.start + 1.15, self.elapsed
+            self.clock.clear_updaters()
+            self.clock.add_updater(lambda clock, dt: setattr(
+                clock, "t", start + (end - start) * min(1, (self.elapsed - at) / max(duration, 1e-6))))
+
         if t.name_block is not None:
             if self.p.confetti:
                 party = self._party(hero, self.clock.t + T(0.3), seed=11)
@@ -497,11 +515,13 @@ class Template(StudioScene):
                 self.add(party)
             anims = [self._letters(t.name, T, self.flavor["letters"] == "bounce"),
                      self._after(Create(t.wave, run_time=T(0.7), rate_func=ease_out), T(0.5))]
+            peek_clock(max(a.run_time for a in anims))
             self.play(*anims)
         elif self.p.confetti:
             party = self._party(hero, self.clock.t, seed=11)
             parties.append(party)
             self.add(party)
+            peek_clock()
 
         # 3. number
         counter = t.counter
@@ -543,6 +563,8 @@ class Template(StudioScene):
                 parties.append(later)
                 nxt += 6.8
                 seed += 1
-        if self.mode == "poster" and party is not None:
+        if (self.mode == "poster" or self.is_peek) and party is not None:
+            if self.is_peek:
+                self.clock.clear_updaters()
             self.clock.t = party.start + 1.15
         self.poster()

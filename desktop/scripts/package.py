@@ -15,11 +15,16 @@ from prepare import DESKTOP, ROOT, RUNTIME, remove_generated, runtime_paths
 def main():
     sys.path.insert(0, str(ROOT))
     from backend.studio.bake_posters import BAKE_COMMAND, check_baked
+    from backend.studio.peeks import check_baked as check_peeks
     from backend.studio.service import StudioService
 
-    stale = check_baked(StudioService())
+    service = StudioService()
+    stale = check_baked(service)
     if stale:
         raise RuntimeError(f"Missing or stale gallery posters: {', '.join(stale)}. Run {BAKE_COMMAND}")
+    stale = check_peeks(service)
+    if stale:
+        raise RuntimeError(f"Missing, stale or oversized gallery peeks: {', '.join(stale)}. Run {BAKE_COMMAND}")
     destination = DESKTOP / "dist/ManimStudio"
     if not (RUNTIME / "ready.json").is_file() or not (DESKTOP / "build/frontend/index.html").is_file():
         raise RuntimeError("Run desktop/dev.ps1 -Smoke to prepare and validate the runtime/frontend first.")

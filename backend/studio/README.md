@@ -22,16 +22,39 @@ backend/studio/
 Modules outside `kit/` and `templates/*/scene.py` must never import Manim: it takes ~3 s
 to load, and the API and MCP server use them on every request.
 
-## Shipped gallery posters
+## Shipped gallery posters and motion peeks
 
 Run `python -m backend.studio.bake_posters` from the repository root after changing a
 template, preset, kit, render settings, font or icon. This uses the warm worker to bake
-every catalog preset with the gallery's exact params/settings and 360px short side.
-`assets/posters/manifest.json` maps each preset to its portable content-based cache key.
+every catalog preset with the gallery's exact params/settings: posters at 360px short
+side and silent peeks at 480px long side (even dimensions), 15 fps, H.264/yuv420p,
+faststart. The same command bakes both folders. Commit both manifests and their assets.
+`assets/posters/manifest.json` and `assets/peeks/manifest.json` map presets to portable
+content-based keys. Peeks add a versioned mode to the normal preview key inputs.
 The freshness test fails with the rebake command when a preset is missing or stale.
 Desktop packaging checks freshness, then copies the whole backend tree including
-`assets/posters/`. First requests copy exact matching PNGs into the writable preview
+`assets/posters/` and `assets/peeks/`. First requests copy exact matching PNGs into the writable preview
 cache; changed requests or stale artwork fall through to normal rendering.
+
+Peeks use the existing motion worker with a bake-only stop at `poster()`. We encode
+the settled frame explicitly, then retain at most the last 67 frames (4.467 seconds)
+before that endpoint. Encoding pins the terminal frame to the actual scaled gallery
+PNG, so different render sizes and live updater rounding cannot change the handoff.
+Announcement and quote peeks show the entrance through the
+complete card; celebration peeks retain the poster's reduced confetti density and
+slow its decorative clock to reach the poster phase as the entrance ends.
+Ring/bar countdowns animate to the poster's 62% remaining value; big-number timers
+stop on the third number. Quizzes animate to 55% thinking time remaining, before
+the answer reveal. Year-in-review peeks reach the final recap, including the full
+moments sequence when selected; longer openings retain only the last 4.467 seconds.
+
+Encoding starts at CRF 26 and increases only if necessary. Each movie targets at
+most 250,000 bytes (about 7.25 MB for the current 29 presets plus a small manifest),
+with hard freshness/packaging checks at 300,000 bytes per file and 8,000,000 bytes
+for the whole folder. With larger catalogs the encoder reduces the per-file target.
+The catalog exposes `peek_url` only for current manifest/file pairs. Missing or stale
+peeks are null; neither catalog lookup nor hover starts a render. `/api/studio/peeks/{key}.mp4`
+serves the immutable baked movie, including range requests, directly from the installation.
 
 The tool uses `workspace/studio/tmp/poster-bake` as scratch space. In a restricted environment,
 use `--work-dir frontend/node_modules/.cache/poster-bake`.

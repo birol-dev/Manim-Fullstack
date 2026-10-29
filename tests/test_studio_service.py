@@ -48,7 +48,9 @@ def test_catalog_shape(svc):
     assert {p["id"] for p in countdown["presets"]} >= {"launch-countdown"}
     timers = next(s for s in cat["sections"] if s["id"] == "timers")
     card = next(c for c in timers["cards"] if c["id"] == "launch-countdown")
-    assert set(card) == {"id", "template", "title", "summary", "category", "params", "settings", "tags"}
+    assert set(card) == {"id", "template", "title", "summary", "category", "params", "settings", "tags", "peek_url"}
+    assert card["peek_url"] is None or (card["peek_url"].startswith("/api/studio/peeks/")
+                                       and card["peek_url"].endswith(".mp4"))
     theme = cat["themes"][0]
     assert set(theme) == {"id", "name", "dark", "bg", "text", "accent"} and len(theme["accent"]) == 5
     assert [a["id"] for a in cat["aspects"]] == ["16:9", "9:16", "1:1", "4:5"]
@@ -63,8 +65,17 @@ def test_catalog_matches_registry(svc):
     except Exception as exc:  # another template is mid-edit; the service skips it
         pytest.skip(f"a template does not load right now: {exc}")
     cat = run(svc.catalog())
-    assert cat["sections"] == expected["sections"]
-    assert cat["templates"] == expected["templates"]
+
+    def without_peek(card):
+        assert "peek_url" in card
+        return {key: value for key, value in card.items() if key != "peek_url"}
+
+    sections = [{"id": section["id"], "title": section["title"],
+                 "cards": [without_peek(card) for card in section["cards"]]} for section in cat["sections"]]
+    templates = [{**template, "presets": [without_peek(card) for card in template["presets"]]}
+                 for template in cat["templates"]]
+    assert sections == expected["sections"]
+    assert templates == expected["templates"]
 
 
 def test_catalog_skips_a_broken_template(svc, monkeypatch):

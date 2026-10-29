@@ -106,6 +106,9 @@ class Template(StudioScene):
         if self.mode == "poster":
             left.set_value(think * 0.55)
             self.poster()
+        if self.is_peek:
+            self.play(left.animate(rate_func=linear).set_value(think * 0.55), run_time=think * 0.45)
+            self.poster()
 
         main = think - warn_n
         if main > 0:

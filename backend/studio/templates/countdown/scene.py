@@ -103,6 +103,9 @@ class Template(StudioScene):
         if self.mode == "poster":
             left.set_value(seconds * 0.62)
             self.poster()
+        if self.is_peek:
+            self.play(left.animate(rate_func=lambda t: t).set_value(seconds * 0.62), run_time=seconds * 0.38)
+            self.poster()
 
         self.play(left.animate(rate_func=lambda t: t).set_value(warn_at), run_time=seconds - warn_at)
         if warn_at:
@@ -152,7 +155,7 @@ class Template(StudioScene):
             if current is not None:
                 anims.append(FadeOut(current, scale=0.7, run_time=0.25))
             self.play(*anims)
-            if n == max(count - 2, 1) and self.mode == "poster":
+            if n == max(count - 2, 1) and (self.mode == "poster" or self.is_peek):
                 self.poster()
             self.wait(max(0.0, 1 - 0.35))
             current = number

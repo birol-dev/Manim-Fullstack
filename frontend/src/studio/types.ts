@@ -88,6 +88,7 @@ export interface Card {
   params: Params;
   settings: Partial<RenderSettings>;
   tags: string[];
+  peek_url?: string | null;
 }
 
 export interface Section {

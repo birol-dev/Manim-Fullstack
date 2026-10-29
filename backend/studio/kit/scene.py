@@ -72,6 +72,7 @@ class StudioScene(Scene):
         job = runtime.current_job()
         self.job = job
         self.mode = job.get("mode", "video")
+        self.is_peek = self.mode == "motion" and job.get("peek", False)
         self.p = self.Params(**(job.get("params") or {}))
         self.s = RenderSettings(**(job.get("settings") or {}))
         self.theme = Theme(theme_tokens(self.s.theme, self.s.brand))
@@ -137,6 +138,13 @@ class StudioScene(Scene):
 
     def poster(self):
         """Mark the frame that best shows this template (used for thumbnails)."""
+        if self.is_peek and not self._poster_done:
+            # play() normally writes samples BEFORE animation.finish(). Explicitly
+            # encode the settled poster frame, including zero-dt live updaters.
+            self.update_mobjects(0)
+            self._poster_done = True
+            super().wait(1 / config.frame_rate, frozen_frame=True)
+            raise EndSceneEarlyException()
         if self.mode == "poster" and not self._poster_done:
             self.update_mobjects(0)
             self._write_still()
@@ -149,7 +157,7 @@ class StudioScene(Scene):
 
     def construct(self):
         self.build()
-        if self.mode == "poster" and not self._poster_done:
+        if (self.mode == "poster" or self.is_peek) and not self._poster_done:
             self.poster()
         hold = self.remaining()
         if hold > 0.01:
@@ -161,10 +169,10 @@ class StudioScene(Scene):
             self.wait(0.15)
 
     def play(self, *args, **kwargs):
-        if self.mode == "motion" and self.elapsed >= self.job["max_duration"] - 1e-6:
+        if self.mode == "motion" and not self.is_peek and self.elapsed >= self.job["max_duration"] - 1e-6:
             raise EndSceneEarlyException()
         super().play(*args, **kwargs)
-        if self.mode == "motion" and self.elapsed >= self.job["max_duration"] - 1e-6:
+        if self.mode == "motion" and not self.is_peek and self.elapsed >= self.job["max_duration"] - 1e-6:
             raise EndSceneEarlyException()
         if self.mode == "storyboard":
             self._capture()
@@ -201,13 +209,13 @@ class StudioScene(Scene):
     def get_time_progression(self, run_time, *args, **kwargs):
         # Limit sampled frames without changing animation.run_time: a countdown
         # still counts in real seconds, rather than squeezing five minutes into 20s.
-        if self.mode == "motion":
+        if self.mode == "motion" and not self.is_peek:
             run_time = min(run_time, max(0, self.job["max_duration"] - self.elapsed))
         return super().get_time_progression(run_time, *args, **kwargs)
 
     def wait(self, duration=1, *args, **kwargs):
         # Manim's frozen-frame waits bypass get_time_progression.
-        if self.mode == "motion":
+        if self.mode == "motion" and not self.is_peek:
             duration = min(duration, max(0, self.job["max_duration"] - self.elapsed))
             if duration <= 1e-6:
                 raise EndSceneEarlyException()

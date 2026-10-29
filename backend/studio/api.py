@@ -66,6 +66,13 @@ async def get_template(template_id: str):
     return await get_service().template_info(template_id)
 
 
+@router.get("/peeks/{key}.mp4")
+@_errors
+async def get_peek(key: str):
+    return FileResponse(get_service().peek_path(key), media_type="video/mp4",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @router.post("/preview")
 @_errors
 async def post_preview(request: Request):
