@@ -3,6 +3,7 @@ import type { AssetFile } from "@/lib/types";
 
 import type {
   Catalog,
+  MotionPreview,
   ExportFormat,
   ExportJob,
   ExportQuality,
@@ -70,6 +71,12 @@ export function requestPreview(request: PreviewRequest, signal?: AbortSignal): P
   });
 }
 
+export const startMotion = (project: string, request: PreviewRequest) => postJson<MotionPreview>("/api/studio/motion", {
+  project, template: request.template, params: request.params, settings: request.settings,
+});
+export const getMotion = (id: string) => requestJson<MotionPreview>(`/api/studio/motion/${encodeURIComponent(id)}`);
+export const cancelMotion = (id: string) => requestJson<MotionPreview>(`/api/studio/motion/${encodeURIComponent(id)}`, { method: "DELETE" });
+
 export interface ExportRequest {
   template: string;
   params: Params;
@@ -129,11 +136,19 @@ export const iconUrl = (name: string) => apiUrl(`/api/studio/icons/${encodeURICo
 export const assetUrl = (name: string) => apiUrl(`/assets/${encodeURIComponent(name)}`);
 
 export const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
-const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
+export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 
 export function isImageName(name: string) {
   const lower = name.toLowerCase();
   return IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+/** Same filename/size contract as /api/upload-asset; no network needed for validation. */
+export function validateImage(file: File): string | null {
+  if (!isImageName(file.name)) return "Please pick a picture (PNG, JPG, GIF, WebP or SVG).";
+  if (file.size === 0) return "That picture is empty. Please choose another file.";
+  if (file.size > MAX_IMAGE_BYTES) return "That picture is larger than 50 MB. Choose a smaller one.";
+  return null;
 }
 
 /** Uploaded images (the workspace's assets that are pictures). */
@@ -152,8 +167,8 @@ function withSuffix(name: string, suffix: string) {
  * suffix instead of replacing someone's earlier upload.
  */
 export async function uploadImage(file: File): Promise<string> {
-  if (!isImageName(file.name)) throw new Error("Please pick a picture (PNG, JPG, GIF, WebP or SVG).");
-  if (file.size > MAX_IMAGE_BYTES) throw new Error("That picture is larger than 50 MB.");
+  const problem = validateImage(file);
+  if (problem) throw new Error(problem);
   let name = file.name;
   for (let attempt = 0; attempt < 6; attempt += 1) {
     const body = new FormData();

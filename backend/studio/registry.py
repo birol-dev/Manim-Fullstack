@@ -134,8 +134,10 @@ def validate_job(template_id: str, params: Optional[dict], settings: Optional[di
     except TypeError:
         errors.append({"field": "params", "message": "params must be an object"})
         model = None
+    if isinstance(settings, dict) and "aspect" not in settings:
+        settings = {**settings, "aspect": spec.meta.default_aspect}  # as the editor opens it
     try:
-        render_settings = RenderSettings(**(settings or {}))
+        render_settings = RenderSettings(**(settings or {"aspect": spec.meta.default_aspect}))
     except ValidationError as exc:
         errors += _field_errors(exc, "settings")
         render_settings = None

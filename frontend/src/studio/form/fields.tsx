@@ -1,13 +1,14 @@
 /** The simple form widgets: text, numbers, durations, choices, toggles, colors. */
 import { useState, type ReactNode } from "react";
-import { Minus, Palette, Plus } from "lucide-react";
+import { Check, Minus, Plus } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 
 import { inputClass, Segments } from "../components";
-import { formatDuration, parseDuration, type FieldSpec } from "../schemaForm";
+import { ColorControl } from "../ColorControl";
+import { formatDuration, parseDuration, type ArrayChoice, type FieldSpec } from "../schemaForm";
 import { formatCellNumber, parseLocaleNumber } from "../table";
 import { useFormContext } from "./context";
 
@@ -28,24 +29,26 @@ interface FieldShellProps {
   labelId?: string;
   description?: string;
   errors: string[];
-  counter?: ReactNode;
+  counter?: (focused: boolean) => ReactNode;
   tip?: ReactNode;
   /** Groups (radio groups, lists) are labelled by id; their label isn't a <label>. */
   group?: boolean;
   children: ReactNode;
   className?: string;
+  compact?: boolean;
 }
 
 /** Label, control, help text, error text. */
-export function FieldShell({ id, label, labelId, description, errors, counter, tip, group, children, className }: FieldShellProps) {
+export function FieldShell({ id, label, labelId, description, errors, counter, tip, group, children, className, compact }: FieldShellProps) {
   const LabelTag = group ? "span" : "label";
+  const [focused, setFocused] = useState(false);
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      <div className="flex items-baseline justify-between gap-2">
-        <LabelTag id={labelId} {...(group ? {} : { htmlFor: id })} className="text-[13px] font-medium text-fg">
+    <div className={cn("studio-field flex flex-col gap-1.5", className)} onFocusCapture={() => setFocused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false); }}>
+      <div className={cn("flex items-baseline justify-between gap-2", compact && "studio-compact-label")}>
+        <LabelTag id={labelId} {...(group ? {} : { htmlFor: id })} className={cn("text-[13px] font-medium text-fg", compact && "sr-only")}>
           {label}
         </LabelTag>
-        {counter}
+        {counter?.(focused)}
       </div>
       {children}
       {errors.length > 0 && (
@@ -58,7 +61,7 @@ export function FieldShell({ id, label, labelId, description, errors, counter, t
           {description}
         </p>
       )}
-      {tip && <p className="text-xs leading-relaxed text-fg-subtle">{tip}</p>}
+      {tip && <p id={`${id}-tip`} className="text-xs leading-relaxed text-fg-subtle">{tip}</p>}
     </div>
   );
 }
@@ -80,11 +83,12 @@ export function TextWidget({ field, value, onChange, id, describedBy, invalid }:
   return <input {...common} type="text" className={cn(inputClass, "h-9")} />;
 }
 
-export function Counter({ value, max }: { value: unknown; max?: number }) {
+export function Counter({ value, max, focused = false }: { value: unknown; max?: number; focused?: boolean }) {
   if (!max) return null;
   const length = typeof value === "string" ? [...value].length : 0;
+  if (!focused && length / max <= 0.8) return null;
   return (
-    <span className={cn("text-xs tabular-nums", length >= max ? "text-warning" : "text-fg-subtle")} aria-label={`${length} of ${max} characters`}>
+    <span className={cn("studio-character-counter text-xs tabular-nums", length >= max ? "text-warning" : "text-fg-subtle")} data-near-limit={length / max > 0.8 || undefined} aria-label={`${length} of ${max} characters`}>
       {length}/{max}
     </span>
   );
@@ -250,16 +254,32 @@ export function ChoiceWidget({ field, value, onChange, id, describedBy, invalid 
   );
 }
 
+export function ArrayChoiceWidget({ value, onChange, id, describedBy, invalid, options }: WidgetProps & { options: ArrayChoice[] }) {
+  return (
+    <div role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={describedBy} aria-invalid={invalid || undefined} className="studio-array-choices">
+      {options.map((option) => (
+        <label key={option.value} className={cn("studio-array-choice", value === option.value && "studio-array-choice-selected")}>
+          <input type="radio" name={id} value={option.value} checked={value === option.value} onChange={() => onChange(option.value)} aria-label={`${option.badge} ${option.label}`} className="sr-only" />
+          <span aria-hidden className="studio-item-badge">{option.badge}</span>
+          <span>{option.label}</span>
+          <span aria-hidden className="studio-array-choice-check">{value === option.value && <Check />}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 export function ToggleWidget({ field, value, onChange, id, describedBy }: WidgetProps) {
+  const help = field.help ?? field.description;
   return (
     <div className="flex items-start justify-between gap-3 rounded-lg border border-line bg-raised/40 px-3 py-2.5">
       <div className="min-w-0">
         <label htmlFor={id} className="text-[13px] font-medium text-fg">
           {field.title}
         </label>
-        {field.description && (
+        {help && (
           <p id={`${id}-help`} className="mt-0.5 text-xs leading-relaxed text-fg-subtle">
-            {field.description}
+            {help}
           </p>
         )}
       </div>
@@ -268,86 +288,10 @@ export function ToggleWidget({ field, value, onChange, id, describedBy }: Widget
   );
 }
 
-const HEX = /^#[0-9a-f]{6}$/i;
-
-/** Swatches from the theme, a "theme color" choice (null) and a custom picker. */
+/** The same colour control used by Look's backgrounds. */
 export function ColorWidget({ field, value, onChange, id, describedBy, invalid }: WidgetProps) {
   const { theme } = useFormContext();
-  const current = typeof value === "string" && HEX.test(value) ? value.toUpperCase() : null;
-  const swatches = Array.from(new Set([...(theme?.accent ?? []), theme?.text, theme?.bg].filter(Boolean).map((c) => c!.toUpperCase())));
-  const [hexDraft, setHexDraft] = useState<string | null>(null);
-  const custom = current && !swatches.includes(current);
-  return (
-    <div className="flex flex-col gap-2">
-      <div role="radiogroup" aria-labelledby={`${id}-label`} aria-describedby={describedBy} aria-invalid={invalid || undefined} className="flex flex-wrap items-center gap-1.5">
-        {field.nullable && (
-          <button
-            type="button"
-            role="radio"
-            aria-checked={current === null}
-            onClick={() => onChange(null)}
-            className={cn(
-              "flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors",
-              current === null ? "border-accent bg-accent-soft text-fg" : "border-line-strong text-fg-muted hover:text-fg",
-            )}
-          >
-            <span aria-hidden className="size-3.5 rounded-full" style={{ background: theme?.accent?.[0] ?? "var(--color-accent)" }} />
-            Theme color
-          </button>
-        )}
-        {swatches.map((swatch) => (
-          <button
-            key={swatch}
-            type="button"
-            role="radio"
-            aria-checked={current === swatch}
-            aria-label={swatch}
-            title={swatch}
-            onClick={() => onChange(swatch)}
-            className={cn(
-              "size-8 rounded-full border-2 transition-transform hover:scale-105",
-              current === swatch ? "border-fg ring-2 ring-accent/40" : "border-line-strong",
-            )}
-            style={{ background: swatch }}
-          />
-        ))}
-        <label
-          className={cn(
-            "relative flex size-8 cursor-pointer items-center justify-center rounded-full border-2 text-fg-muted transition-transform hover:scale-105 focus-within:ring-2 focus-within:ring-accent",
-            custom ? "border-fg" : "border-dashed border-line-strong",
-          )}
-          style={custom ? { background: current! } : undefined}
-          title="Pick any color"
-        >
-          {!custom && <Palette className="size-4" />}
-          <span className="sr-only">Pick any color</span>
-          <input
-            id={id}
-            type="color"
-            value={(current ?? theme?.accent?.[0] ?? "#2563EB").toLowerCase()}
-            onChange={(event) => onChange(event.target.value.toUpperCase())}
-            className="absolute inset-0 size-full cursor-pointer opacity-0"
-          />
-        </label>
-        <input
-          type="text"
-          aria-label={`${field.title}, color code`}
-          value={hexDraft ?? current ?? ""}
-          placeholder={field.nullable ? "Theme" : "#2563EB"}
-          maxLength={7}
-          onChange={(event) => {
-            const text = event.target.value.trim();
-            setHexDraft(text);
-            const hex = text.startsWith("#") ? text : `#${text}`;
-            if (HEX.test(hex)) onChange(hex.toUpperCase());
-            else if (!text && field.nullable) onChange(null);
-          }}
-          onBlur={() => setHexDraft(null)}
-          className={cn(inputClass, "h-8 w-24 font-mono text-xs uppercase")}
-        />
-      </div>
-    </div>
-  );
+  return <ColorControl id={id} label={field.title} value={value} onChange={onChange} theme={theme} nullable={field.nullable} describedBy={describedBy} invalid={invalid} />;
 }
 
 /** Fallback for a field type the form has no widget for: its value as JSON. */

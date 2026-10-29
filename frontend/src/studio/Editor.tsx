@@ -1,11 +1,11 @@
 /** The editor: a form on the left, the live preview on the right, export on top. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FolderDown, Palette, PenLine, RotateCw, Save } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 import { createProject, friendlyError, getProject, updateProject } from "./api";
 import { Autosaver, type SaveStatus } from "./autosave";
@@ -14,14 +14,17 @@ import { fieldErrorsOf, hasErrorsUnder, matchErrors } from "./errors";
 import { ExportDialog, ExportsPanel } from "./exports";
 import { FormContext } from "./form/context";
 import { SchemaForm } from "./form/SchemaForm";
-import { useLivePreview } from "./hooks";
+import { useExportActivity, useLivePreview } from "./hooks";
+import { isTextEditor } from "./editorHistory";
+import { useEditorHistory } from "./useEditorHistory";
+import "./editor.css";
 import { LookPanel } from "./LookPanel";
 import { ASPECTS, initialSettings, isPortrait } from "./options";
 import { stableKey } from "./preview";
 import { PreviewPanel, type PreviewView } from "./PreviewPanel";
 import type { Route } from "./router";
 import { fieldPaths, fieldsOf, initialParams } from "./schemaForm";
-import type { Aspect, Catalog, FieldError, Params, PreviewRequest, RenderSettings, TemplateInfo } from "./types";
+import type { Aspect, Catalog, FieldError, Params, PreviewRequest, Project, RenderSettings, TemplateInfo } from "./types";
 
 const SETTINGS_PATHS = [
   "settings",
@@ -43,6 +46,15 @@ interface InitialState {
   params: Params;
   settings: RenderSettings;
   projectId: string | null;
+  updated: Project["updated"] | null;
+}
+
+/** How often an open project checks for changes saved elsewhere (an AI agent, another window). */
+export const REMOTE_CHECK_MS = 4000;
+
+/** ISO timestamps from the server sort as text; numbers (tests) as numbers. */
+function isNewer(a: Project["updated"], b: Project["updated"]) {
+  return typeof a === "number" && typeof b === "number" ? a > b : String(a) > String(b);
 }
 
 interface EditorPageProps {
@@ -79,6 +91,7 @@ export function EditorPage({ catalog, route, onProjectCreated }: EditorPageProps
       params: initialParams(template.defaults, card?.params),
       settings: initialSettings(template, card?.settings),
       projectId: null,
+      updated: null,
     };
     return <EditorBody catalog={catalog} template={template} initial={initial} onProjectCreated={onProjectCreated} />;
   }
@@ -104,6 +117,7 @@ function ProjectLoader({ catalog, id, onProjectCreated }: { catalog: Catalog; id
             params: initialParams(template.defaults, project.params),
             settings: initialSettings(template, project.settings),
             projectId: project.id,
+            updated: project.updated,
           },
         });
       },
@@ -131,7 +145,7 @@ function ProjectLoader({ catalog, id, onProjectCreated }: { catalog: Catalog; id
   return <EditorBody catalog={catalog} template={state.template} initial={state.initial} onProjectCreated={onProjectCreated} />;
 }
 
-function SaveIndicator({ status, hasProject }: { status: SaveStatus; hasProject: boolean }) {
+function SaveIndicator({ status, hasProject, onRetry }: { status: SaveStatus; hasProject: boolean; onRetry: () => void }) {
   if (status === "pending" || status === "saving") {
     return (
       <span className="flex items-center gap-1.5 text-xs text-fg-subtle" role="status">
@@ -141,8 +155,8 @@ function SaveIndicator({ status, hasProject }: { status: SaveStatus; hasProject:
   }
   if (status === "error") {
     return (
-      <span className="flex items-center gap-1.5 text-xs text-danger" role="status">
-        <CloudOff className="size-3.5" /> Not saved
+      <span className="studio-save-error" role="status">
+        <CloudOff aria-hidden className="size-3.5" /> Not saved · <button type="button" aria-label="Retry save" onClick={onRetry}>Retry</button>
       </span>
     );
   }
@@ -163,13 +177,13 @@ function FormatPicker({ aspects, value, onChange }: { aspects: Aspect[]; value: 
     label: (
       <>
         <FrameIcon w={item.w} h={item.h} />
-        <span className="hidden xl:inline">{item.label}</span>
+        <span className="studio-format-label">{item.label}</span>
         <span className="text-fg-subtle">{item.value}</span>
       </>
     ),
   }));
   if (options.length < 2) return null;
-  return <Segments value={value} options={options} onChange={onChange} aria-label="Format" size="sm" className="w-auto" />;
+  return <Segments value={value} options={options} onChange={onChange} aria-label="Format" size="sm" className="studio-format-picker" />;
 }
 
 interface EditorBodyProps {
@@ -180,9 +194,7 @@ interface EditorBodyProps {
 }
 
 function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBodyProps) {
-  const [title, setTitle] = useState(initial.title);
-  const [params, setParams] = useState<Params>(initial.params);
-  const [settings, setSettings] = useState<RenderSettings>(initial.settings);
+  const { snapshot: { title, params, settings }, change, travel, history, canUndo, canRedo } = useEditorHistory({ title: initial.title, params: initial.params, settings: initial.settings });
   const [initialProjectId] = useState(initial.projectId);
   const [hasProject, setHasProject] = useState(!!initial.projectId);
   const [tab, setTab] = useState("content");
@@ -190,11 +202,17 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
   const [exportOpen, setExportOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [exportsKey, setExportsKey] = useState(0);
+  const { activity: exportActivity, markSeen: markExportsSeen } = useExportActivity(exportsOpen, exportsKey);
+  const changeExportsOpen = (open: boolean) => {
+    markExportsSeen();
+    setExportsOpen(open);
+  };
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [reloading, setReloading] = useState(false);
-  const [reloadError, setReloadError] = useState<string | null>(null);
+  const [remoteNote, setRemoteNote] = useState(false);
   const [formVersion, setFormVersion] = useState(0);
+  const nativeHistory = useRef(new WeakSet<HTMLElement>());
+  const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
   const [exportErrors, setExportErrors] = useState<{ key: string; errors: FieldError[] } | null>(null);
 
   const fields = useMemo(() => fieldsOf(template.schema), [template.schema]);
@@ -209,7 +227,9 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
   const posterRequest: PreviewRequest = { template: template.id, params, settings: effectiveSettings, mode: "poster" };
   const requestKey = stableKey(posterRequest);
   const poster = useLivePreview(posterRequest);
-  const storyboard = useLivePreview(view === "storyboard" ? { ...posterRequest, mode: "storyboard" } : null);
+  const [motionSession] = useState(() => initial.projectId ?? `editor-${crypto.randomUUID()}`);
+  // Content-timed templates report their actual duration in storyboard metadata.
+  const storyboard = useLivePreview(view === "storyboard" || (template.length_from_params && !!poster.response) ? { ...posterRequest, mode: "storyboard" } : null);
 
   // ---- Autosave ---------------------------------------------------------------------------
   const touched = useRef(false);
@@ -219,15 +239,22 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     editVersion.current += 1;
   };
   const saver = useRef<Autosaver | null>(null);
+  // `updated` of the version on screen: a newer one on the server was saved by someone else.
+  const knownUpdate = useRef(initial.updated);
   const createdRef = useRef(onProjectCreated);
   useEffect(() => {
     createdRef.current = onProjectCreated;
   });
   useEffect(() => {
+    const remember = (project: Project) => {
+      knownUpdate.current = project.updated;
+      return project;
+    };
     const autosaver = new Autosaver({
       projectId: initialProjectId,
-      create: (snapshot, keepalive) => createProject(snapshot, keepalive),
-      update: (id, snapshot, keepalive) => updateProject(id, { title: snapshot.title, params: snapshot.params, settings: snapshot.settings }, keepalive),
+      create: (snapshot, keepalive) => createProject(snapshot, keepalive).then(remember),
+      update: (id, snapshot, keepalive) =>
+        updateProject(id, { title: snapshot.title, params: snapshot.params, settings: snapshot.settings }, keepalive).then(remember),
       onStatus: (status, error) => {
         setSaveStatus(status);
         setSaveError(status === "error" ? friendlyError(error, "Couldn't save this video.") : null);
@@ -255,43 +282,94 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     document.title = `${title.trim() || "Untitled video"} · Studio`;
   }, [title]);
 
-  const setParam = (key: string, value: unknown) => {
-    markTouched();
-    setParams((prev) => ({ ...prev, [key]: value }));
+  const setParam = (key: string, value: unknown, related: Params = {}) => {
+    if (change({ params: { ...history.current.params, ...related, [key]: value } })) markTouched();
   };
   const patchSettings = (patch: Partial<RenderSettings>) => {
-    markTouched();
-    setSettings((prev) => {
-      const next = { ...prev, ...patch };
-      if (patch.aspect && !isPortrait(patch.aspect)) next.safe_zone = false;
-      return next;
-    });
+    const next = { ...history.current.settings, ...patch };
+    if (patch.aspect && !isPortrait(patch.aspect)) next.safe_zone = false;
+    if (change({ settings: next })) markTouched();
   };
 
-  const reload = async () => {
-    const id = saver.current?.id;
-    if (!id || saver.current?.dirty || reloading) return;
-    const version = editVersion.current;
-    setReloading(true);
-    setReloadError(null);
-    try {
-      const project = await getProject(id);
-      if (editVersion.current !== version || saver.current?.dirty) {
-        setReloadError("Your edits were kept. Save them before reloading.");
-        return;
-      }
-      touched.current = false;
-      setTitle(project.title);
-      setParams(initialParams(template.defaults, project.params));
-      setSettings(initialSettings(template, project.settings));
-      setExportErrors(null);
-      setFormVersion((value) => value + 1);
-    } catch (error) {
-      setReloadError(friendlyError(error, "Couldn't reload the saved video."));
-    } finally {
-      setReloading(false);
-    }
+  const restore = (direction: "undo" | "redo") => {
+    if (!travel(direction)) return;
+    markTouched();
+    setRemoteNote(false);
+    setExportErrors(null);
+    setFormVersion((value) => value + 1);
   };
+  const shortcutRef = useRef({ restore });
+  useEffect(() => { shortcutRef.current = { restore }; });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "e") { event.preventDefault(); setExportOpen(true); return; }
+      if (key !== "z" && key !== "y") return;
+      // Native undo stacks aren't exposed. After typing, keep shortcuts local
+      // until blur; the header buttons always use editor history.
+      if (isTextEditor(event.target) && nativeHistory.current.has(event.target)) return;
+      if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')) return;
+      event.preventDefault();
+      shortcutRef.current.restore(key === "y" || event.shiftKey ? "redo" : "undo");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // ---- Changes saved elsewhere (an AI agent over MCP) ---------------------------------------
+  // Checked when the window comes back into focus and every few seconds while it's visible.
+  // They're applied only while nothing typed here is waiting to be saved; your own edits win.
+  const templateRef = useRef(template);
+  useEffect(() => {
+    templateRef.current = template;
+  });
+  useEffect(() => {
+    if (!hasProject) return;
+    let stopped = false;
+    let checking = false;
+    let noteTimer: ReturnType<typeof setTimeout> | undefined;
+    const check = async () => {
+      const id = saver.current?.id;
+      if (stopped || checking || !id || document.hidden || saver.current?.dirty) return;
+      const version = editVersion.current;
+      const known = knownUpdate.current;
+      checking = true;
+      try {
+        const project = await getProject(id);
+        // Stale if anything was typed or saved here meanwhile.
+        if (stopped || editVersion.current !== version || saver.current?.dirty || knownUpdate.current !== known) return;
+        if (known !== null && !isNewer(project.updated, known)) return;
+        knownUpdate.current = project.updated;
+        if (known === null) return;
+        const current = templateRef.current;
+        touched.current = false;
+        change({ title: project.title, params: initialParams(current.defaults, project.params), settings: initialSettings(current, project.settings) }, true);
+        setExportErrors(null);
+        setFormVersion((value) => value + 1);
+        setRemoteNote(true);
+        clearTimeout(noteTimer);
+        noteTimer = setTimeout(() => setRemoteNote(false), 4000);
+      } catch {
+        // Offline or the server restarted: the next check tries again.
+      } finally {
+        checking = false;
+      }
+    };
+    const onVisible = () => {
+      if (!document.hidden) void check();
+    };
+    const timer = setInterval(() => void check(), REMOTE_CHECK_MS);
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      clearTimeout(noteTimer);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [hasProject, change]);
 
   // ---- Errors -----------------------------------------------------------------------------
   const fieldErrors = useMemo(() => {
@@ -310,61 +388,66 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     [settings.locale, theme, matched.byPath],
   );
 
-  const length = template.length_from_params ? null : (settings.length ?? template.default_length);
+  const length = template.length_from_params
+    ? storyboard.response?.storyboard?.length ?? template.default_length
+    : settings.length ?? template.default_length;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-surface px-3 py-2">
-        <Button asChild variant="ghost" size="md" className="-ml-1">
-          <a href="#/" aria-label="Back to all designs">
-            <ArrowLeft />
-            <span className="hidden sm:inline">All designs</span>
-          </a>
-        </Button>
-        <div className="flex min-w-40 flex-1 items-center gap-2">
-          <PenLine aria-hidden className="size-3.5 shrink-0 text-fg-subtle" />
-          <input
-            value={title}
-            maxLength={80}
-            aria-label="Video title"
-            placeholder="Untitled video"
-            onChange={(event) => {
-              markTouched();
-              setTitle(event.target.value);
-            }}
-            className="h-8 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 text-[15px] font-semibold text-fg hover:border-line-strong focus-visible:border-accent focus-visible:outline-none"
-          />
-          <SaveIndicator status={saveStatus} hasProject={hasProject} />
+    <div className="studio-editor" onInputCapture={(event) => { if (isTextEditor(event.target)) nativeHistory.current.add(event.target); }} onBlurCapture={(event) => { nativeHistory.current.delete(event.target); history.boundary(); }}>
+      <header className="studio-editor-header">
+        <div className="studio-editor-identity">
+          <Button asChild variant="ghost" size="md" className="-ml-1">
+            <a href="#/" aria-label="Back to all designs">
+              <ArrowLeft />
+              <span>All designs</span>
+            </a>
+          </Button>
+          <div className="studio-title-group">
+            <input
+              value={title}
+              maxLength={80}
+              aria-label="Video title"
+              placeholder="Untitled video"
+              onChange={(event) => { if (change({ title: event.target.value })) markTouched(); }}
+              className="studio-video-title"
+              style={{ width: `${Math.max(8, Math.min(24, [...title].length + 1))}ch` }}
+            />
+            {remoteNote ? (
+              <span className="flex items-center gap-1 text-xs text-accent" role="status">
+                <Sparkles className="size-3.5" /> Updated by your AI
+              </span>
+            ) : (
+              <SaveIndicator status={saveStatus} hasProject={hasProject} onRetry={() => {
+                saver.current?.change({ title: title.trim() || template.title, template: template.id, params, settings });
+                saver.current?.flush();
+              }} />
+            )}
+            <div className="studio-editor-history" role="group" aria-label="Edit history">
+              <Tooltip content={`Undo (${shortcut}Z)`}><span><Button variant="ghost" size="icon" aria-label="Undo" disabled={!canUndo} onClick={() => restore("undo")}><Undo2 /></Button></span></Tooltip>
+              <Tooltip content={`Redo (${shortcut}Shift+Z / ${shortcut}Y)`}><span><Button variant="ghost" size="icon" aria-label="Redo" disabled={!canRedo} onClick={() => restore("redo")}><Redo2 /></Button></span></Tooltip>
+            </div>
+          </div>
         </div>
         <FormatPicker aspects={template.aspects} value={settings.aspect} onChange={(aspect) => patchSettings({ aspect })} />
-        {hasProject && <Button variant="ghost" size="md" onClick={reload}
-          disabled={reloading || saveStatus === "pending" || saveStatus === "saving" || saveStatus === "error"}
-          title="Load changes saved by your AI. Save your own edits first.">
-          {reloading ? <Spinner /> : <RotateCw />} Reload saved
-        </Button>}
-        <Button variant="secondary" size="md" disabled={saveStatus === "saving"} onClick={() => {
-          saver.current?.change({ title: title.trim() || template.title, template: template.id, params, settings });
-          saver.current?.flush();
-        }}>
-          <Save /> {saveStatus === "error" ? "Retry save" : "Save"}
-        </Button>
-        <Button variant="ghost" size="md" aria-label="Exports" onClick={() => setExportsOpen(true)}>
-          <FolderDown />
-          <span className="hidden md:inline">Exports</span>
-        </Button>
-        <Button variant="primary" size="md" onClick={() => setExportOpen(true)} className="px-4">
-          <Download />
-          Export
-        </Button>
+        <div className="studio-editor-actions">
+          <Tooltip content="Your exports">
+            <Button variant="ghost" size="icon" aria-label="Your exports" aria-description={exportActivity ? "An export is running or ready to open." : undefined} onClick={() => changeExportsOpen(true)} className="studio-exports-button">
+              <FolderDown />
+              {exportActivity && <span className="studio-export-activity" aria-hidden />}
+            </Button>
+          </Tooltip>
+          <Button variant="primary" size="md" onClick={() => setExportOpen(true)} title={`Export (${shortcut}E)`} className="px-4">
+            <Download /> Export
+          </Button>
+        </div>
       </header>
 
       {saveError && <p role="alert" className="border-b border-danger/30 bg-danger-soft px-4 py-2 text-xs text-danger">{saveError} Use Retry save to try again.</p>}
-      {reloadError && <p role="alert" className="border-b border-warning/30 bg-raised px-4 py-2 text-xs text-warning">{reloadError}</p>}
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row lg:overflow-hidden">
-        <aside className="flex shrink-0 flex-col border-line lg:w-[400px] lg:overflow-y-auto lg:border-r xl:w-[440px]">
+      <div className="studio-editor-body">
+        <aside className="studio-editor-sidebar">
           <Tabs value={tab} onValueChange={setTab} className="flex flex-col">
-            <TabsList className="sticky top-0 z-10 h-11 shrink-0 gap-2 border-b border-line bg-surface px-3">
+            <TabsList className="studio-editor-tabs">
               <TabsTrigger value="content" className="text-[13px]">
                 <PenLine className="size-3.5" /> Content
                 {contentBroken && <span className="size-1.5 rounded-full bg-danger" aria-label="has problems" />}
@@ -375,7 +458,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
               </TabsTrigger>
             </TabsList>
             <FormContext.Provider value={formContext}>
-              <TabsContent value="content" className="p-4">
+              <TabsContent value="content" className="studio-editor-panel">
                 {matched.unmatched.length > 0 && (
                   <div role="alert" className="mb-4 flex gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-fg-muted">
                     <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-danger" />
@@ -392,14 +475,14 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
                   <p className="text-sm text-fg-muted">This design has nothing to fill in. Try the Look tab.</p>
                 )}
               </TabsContent>
-              <TabsContent value="look" className="p-4">
-                <LookPanel settings={settings} onChange={patchSettings} template={template} themes={themes} errors={matched.byPath} />
+              <TabsContent value="look" className="studio-editor-panel">
+                <LookPanel key={formVersion} settings={settings} onChange={patchSettings} template={template} themes={themes} errors={matched.byPath} />
               </TabsContent>
             </FormContext.Provider>
           </Tabs>
         </aside>
 
-        <main className={cn("order-first flex h-[45vh] min-h-[260px] shrink-0 flex-col p-4 lg:order-none lg:h-auto lg:min-h-0 lg:flex-1 lg:shrink lg:p-6")}>
+        <main className="studio-editor-preview">
           <PreviewPanel
             view={view}
             onViewChange={setView}
@@ -408,6 +491,8 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
             aspect={settings.aspect}
             transparent={settings.background?.kind === "transparent"}
             length={length}
+            motionRequest={posterRequest}
+            motionSession={motionSession}
           />
         </main>
       </div>
@@ -419,8 +504,14 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
         transparentBackground={settings.background?.kind === "transparent"}
         onFieldErrors={(errors) => setExportErrors({ key: requestKey, errors })}
         onActivity={() => setExportsKey((value) => value + 1)}
+        onSeen={markExportsSeen}
+        onStart={() => {
+          if (!saver.current?.id) saver.current?.change({ title: title.trim() || template.title, template: template.id, params, settings });
+          saver.current?.flush();
+        }}
+        posterUrl={poster.response?.url}
       />
-      <ExportsPanel open={exportsOpen} onOpenChange={setExportsOpen} refreshKey={exportsKey} />
+      <ExportsPanel open={exportsOpen} onOpenChange={changeExportsOpen} refreshKey={exportsKey} />
     </div>
   );
 }

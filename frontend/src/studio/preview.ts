@@ -115,6 +115,9 @@ export class LatestPreview {
   private inFlight = 0;
   private scheduledKey: string | null = null;
   private lastIssuedKey: string | null = null;
+  // Renders run one at a time on the server: while one is out, only the newest edit waits here
+  // (sending each edit would queue stale renders ahead of the one that matters).
+  private queued: { request: PreviewRequest; key: string } | null = null;
   private disposed = false;
   private state: PreviewState = { response: null, pending: false, error: null, shownKey: null };
 
@@ -138,6 +141,7 @@ export class LatestPreview {
     // Already shown or already on its way: nothing to do.
     if (key === this.lastIssuedKey) {
       this.scheduledKey = null;
+      this.queued = null;
       this.emit({ pending: this.inFlight > 0 && this.state.shownKey !== key });
       return;
     }
@@ -145,7 +149,8 @@ export class LatestPreview {
     this.emit({ pending: true });
     const fire = () => {
       this.timer = null;
-      this.issue(request, key);
+      if (this.inFlight > 0) this.queued = { request, key };
+      else this.issue(request, key);
     };
     if (immediate || (this.leading && this.issued === 0)) fire();
     else this.timer = setTimeout(fire, this.delay);
@@ -166,12 +171,13 @@ export class LatestPreview {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.queued = null;
   }
 
   private issue(request: PreviewRequest, key: string) {
     const seq = ++this.issued;
     this.lastIssuedKey = key;
-    this.scheduledKey = null;
+    if (this.scheduledKey === key) this.scheduledKey = null;
     this.inFlight += 1;
     this.fetcher(request).then(
       (response) => this.settle(seq, key, { response, error: null }),
@@ -182,6 +188,11 @@ export class LatestPreview {
   private settle(seq: number, key: string, result: { response?: PreviewResponse; error: unknown }) {
     this.inFlight -= 1;
     if (this.disposed) return;
+    if (this.queued && this.inFlight === 0) {
+      const next = this.queued;
+      this.queued = null;
+      this.issue(next.request, next.key);
+    }
     const stillWaiting = this.scheduledKey !== null || this.inFlight > 0;
     if (seq < this.applied) {
       // An answer to an older request than the one on screen: drop it.

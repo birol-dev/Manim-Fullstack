@@ -85,8 +85,8 @@ describe("schema → form widgets", () => {
     expect(newItem(fields.points.itemFields!)).toEqual({ text: "", icon: null });
     expect(emptyValue({ key: "n", widget: "integer", title: "N", required: false, nullable: false, minimum: 2 })).toBe(2);
     const defaults = { a: 1, list: [{ x: 1 }] };
-    const params = initialParams(defaults, { b: 2 });
-    expect(params).toEqual({ a: 1, list: [{ x: 1 }], b: 2 });
+    const params = initialParams(defaults, { a: 3, b: 2 });
+    expect(params).toEqual({ a: 3, list: [{ x: 1 }] }); // b isn't a field of this template
     (params.list as Array<{ x: number }>)[0].x = 5;
     expect(defaults.list[0].x).toBe(1); // a copy, not the catalog's object
   });

@@ -3,6 +3,9 @@ import { useCallback, useEffect, useState } from "react";
 /** Hash routes: the gallery, an editor (new from a card, or a saved project), and the code IDE. */
 export type Route =
   | { kind: "gallery" }
+  | { kind: "templates"; category?: string; query?: string }
+  | { kind: "videos" }
+  | { kind: "exports" }
   | { kind: "new"; template: string; preset: string }
   | { kind: "project"; id: string }
   | { kind: "author" };
@@ -17,8 +20,15 @@ function decode(part: string | undefined): string {
 }
 
 export function parseRoute(hash: string): Route {
-  const path = hash.replace(/^#/, "").replace(/^\/+/, "").replace(/\/+$/, "");
+  const [pathname, search = ""] = hash.replace(/^#/, "").split("?");
+  const path = pathname.replace(/^\/+/, "").replace(/\/+$/, "");
   const [head, ...rest] = path.split("/");
+  if (head === "templates") {
+    const query = new URLSearchParams(search).get("q");
+    return { kind: "templates", ...(rest[0] ? { category: decode(rest[0]) } : {}), ...(query ? { query } : {}) };
+  }
+  if (head === "videos") return { kind: "videos" };
+  if (head === "exports") return { kind: "exports" };
   if (head === "author") return { kind: "author" };
   if (head === "new" && rest[0]) return { kind: "new", template: decode(rest[0]), preset: decode(rest[1]) };
   if (head === "project" && rest[0]) return { kind: "project", id: decode(rest[0]) };
@@ -27,6 +37,14 @@ export function parseRoute(hash: string): Route {
 
 export function routeHash(route: Route): string {
   switch (route.kind) {
+    case "templates": {
+      const query = route.query ? `?${new URLSearchParams({ q: route.query })}` : "";
+      return `#/templates${route.category ? `/${encodeURIComponent(route.category)}` : ""}${query}`;
+    }
+    case "videos":
+      return "#/videos";
+    case "exports":
+      return "#/exports";
     case "author":
       return "#/author";
     case "new":
@@ -62,7 +80,12 @@ export function useHashRoute() {
     setState((prev) => ({ route, key: prev.key }));
   }, []);
 
-  return { route: state.route, routeKey: state.key, replace };
+  const push = useCallback((route: Route) => {
+    window.history.pushState(window.history.state, "", routeHash(route));
+    setState((prev) => ({ route, key: prev.key + 1 }));
+  }, []);
+
+  return { route: state.route, routeKey: state.key, replace, push };
 }
 
 export function navigate(route: Route) {

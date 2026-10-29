@@ -10,6 +10,7 @@ pytest.importorskip("mcp.server.mcpserver")
 from studio.mcp_server import RestBridge, create_server
 from mcp.server.mcpserver.exceptions import ToolError
 from tests.studio_fakes import make_service
+from tests.studio_fakes import FakeMotionWorker, wait_until
 
 
 def run(coro):
@@ -21,6 +22,19 @@ def payload(result):
     return json.loads(next(c.text for c in result.content if c.type == "text"))
 
 
+def test_agent_motion_preview(tmp_path):
+    service, _ = make_service(tmp_path, motion_worker_factory=FakeMotionWorker)
+    server = create_server(service)
+    try:
+        project = run(service.create_project("countdown"))
+        job = payload(run(server.call_tool("preview", {"project_id": project["id"], "mode": "motion"})))
+        done = wait_until(lambda: (record if (record := payload(run(server.call_tool("get_motion", {"preview_id": job["id"]}))))["status"] == "done" else None))
+        assert done["url"].endswith(".mp4") and done["truncated"]
+        assert payload(run(server.call_tool("cancel_motion", {"preview_id": job["id"]})))["status"] == "done"
+    finally:
+        service.shutdown_sync()
+
+
 def test_agent_project_preview_and_export(tmp_path):
     service, worker = make_service(tmp_path)
     server = create_server(service)
@@ -30,6 +44,9 @@ def test_agent_project_preview_and_export(tmp_path):
         assert "render_code" not in names
         info = payload(run(server.call_tool("get_template", {"template": "countdown"})))
         assert info["schema"]["properties"]["seconds"]["minimum"] >= 1
+        settings = info["settings_schema"]["properties"]
+        assert "pop" in settings["theme"]["enum"] and settings["aspect"]["enum"] == info["aspects"]
+        assert {"background", "brand", "energy", "ending", "safe_zone", "locale"} <= set(settings)
         project = payload(run(server.call_tool("create_project", {"template": "countdown", "params": {"seconds": 5}, "title": "Class break"})))
         pid = project["id"]
         assert run(service.get_project(pid))["title"] == "Class break"
@@ -39,6 +56,10 @@ def test_agent_project_preview_and_export(tmp_path):
         assert not result.is_error, result
         assert any(c.type == "image" and c.mime_type == "image/png" for c in result.content)
         assert worker.calls[-1]["job"]["mode"] == "storyboard"
+        import base64
+        from tests.studio_fakes import tiny_png
+        image = payload(run(server.call_tool("add_image", {"data_base64": base64.b64encode(tiny_png(2, 2)).decode()})))
+        assert image["name"].startswith("agent-") and image["name"].endswith(".png")
         export = payload(run(server.call_tool("export_project", {"project_id": pid, "quality": "draft"})))
         assert export["template"] == "countdown" and export["id"]
         assert run(service.list_exports())[0]["id"] == export["id"]
@@ -55,6 +76,23 @@ def test_agent_field_errors_are_actionable(tmp_path):
         # Draft projects may save invalid fields while typing. Rendering validates them.
         project = payload(run(server.call_tool("create_project", {"template": "countdown", "params": {"seconds": -2}})))
         with pytest.raises(ToolError, match="params.seconds"):
+            run(server.call_tool("preview", {"project_id": project["id"]}))
+    finally:
+        service.shutdown_sync()
+
+
+def test_agent_quiz_choices_keep_1_based_validation(tmp_path):
+    service, _ = make_service(tmp_path)
+    server = create_server(service)
+    try:
+        info = payload(run(server.call_tool("get_template", {"template": "quiz"})))
+        correct = info["schema"]["properties"]["correct"]
+        assert correct["x-choice-of"] == "options" and correct["type"] == "integer"
+        project = payload(run(server.call_tool("create_project", {"template": "quiz", "params": {"options": ["Yes", "No"], "correct": 2}})))
+        result = run(server.call_tool("preview", {"project_id": project["id"]}))
+        assert not result.is_error
+        payload(run(server.call_tool("update_project", {"project_id": project["id"], "params": {"options": ["Yes", "No"], "correct": 3}})))
+        with pytest.raises(ToolError, match="params.correct"):
             run(server.call_tool("preview", {"project_id": project["id"]}))
     finally:
         service.shutdown_sync()

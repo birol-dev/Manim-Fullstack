@@ -137,7 +137,7 @@ export function useSmoothImage(url: string | null): string | null {
 }
 
 /** Recent exports, refreshed while any is still being made. */
-export function useExports(enabled: boolean, refreshKey = 0) {
+export function useExports(enabled: boolean, refreshKey = 0, onLoaded?: (jobs: ExportJob[]) => void) {
   const [state, setState] = useState<{ jobs: ExportJob[] | null; error: unknown }>({ jobs: null, error: null });
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -147,6 +147,7 @@ export function useExports(enabled: boolean, refreshKey = 0) {
     listExports().then(
       (jobs) => {
         if (!live) return;
+        onLoaded?.(jobs);
         setState({ jobs, error: null });
         if (jobs.some((job) => ACTIVE_EXPORT.has(job.status))) timer = setTimeout(() => setTick((value) => value + 1), 1500);
       },
@@ -160,7 +161,7 @@ export function useExports(enabled: boolean, refreshKey = 0) {
       live = false;
       if (timer) clearTimeout(timer);
     };
-  }, [enabled, refreshKey, tick]);
+  }, [enabled, refreshKey, tick, onLoaded]);
   const cancel = async (job: ExportJob) => {
     try {
       await cancelExport(job.id);
@@ -170,4 +171,45 @@ export function useExports(enabled: boolean, refreshKey = 0) {
     }
   };
   return { ...state, cancel, retry: () => setTick((value) => value + 1) };
+}
+
+export const SEEN_EXPORTS_KEY = "studio:seen-exports";
+
+function storedSeenExports(): Set<string> | null {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(SEEN_EXPORTS_KEY) ?? "null");
+    return Array.isArray(value) && value.every((id) => typeof id === "string") ? new Set(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeSeenExports(seen: Set<string>) {
+  try { localStorage.setItem(SEEN_EXPORTS_KEY, JSON.stringify([...seen])); } catch { /* Storage can be unavailable in private windows. */ }
+}
+
+/** Seed the first successful listing, so pre-existing files never become new notifications. */
+export function useExportActivity(open: boolean, refreshKey = 0) {
+  const [seen, setSeen] = useState(storedSeenExports);
+  const seenRef = useRef(seen);
+  const onLoaded = useCallback((jobs: ExportJob[]) => {
+    if (seenRef.current !== null) return;
+    const initial = new Set(jobs.filter((job) => job.status === "done").map((job) => job.id));
+    seenRef.current = initial;
+    storeSeenExports(initial);
+    setSeen(initial);
+  }, []);
+  const { jobs } = useExports(true, refreshKey, onLoaded);
+  const markSeen = (id?: string) => {
+    // Wait for the first successful listing before establishing the baseline.
+    if (seenRef.current === null) return;
+    const ids = id ? [id] : (jobs ?? []).filter((job) => job.status === "done").map((job) => job.id);
+    if (ids.every((id) => seenRef.current!.has(id))) return;
+    const next = new Set([...seenRef.current, ...ids]);
+    seenRef.current = next;
+    storeSeenExports(next);
+    setSeen(next);
+  };
+  const activity = jobs?.some((job) => ACTIVE_EXPORT.has(job.status) || (!open && seen !== null && job.status === "done" && !seen.has(job.id))) ?? false;
+  return { activity, markSeen };
 }

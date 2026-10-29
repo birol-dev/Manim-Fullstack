@@ -71,6 +71,7 @@ class Counter(VGroup):
         self._chars = "".join(sorted(set("".join(samples))))
         self._glyphs = _glyph_set(self._chars, self.family, weight, size, color)
         self._shown = ""
+        self._slots = []
         self.value = value
         self._compose(value, np.zeros(3), 1.0, None)
 
@@ -93,6 +94,8 @@ class Counter(VGroup):
             glyph, offset, advance = self._glyphs[ch]
             if glyph is not None:
                 g = glyph.copy()
+                # Rebuilt digits keep the counter's layer during every count-up.
+                g.set_z_index(self.z_index)
                 g.move_to([x + (advance - self._gap()) / 2, offset + g.height / 2, 0])
                 parts.append(g)
                 shown.append(ch)
@@ -106,7 +109,29 @@ class Counter(VGroup):
                 p.scale(scale, about_point=anchor_point)
             if opacity is not None:
                 p.set_opacity(opacity)
-        self.submobjects = parts
+        # Cairo flattens the moving family at the start of a play. Replacing
+        # glyph objects leaves those original glyphs in its render list, drawn
+        # alongside the new readout. Keep each slot's identity for the entire
+        # count, including when the formatted number gets shorter or longer.
+        slots = list(self._slots)
+        for index, part in enumerate(parts):
+            if index < len(slots):
+                # become() turns an empty slot into a nested group. Copy the
+                # glyph path/style directly so revived slots stay flat too.
+                slots[index].set_points(part.points.copy())
+                slots[index].match_style(part, family=False)
+                slots[index].set_z_index(self.z_index)
+            else:
+                slots.append(part)
+        for unused in slots[len(parts):]:
+            unused.clear_points()
+            unused.submobjects = []
+        self._slots = slots
+        # Empty VMobjects contribute the origin to Manim's width/height reducer.
+        # Retain inactive slots in the pool, outside the visible family, so a
+        # moved counter's bounds still describe only its actual glyphs.
+        self.submobjects = slots[:len(parts)]
+        self._text = text
         self._shown = "".join(shown)
         self.value = value
 
@@ -130,6 +155,9 @@ class Counter(VGroup):
         return np.array([x, baseline, 0.0]), scale, ref.get_fill_opacity()
 
     def set_value(self, value: float) -> "Counter":
+        if self.text_for(value) == self._text:
+            self.value = value
+            return self
         if self.submobjects:
             point, scale, opacity = self._state()
         else:

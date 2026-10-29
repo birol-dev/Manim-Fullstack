@@ -61,49 +61,54 @@ describe("LatestPreview", () => {
     expect(preview.current).toMatchObject({ response: res("/hey.png"), pending: false, error: null });
   });
 
-  it("sends the first request at once with leading", () => {
-    const { fetcher } = controllableFetcher();
+  it("sends the first request at once with leading", async () => {
+    const { calls, fetcher } = controllableFetcher();
     const preview = new LatestPreview({ fetcher, leading: true, onChange: () => {} });
     preview.schedule(req("first"));
     expect(fetcher).toHaveBeenCalledTimes(1);
+    calls[0].resolve(res("/first.png"));
+    await flush();
     preview.schedule(req("second"));
     expect(fetcher).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(400);
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it("ignores a response that arrives after a newer one", async () => {
+  it("keeps one request out at a time and sends only the newest edit after it", async () => {
     const { calls, fetcher } = controllableFetcher();
     const preview = new LatestPreview({ fetcher, onChange: () => {} });
     preview.schedule(req("old"));
     vi.advanceTimersByTime(400);
+    preview.schedule(req("middle"));
+    vi.advanceTimersByTime(400);
     preview.schedule(req("new"));
     vi.advanceTimersByTime(400);
+    expect(calls).toHaveLength(1);
+    expect(preview.current.pending).toBe(true);
+
+    calls[0].resolve(res("/old.png"));
+    await flush();
     expect(calls).toHaveLength(2);
+    expect(calls[1].request.params.title).toBe("new");
+    expect(preview.current).toMatchObject({ response: res("/old.png"), pending: true });
 
     calls[1].resolve(res("/new.png"));
     await flush();
     expect(preview.current).toMatchObject({ response: res("/new.png"), pending: false });
-
-    calls[0].resolve(res("/old.png"));
-    await flush();
-    expect(preview.current.response).toEqual(res("/new.png"));
-    expect(preview.current.pending).toBe(false);
   });
 
-  it("shows an older answer while a newer one is on its way, then replaces it", async () => {
+  it("drops a held edit when the content goes back to what is already on its way", async () => {
     const { calls, fetcher } = controllableFetcher();
     const preview = new LatestPreview({ fetcher, onChange: () => {} });
     preview.schedule(req("a"));
     vi.advanceTimersByTime(400);
     preview.schedule(req("b"));
     vi.advanceTimersByTime(400);
+    preview.schedule(req("a"));
     calls[0].resolve(res("/a.png"));
     await flush();
-    expect(preview.current).toMatchObject({ response: res("/a.png"), pending: true });
-    calls[1].resolve(res("/b.png"));
-    await flush();
-    expect(preview.current).toMatchObject({ response: res("/b.png"), pending: false });
+    expect(calls).toHaveLength(1);
+    expect(preview.current).toMatchObject({ response: res("/a.png"), pending: false });
   });
 
   it("keeps the last image when a request fails, and clears the error on success", async () => {

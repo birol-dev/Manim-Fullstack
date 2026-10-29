@@ -25,14 +25,18 @@ META = TemplateMeta(
 
 class Params(TemplateParams):
     seconds: float = duration(300, title="Timer length", ge=3, le=3600,
+                              help="How long the timer runs.",
                               description="How long the timer runs, in seconds (5 minutes = 300).")
     title: str = text("Quiet reading time", title="Title", max_length=60,
                       description="What the time is for. Leave empty for no title.")
     subtitle: str = text("", title="Note", max_length=80, description="A second line, e.g. 'Back at 10:30'.")
     style: Literal["ring", "bar", "big"] = choice(
         "ring", title="Style", labels={"ring": "Ring", "bar": "Progress bar", "big": "Big numbers"},
-        description="ring: a circle that empties; bar: a bar that shrinks; big: large seconds that pop "
-                    "(best for short countdowns like 10 to 1).")
+        option_help={"ring": "A circle that empties as time runs out.",
+                     "bar": "A bar that shrinks as time runs out.",
+                     "big": "Large seconds that pop. Best for short countdowns."},
+        description="Ring: a circle that empties. Progress bar: a bar that shrinks. Big numbers: large seconds "
+                    "that pop (best for short countdowns like 10 to 1).")
     finish_text: str = text("Time's up!", title="Finish message", max_length=40)
     warn_last: bool = toggle(True, title="Highlight the last 10 seconds")
     confetti: bool = toggle(False, title="Confetti at the end")

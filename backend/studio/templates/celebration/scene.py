@@ -44,6 +44,9 @@ FLAVORS = {
 FALLBACK_ICONS = ("sparkles", "star")
 HERO_BLOCK = 1.24  # the hero (with halo and orbit) is this many diameters tall
 SCALES = (1.0, 0.92, 0.85, 0.78, 0.72, 0.66, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35)
+TEXT_Z = 10
+ICON_Z = 5
+CONFETTI_Z = -1
 
 
 class Template(StudioScene):
@@ -71,7 +74,6 @@ class Template(StudioScene):
         self.on_accent = fx.on_color(self.accent, "#FFFFFF", "#111111") if p.accent else th.on_accent
         # Color for big type: the accent when it reads on the background, else another accent, else the text color.
         self.ink = fx.readable(accents, th.bg, th.text, 2.7)
-        self.small_ink = fx.readable(accents, th.bg, th.text, 4.0)
         self.mark = self.accent if self.ink != self.accent else accents[1]
 
     # ------------------------------------------------------------------ layout
@@ -100,7 +102,8 @@ class Template(StudioScene):
                              **kw)
         if group.width > width:
             group.scale(width / group.width)
-        return group
+        # Set the whole family: entrances animate individual lines and glyphs.
+        return group.set_z_index(TEXT_Z)
 
     def _texts(self, k, width, align):
         """The text mobjects at scale *k*, each centered at the origin."""
@@ -109,6 +112,7 @@ class Template(StudioScene):
         primary = self.flavor["number_primary"]
         t = SimpleNamespace(headline=None, name=None, counter=None, label=None, message=None, signoff=None)
         common = {"font": th.font, "align": align, "emphasis_color": self.ink}
+        body = {**common, "emphasis_color": th.text}
 
         headline = p.headline or OCCASIONS[p.occasion]["headline"]
         t.headline = self._fit(th.display(headline), width=width, size=(58 if land else 64) * k, min_size=30,
@@ -118,6 +122,7 @@ class Template(StudioScene):
                              max_lines=2, one_line=0.45, weight=th.display_weight, color=self.ink, **common)
             wave = fx.squiggle(min(max(name.width * 0.6, 1.6), 4.6), self.mark, stroke=max(5.0, 7.5 * k))
             wave.next_to(name, DOWN, buff=0.16 * min(k, 1))
+            wave.set_z_index(TEXT_Z)
             if align == "left":
                 wave.align_to(name, LEFT)
             else:
@@ -132,13 +137,13 @@ class Template(StudioScene):
             t.counter = self._counter(digit_h, width, align)
             if p.number_label:
                 t.label = self._fit(p.number_label, width=width, size=38 * k, min_size=24, max_lines=2,
-                                    weight="NORMAL", color=th.muted, **common)
+                                    weight="NORMAL", color=th.text, **body)
         if p.message:
             t.message = self._fit(p.message, width=width * 0.96, size=38 * k, min_size=26, max_lines=5,
-                                  color=th.muted, line_spacing=1.24, **common)
+                                  color=th.text, line_spacing=1.24, **body)
         if p.from_line:
             t.signoff = self._fit(p.from_line, width=width, size=34 * k, min_size=24, max_lines=2, weight="BOLD",
-                                  color=self.small_ink, **common)
+                                  color=th.text, **body)
         return t
 
     def _counter(self, digit_h, width, align):
@@ -148,7 +153,7 @@ class Template(StudioScene):
 
         def make(size):
             return Counter(p.number, size=size, font=th.font, weight=th.display_weight, color=self.ink,
-                           anchor=anchor, fmt=fmt)
+                           anchor=anchor, fmt=fmt).set_z_index(TEXT_Z)
 
         size = size_for_height(digit_h, font=th.font, weight=th.display_weight)
         counter = make(size)
@@ -169,7 +174,9 @@ class Template(StudioScene):
                 rows.append(SimpleNamespace(key=key, mob=mob, gap=gap * g))
 
         add("headline", t.headline, 0.46)
-        add("name", t.name_block, 0.2)
+        # Row gaps normally scale with k; this one follows the fitted name itself.
+        name_gap = 0.18 * t.name.height if t.name is not None else 0
+        add("name", t.name_block, name_gap / g)
         add("counter", t.counter, 0.5)
         add("label", t.label, 0.16)
         add("message", t.message, 0.5)
@@ -275,13 +282,13 @@ class Template(StudioScene):
             disc = Circle(radius=D * 0.14).set_fill(accent, opacity=1).set_stroke(th.surface, width=D * 1.7)
             glyph = self._icon(D * 0.15, self.on_accent).move_to([0, 0, 0])
             h.badge = VGroup(disc, glyph).move_to(badge_center)
-            h.badge.set_z_index(1)
+            h.badge.set_z_index(ICON_Z)
         else:
             disc = Circle(radius=D * 0.4).set_fill(accent, opacity=1).set_stroke(width=0).move_to(center)
             disc.set_z_index(-2)
             h.core = [disc]
             h.icon = self._icon(D * 0.4, self.on_accent).move_to(center)
-            h.icon.set_z_index(0)
+            h.icon.set_z_index(ICON_Z)
         orbit_r = D * 0.62
         dashes = DashedVMobject(Circle(radius=orbit_r), num_dashes=40, dashed_ratio=0.4)
         dashes.set_stroke(self.accents[1], width=3, opacity=0.65)
@@ -393,13 +400,20 @@ class Template(StudioScene):
             count = int(count * 0.55)  # a thumbnail should keep the text readable
         party = fx.Party(self.clock, start, colors=self.accents, frame_w=lay.frame_width, frame_h=lay.frame_height,
                          mode=mode, origin=tuple(hero.center[:2]), count=count, seed=seed, size=0.27)
-        party.set_z_index(10)
-        return party
+        party.set_z_index(CONFETTI_Z)  # over the hero disc, under all foreground families
+        return self.keep_particles_clear(party, self._particle_foreground)
 
     def _intro(self, parts):
         m, th, lay = self.motion, self.theme, self.layout
         t = parts.texts
         hero = self._hero(parts.D, parts.hero_center)
+        # Clear whole lines, including spaces/letter holes and antialiased edges.
+        # Keep references to animated geometry as well as the settled layout.
+        self._particle_foreground = [line for group in
+                                     (t.headline, t.name, t.label, t.message, t.signoff) if group is not None
+                                     for line in group.lines]
+        self._particle_foreground += [mob for mob in (t.counter, hero.icon, hero.badge,
+                                                       getattr(t, "wave", None)) if mob is not None]
         has_message = t.message is not None or t.signoff is not None
 
         # Time scale: fit the whole entrance into ~72% of the requested length.

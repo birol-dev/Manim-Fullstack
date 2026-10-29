@@ -47,7 +47,8 @@ class Params(TemplateParams):
         [Option(text="Venus"), Option(text="Mars"), Option(text="Jupiter"), Option(text="Mercury")],
         title="Answers", min_items=2, max_items=4, item_title="Answer",
         description="2 to 4 short answers (use two for true/false). The order you list them is the order shown.")
-    correct: int = integer(2, title="Correct answer", ge=1, le=4,
+    correct: int = integer(2, title="Correct answer", ge=1, le=4, choice_of="options",
+                           help="Choose the right answer.",
                            description="The position of the correct answer in the list: 1 is the first "
                                        "answer, 2 the second, and so on.")
     think_seconds: int = integer(8, title="Thinking time", ge=3, le=30, unit="seconds",

@@ -53,6 +53,7 @@ class FakeWorker:
             f.write(data)
         return {"id": len(self.calls), "ok": True, "ms": 1, "output": out}
 
+
     def start(self):
         self.alive = True
         return {"event": "ready"}
@@ -63,6 +64,34 @@ class FakeWorker:
 
     def close(self):
         self.stop()
+
+
+class FakeMotionWorker(FakeWorker):
+    def __init__(self, block=False):
+        super().__init__()
+        self.block = block
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.cancelled = threading.Event()
+
+    def render(self, job, width, height, timeout=None, cancel=None):
+        from studio.worker import WorkerCancelled
+
+        self.calls.append({"job": job, "width": width, "height": height})
+        self.started.set()
+        while self.block and not self.release.wait(0.01):
+            if cancel.is_set():
+                self.cancelled.set()
+                raise WorkerCancelled()
+        if self.fail:
+            raise self.fail
+        with open(job["output"], "wb") as target:
+            target.write(MP4)
+        return {"duration": 20.0, "truncated": True}
+
+    def close(self):
+        self.release.set()
+        super().close()
 
 
 class FakeRunner:

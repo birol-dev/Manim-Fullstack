@@ -52,10 +52,10 @@ export const LOCALES: Array<{ value: string; label: string; sample: string }> = 
 ];
 
 export const EXPORT_FORMATS: Array<{ value: ExportFormat; label: string; hint: string; video: boolean; transparent?: boolean }> = [
-  { value: "mp4", label: "Video (MP4)", hint: "Plays everywhere: phones, social media, slides.", video: true },
-  { value: "gif", label: "GIF", hint: "A silent loop for chats, emails and websites. Bigger file, fewer colors.", video: false },
-  { value: "webm", label: "See-through video (WebM)", hint: "Transparent background, for websites and video editors.", video: true, transparent: true },
-  { value: "mov", label: "See-through video (MOV)", hint: "Transparent background, for Premiere, Final Cut or iMovie. Large file.", video: true, transparent: true },
+  { value: "mp4", label: "Video (MP4)", hint: "Plays anywhere: phones, social media and slides.", video: true },
+  { value: "gif", label: "GIF", hint: "A silent loop for messages and websites.", video: false },
+  { value: "webm", label: "See-through video (WebM)", hint: "Transparent video for websites and editors.", video: true, transparent: true },
+  { value: "mov", label: "See-through video (MOV)", hint: "Transparent video for Premiere and Final Cut.", video: true, transparent: true },
   { value: "png", label: "Picture (PNG)", hint: "One still image of the best moment.", video: false },
 ];
 

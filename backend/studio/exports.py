@@ -224,6 +224,10 @@ class ExportManager:
             if self._loaded:
                 return
             self._loaded = True
+            if os.path.isdir(self.work_dir):
+                for name in os.listdir(self.work_dir):
+                    if _EXPORT_ID.fullmatch(name):
+                        shutil.rmtree(os.path.join(self.work_dir, name), ignore_errors=True)
             try:
                 with open(self.index_path, encoding="utf-8") as f:
                     data = json.load(f)
@@ -255,6 +259,22 @@ class ExportManager:
         if len(records) > self.max_records:
             for old in records[self.max_records:]:
                 if old.get("status") in FINISHED:
+                    filename = old.get("filename")
+                    if filename and os.path.basename(filename) == filename:
+                        path = os.path.realpath(os.path.join(self.exports_dir, filename))
+                        root = os.path.realpath(self.exports_dir)
+                        try:
+                            inside = path != root and os.path.commonpath([root, path]) == root
+                        except ValueError:
+                            inside = False
+                        if inside:
+                            try:
+                                os.unlink(os.path.join(self.exports_dir, filename))
+                            except FileNotFoundError:
+                                pass
+                            except OSError as exc:
+                                logger.warning("studio: could not delete pruned export %s (%s)", filename, exc)
+                                continue
                     self._records.pop(old["id"], None)
             records = [r for r in records if r["id"] in self._records]
         data = json.dumps({"version": 1, "exports": [public(r) for r in records]}, indent=1).encode("utf-8")
@@ -368,6 +388,7 @@ class ExportManager:
                 thread.join(15)
             finally:
                 self._lock.acquire()
+            thread = self._thread
         self._stopping = False
         if thread is not None and thread.is_alive():
             self._wake.notify_all()  # still finishing a job: it keeps serving the queue
@@ -421,8 +442,10 @@ class ExportManager:
 
     def _publish(self, record: dict, src: str, ext: str) -> str:
         os.makedirs(self.exports_dir, exist_ok=True)
-        name = f"{record['_slug']}-{record['id'][:6]}{ext.lower()}"
+        name = f"{record['_slug']}-{record['id']}{ext.lower()}"
         dest = os.path.join(self.exports_dir, name)
+        if os.path.exists(dest):  # ids are unique: never replace another export's file
+            raise FileExistsError(f"An export file named {name} already exists.")
         shutil.move(src, dest)
         return dest
 
@@ -437,6 +460,7 @@ class ExportManager:
         job = record["_job"]
         job_dir = os.path.join(self.work_dir, export_id)
         duration = None
+        final = None
         try:
             os.makedirs(job_dir, exist_ok=True)
             if record["format"] == "png":
@@ -484,11 +508,18 @@ class ExportManager:
                 path = runner.run(video, on_progress, on_log)
                 self._check_cancel(record)
                 final = self._publish(record, path, os.path.splitext(path)[1] or f".{record['format']}")
-            rel = os.path.relpath(final, self.media_root).replace("\\", "/")
-            self._update(record, save=True, status="done", progress=100, message="Ready",
-                         url="/media/" + rel, filename=os.path.basename(final), size=os.path.getsize(final),
-                         duration=duration, finished=utc_now())
+            with self._lock:
+                self._check_cancel(record)
+                rel = os.path.relpath(final, self.media_root).replace("\\", "/")
+                self._update(record, save=True, status="done", progress=100, message="Ready",
+                             url="/media/" + rel, filename=os.path.basename(final), size=os.path.getsize(final),
+                             duration=duration, finished=utc_now())
         except ExportCancelled:
+            if final is not None:
+                try:
+                    os.unlink(final)
+                except OSError:
+                    pass
             if record.get("_cancel"):
                 self._update(record, save=True, status="cancelled", progress=None, message="Cancelled",
                              finished=utc_now())

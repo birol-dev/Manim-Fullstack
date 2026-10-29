@@ -56,15 +56,24 @@ def _prepared(path: str, mtime: float, shape: str, max_px: int):
 
 def image(path: str, *, height: float | None = None, width: float | None = None, shape: str = "any",
           max_px: int = 1600):
-    """An ImageMobject from *path*; ``shape``: any, square, circle, rounded."""
-    pixels = _prepared(path, os.path.getmtime(path), shape, max_px)
-    mob = ImageMobject(pixels)
+    """An ImageMobject from *path*; ``shape``: any, square, circle, rounded.
+
+    An SVG (the upload field accepts them) comes back as vectors, uncropped: inside a circle
+    it is shrunk to fit within it instead.
+    """
+    vector = path.lower().endswith(".svg")
+    if vector:
+        mob = SVGMobject(path)
+    else:
+        mob = ImageMobject(_prepared(path, os.path.getmtime(path), shape, max_px))
     if height is not None and width is not None:
         mob.scale(min(height / mob.height, width / mob.width))
     elif height is not None:
         mob.scale_to_fit_height(height)
     elif width is not None:
         mob.scale_to_fit_width(width)
+    if vector and shape == "circle":
+        mob.scale(0.7)  # a square's corners touch a circle at 1/sqrt(2)
     return mob
 
 

@@ -1,4 +1,4 @@
-"""Desktop-only uvicorn host. Port 0 is bound once and passed directly to uvicorn."""
+"""Desktop-only uvicorn host. A persisted loopback port is passed directly to uvicorn."""
 from __future__ import annotations
 
 import argparse
@@ -11,12 +11,41 @@ import socket
 import sys
 
 
+DEFAULT_PORT = 47817
+
+
+def bind_socket(port_file: Path) -> socket.socket:
+    try:
+        port = int(port_file.read_text(encoding="ascii"))
+        if not 0 < port < 65536:
+            port = DEFAULT_PORT
+    except (OSError, ValueError):
+        port = DEFAULT_PORT
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        # Exclusive use on Windows; no reuse of an unrelated listener's port.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            sock.bind(("127.0.0.1", 0))
+        try:
+            port_file.write_text(f"{sock.getsockname()[1]}\n", encoding="ascii")
+        except OSError:
+            print("Could not save desktop port; address may change on next launch.", file=sys.stderr)
+        return sock
+    except BaseException:
+        sock.close()
+        raise
+
+
 def main():
     # No imports of backend code or descendants before the parent assigns our Job.
     if sys.stdin.buffer.readline() != b"start\n":
         return 2
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-root", type=Path, required=True)
+    parser.add_argument("--data-dir", type=Path, required=True)
     args = parser.parse_args()
     root = args.app_root.resolve()
     token = os.environ["MANIM_API_TOKEN"]
@@ -32,10 +61,7 @@ def main():
     if Path(backend.FRONTEND_DIR).resolve() != Path(os.environ["MANIM_FRONTEND_DIR"]).resolve():
         raise RuntimeError("Backend must support MANIM_FRONTEND_DIR before desktop launch.")
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    # Exclusive use on Windows; no reuse of an unrelated listener's port.
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-    sock.bind(("127.0.0.1", 0))
+    sock = bind_socket(args.data_dir / "desktop-port")
     port = sock.getsockname()[1]
     authority = f"127.0.0.1:{port}"
     origin = f"http://{authority}"

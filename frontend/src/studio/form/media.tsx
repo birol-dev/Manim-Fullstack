@@ -1,15 +1,17 @@
 /** Picture and icon widgets. */
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { ImageIcon, ImagePlus, Search, Trash2, Upload } from "lucide-react";
+import { Crop, ImageIcon, ImagePlus, Search, Trash2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { AssetFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { assetUrl, friendlyError, listIcons, listImages, uploadImage } from "../api";
+import { assetUrl, friendlyError, listIcons, listImages, uploadImage, validateImage } from "../api";
 import { inputClass, Spinner, StudioIcon } from "../components";
 import { iconLabel } from "../options";
+import { CropDialog } from "./CropDialog";
+import "../editor.css";
 import type { WidgetProps } from "./fields";
 
 const ACCEPT = "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.png,.jpg,.jpeg,.gif,.webp,.svg";
@@ -41,51 +43,68 @@ function Thumb({ name, shape, className }: { name: string | null; shape?: string
 export function ImageWidget({ field, value, onChange, id, describedBy, invalid }: WidgetProps) {
   const name = typeof value === "string" && value ? value : null;
   const [busy, setBusy] = useState(false);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const [cropName, setCropName] = useState<string | null>(null);
+  const [retryFile, setRetryFile] = useState<File | null>(null);
+  const operation = useRef(0);
+  useEffect(() => () => { operation.current += 1; }, []);
   const [problem, setProblem] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const upload = async (file: File | undefined) => {
-    if (!file) return;
-    setBusy(true);
+    if (!file || busy) return;
     setProblem(null);
+    const validation = validateImage(file);
+    if (validation) { setRetryFile(null); setProblem(validation); return; }
+    const current = ++operation.current;
+    setRetryFile(file);
+    setFileName(file.name);
+    setBusy(true);
     try {
-      onChange(await uploadImage(file));
+      const uploaded = await uploadImage(file);
+      if (operation.current !== current) return;
+      setCropName(uploaded);
+      setRetryFile(null);
     } catch (error) {
-      setProblem(friendlyError(error, "Couldn't upload that picture."));
+      if (operation.current === current) setProblem(friendlyError(error, "Couldn't upload that picture."));
     } finally {
-      setBusy(false);
+      if (operation.current === current) setBusy(false);
     }
   };
 
   const onDrop = (event: DragEvent) => {
     event.preventDefault();
     setDragging(false);
-    void upload(event.dataTransfer.files?.[0]);
+    if (!busy) void upload(event.dataTransfer.files?.[0]);
   };
 
   return (
     <div className="flex flex-col gap-1.5">
       <div
+        aria-busy={busy}
+        data-dragging={dragging || undefined}
         onDragOver={(event) => {
           event.preventDefault();
-          setDragging(true);
+          if (!busy) setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
         onDrop={onDrop}
         aria-describedby={describedBy}
         className={cn(
-          "flex items-center gap-3 rounded-lg border border-dashed p-2.5 transition-colors",
+          "studio-image-upload flex items-center gap-3 rounded-lg border border-dashed p-2.5 transition-colors",
           dragging ? "border-accent bg-accent-soft" : invalid ? "border-danger" : "border-line-strong bg-raised/30",
         )}
       >
         <Thumb name={name} shape={field.shape} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <p className="truncate text-xs text-fg-muted" title={name ?? undefined}>
-            {busy ? "Uploading…" : name ?? "Drop a picture here, or:"}
+          <p aria-live="polite" aria-atomic="true" className="truncate text-xs text-fg-muted" title={busy || problem ? fileName ?? name ?? undefined : name ?? undefined}>
+            {busy ? `Uploading ${fileName ?? "photo"}?` : dragging ? "Drop to upload your picture" : problem && fileName ? fileName : name ?? "Drop a picture here, or:"}
           </p>
+          {busy && <div className="studio-upload-progress" role="status" aria-label={`Uploading ${fileName ?? "photo"}`}><span /></div>}
           <div className="flex flex-wrap gap-1.5">
+            {name && <Button size="sm" disabled={busy} onClick={() => setCropName(name)}><Crop /> Adjust</Button>}
             <Button id={id} size="sm" onClick={() => fileInput.current?.click()} disabled={busy}>
               {busy ? <Spinner className="size-3.5" /> : <Upload />}
               {name ? "Replace" : "Upload"}
@@ -95,7 +114,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
               Your pictures
             </Button>
             {name && field.nullable !== false && (
-              <Button size="sm" variant="danger-ghost" onClick={() => onChange(null)} aria-label={`Remove ${field.title.toLowerCase()}`}>
+              <Button size="sm" variant="danger-ghost" disabled={busy} onClick={() => { onChange(null); setProblem(null); }} aria-label={`Remove ${field.title.toLowerCase()}`}>
                 <Trash2 />
                 Remove
               </Button>
@@ -116,17 +135,26 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
         />
       </div>
       {problem && (
-        <p role="alert" className="text-xs text-danger">
-          {problem}
-        </p>
+        <div role="alert" className="studio-upload-error"><span>{problem}</span>{retryFile && <Button size="sm" disabled={busy} onClick={() => void upload(retryFile ?? undefined)}>Try again</Button>}</div>
       )}
+      {cropName && <CropDialog key={cropName} name={cropName} shape={field.crop ?? "free"} onClose={() => setCropName(null)} onConfirm={async (file) => {
+        const current = ++operation.current;
+        setBusy(true); setFileName(file.name); setProblem(null);
+        try {
+          const uploaded = await uploadImage(file);
+          if (operation.current !== current) return;
+          onChange(uploaded);
+          setCropName(null);
+        } finally { if (operation.current === current) setBusy(false); }
+      }} />}
       <ImagePicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         selected={name}
         onPick={(picked) => {
-          onChange(picked);
           setPickerOpen(false);
+          setProblem(null);
+          setCropName(picked);
         }}
       />
     </div>
@@ -205,7 +233,7 @@ export function IconWidget({ field, value, onChange, id, describedBy, invalid }:
   return (
     <div
       aria-describedby={describedBy}
-      className={cn("flex items-center gap-3 rounded-lg border p-2.5", invalid ? "border-danger" : "border-line-strong bg-raised/30")}
+      className={cn("studio-icon-field flex items-center gap-3 rounded-lg border p-2.5", invalid ? "border-danger" : "border-line-strong bg-raised/30")}
     >
       <div className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-line-strong bg-canvas text-fg">
         {name ? <StudioIcon name={name} className="size-7" /> : <span className="text-xs text-fg-subtle">None</span>}

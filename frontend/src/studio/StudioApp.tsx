@@ -1,5 +1,6 @@
 /** The studio: gallery → editor → export. Author mode (#/author) is the code editor. */
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useLayoutEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Toaster } from "sonner";
 import { RotateCw } from "lucide-react";
 
@@ -8,11 +9,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./studio.css";
 import { friendlyError } from "./api";
+import { APPEARANCE_KEY, readAppearance, storePreference, type Appearance } from "./appearance";
 import { Spinner } from "./components";
 import { EditorPage } from "./Editor";
-import { Gallery } from "./Gallery";
+import { Gallery, GalleryLoading } from "./Gallery";
 import { useCatalog } from "./hooks";
 import { useHashRoute } from "./router";
+import { StudioShell } from "./StudioShell";
 
 const AuthorApp = lazy(() => import("@/App"));
 
@@ -24,14 +27,15 @@ function Loading({ label }: { label: string }) {
   );
 }
 
-function Studio({ route, routeKey, replace }: ReturnType<typeof useHashRoute>) {
+function Studio({ route, routeKey, replace, push, appearance, onAppearance }: ReturnType<typeof useHashRoute> & { appearance: Appearance; onAppearance: (value: Appearance) => void }) {
   const { catalog, error, loading, retry } = useCatalog();
 
-  let page;
-  if (loading || (!catalog && !error)) page = <Loading label="Loading designs…" />;
+  let page: ReactNode;
+  const editor = route.kind === "new" || route.kind === "project";
+  if (loading || (!catalog && !error)) page = editor ? <Loading label="Loading designs…" /> : <GalleryLoading />;
   else if (!catalog) {
     page = (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+      <div role="alert" className="studio-page-state">
         <h1 className="text-lg font-semibold text-fg">Couldn't load the designs.</h1>
         <p className="max-w-sm text-sm text-fg-muted">{friendlyError(error)}</p>
         <Button variant="secondary" size="md" onClick={retry}>
@@ -41,12 +45,15 @@ function Studio({ route, routeKey, replace }: ReturnType<typeof useHashRoute>) {
     );
   } else if (route.kind === "new" || route.kind === "project") {
     page = <EditorPage key={routeKey} catalog={catalog} route={route} onProjectCreated={(id) => replace({ kind: "project", id })} />;
-  } else {
-    page = <Gallery key={routeKey} catalog={catalog} />;
   }
 
+  if (route.kind === "gallery" || route.kind === "templates" || route.kind === "videos" || route.kind === "exports") {
+    return <StudioShell route={route} catalog={catalog} appearance={appearance} onAppearance={onAppearance} push={push} replace={replace}>
+      {(library, exports) => catalog && !loading ? <Gallery catalog={catalog} route={route} library={library} exports={exports} /> : page}
+    </StudioShell>;
+  }
   return (
-    <div className={route.kind === "gallery" ? "h-full overflow-y-auto text-sm" : "h-full overflow-hidden text-sm"}>
+    <div className="h-full overflow-hidden">
       {page}
     </div>
   );
@@ -54,6 +61,20 @@ function Studio({ route, routeKey, replace }: ReturnType<typeof useHashRoute>) {
 
 export default function StudioApp() {
   const hashRoute = useHashRoute();
+  const [appearance, setAppearance] = useState<Appearance>(readAppearance);
+  const isStudio = hashRoute.route.kind !== "author";
+  useLayoutEffect(() => {
+    if (isStudio) {
+      document.documentElement.dataset.surface = "studio";
+      if (appearance === "system") delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = appearance;
+    } else {
+      delete document.documentElement.dataset.surface;
+      delete document.documentElement.dataset.theme;
+    }
+    return () => { delete document.documentElement.dataset.surface; delete document.documentElement.dataset.theme; };
+  }, [isStudio, appearance]);
+  const changeAppearance = (value: Appearance) => { setAppearance(value); storePreference(APPEARANCE_KEY, value); };
   if (hashRoute.route.kind === "author") {
     return (
       <Suspense fallback={<Loading label="Opening author mode…" />}>
@@ -63,8 +84,8 @@ export default function StudioApp() {
   }
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-      <Studio {...hashRoute} />
-      <Toaster theme="dark" position="bottom-right" richColors closeButton />
+      <Studio {...hashRoute} appearance={appearance} onAppearance={changeAppearance} />
+      {createPortal(<Toaster theme={appearance} position="bottom-right" richColors closeButton />, document.body)}
     </TooltipProvider>
   );
 }

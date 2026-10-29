@@ -22,6 +22,36 @@ backend/studio/
 Modules outside `kit/` and `templates/*/scene.py` must never import Manim: it takes ~3 s
 to load, and the API and MCP server use them on every request.
 
+## Shipped gallery posters
+
+Run `python -m backend.studio.bake_posters` from the repository root after changing a
+template, preset, kit, render settings, font or icon. This uses the warm worker to bake
+every catalog preset with the gallery's exact params/settings and 360px short side.
+`assets/posters/manifest.json` maps each preset to its portable content-based cache key.
+The freshness test fails with the rebake command when a preset is missing or stale.
+Desktop packaging checks freshness, then copies the whole backend tree including
+`assets/posters/`. First requests copy exact matching PNGs into the writable preview
+cache; changed requests or stale artwork fall through to normal rendering.
+
+The tool uses `workspace/studio/tmp/poster-bake` as scratch space. In a restricted environment,
+use `--work-dir frontend/node_modules/.cache/poster-bake`.
+
+## Motion previews
+
+`POST /api/studio/motion` accepts `{project, template, params, settings}`. `project` is
+a project id or a stable editor-session id. It returns a job immediately; poll
+`GET /api/studio/motion/<id>` and cancel with `DELETE` on the same path. A newer
+request for the same project cancels its previous job. MCP `preview` also accepts
+`mode="motion"`; poll `get_motion` or stop it with `cancel_motion`.
+
+A separate warm `PreviewWorker` renders silent MP4s at 720px on the long side and
+15fps, independently of the export queue and still/storyboard worker. Playback is
+limited to the **first 20 seconds of the real timeline**; it does not speed up a long
+countdown. The response includes `duration` and `truncated` for the UI caption.
+Only an explicit Play click starts rendering. Edits cancel the pending job and return
+to the still. Finished videos share the bounded preview cache, with keys covering
+template/kit/icons, content, settings, uploaded asset stamps and preview limits.
+
 ## Writing a template
 
 `templates/<id>/schema.py`:
@@ -131,6 +161,7 @@ the MCP server (`studio/mcp_server.py`) call. Validation errors come back as
 | `POST /api/studio/projects` | `{title?, template, params, settings}` | `project` |
 | `GET/PUT/DELETE /api/studio/projects/{id}` | PUT: `{title?, params?, settings?}` | `project` |
 | `GET /api/studio/icons` | — | `[name]`; each served at `/api/studio/icons/{name}.svg` |
+| `POST /api/studio/images` | `{data: base64 or data URL}` (PNG/JPEG/GIF/WebP/SVG, ≤ 8 MB) | 201 `{name, width, height}`; `name` goes in an image field |
 
 * `card` = `{id, template, title, summary, category, params, settings, tags}` (a preset).
 * `template` = TemplateMeta fields + `schema` (JSON Schema of Params; `x-widget` per field) + `defaults` + `presets`.
@@ -159,7 +190,9 @@ in desktop mode. The server's Host/Origin checks also apply to MCP.
 
 Tools: `search_templates`, `get_template`, `create_project`, `list_projects`,
 `get_project`, `update_project`, `preview`, `export_project`, `get_export`,
-`cancel_export`, `list_icons`. A preview returns an image for the agent to inspect.
+`cancel_export`, `add_image`, `list_icons`. A preview returns an image for the agent to inspect.
+`get_template` also returns `settings_schema` (themes, formats, background, brand, timing).
+`add_image` takes base64 and returns the name to put in an image field.
 Exports return immediately; poll `get_export` for the completed download URL.
 Project updates replace each supplied object; fetch first to preserve other fields.
 Draft projects can save incomplete input, while previews and exports validate it.

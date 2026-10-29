@@ -1,4 +1,4 @@
-@import "tailwindcss";
+﻿@import "tailwindcss";
 @import "tw-animate-css";
 
 /*
@@ -229,4 +229,110 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+}
+
+/* Studio owns its palette at the root so portals inherit it too. Author keeps @theme. */
+:root[data-surface="studio"], :root[data-surface="studio"][data-theme="light"] {
+  color-scheme: light;
+  --color-canvas: #f6f5f2;
+  --color-surface: #ffffff;
+  --color-raised: #f1f0ec;
+  --color-overlay: #f8f7f5;
+  --color-well: #eceae5;
+  --color-line: #e4e2dd;
+  --color-line-strong: #d3d0c9;
+  --color-fg: #18181b;
+  --color-fg-muted: #5f5e66;
+  /* Slightly darker than the starting palette for small text on warm fills. */
+  --color-fg-subtle: #696872;
+  --color-accent: #3d5afe;
+  --color-accent-hover: #3049df;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: rgb(61 90 254 / 0.1);
+  --color-ink: #18181b;
+  --color-ink-hover: #303036;
+  --color-ink-fg: #ffffff;
+  --color-success: #18753e;
+  --color-warning: #8d5800;
+  --color-danger: #bb3020;
+  --color-success-soft: rgb(31 157 85 / 0.1);
+  --color-warning-soft: rgb(184 110 0 / 0.1);
+  --color-danger-soft: rgb(217 63 43 / 0.1);
+  --radius-card: 14px;
+  --radius-control: 10px;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.12);
+  --shadow-float: 0 2px 4px rgb(0 0 0 / 0.04), 0 24px 48px -12px rgb(0 0 0 / 0.18);
+  --shadow-poster: 0 2px 4px rgb(0 0 0 / 0.06), 0 8px 16px -6px rgb(0 0 0 / 0.2);
+  --shadow-popover: var(--shadow-float);
+  --color-scrim: rgb(24 24 27 / 0.36);
+  --layer-content: 0;
+  --layer-scrim: 100;
+  --layer-dialog: 101;
+  --layer-popover: 110;
+  --layer-toast: 120;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-surface="studio"]:not([data-theme]) {
+    color-scheme: dark;
+    --color-canvas: #111113;
+    --color-surface: #18181b;
+    --color-raised: #1f1f23;
+    --color-overlay: #27272c;
+    --color-well: #232328;
+    --color-line: #2a2a30;
+    --color-line-strong: #3a3a42;
+    --color-fg: #f2f2f4;
+    --color-fg-muted: #a6a6b0;
+    --color-fg-subtle: #9696a1;
+    --color-accent: #7b8cff;
+    --color-accent-hover: #99a6ff;
+    --color-accent-fg: #111113;
+    --color-accent-soft: rgb(123 140 255 / 0.14);
+    --color-ink: #f2f2f4;
+    --color-ink-hover: #d9d9e0;
+    --color-ink-fg: #111113;
+    --color-success: #6bcc90;
+    --color-warning: #e5b35b;
+    --color-danger: #ff8979;
+    --color-success-soft: rgb(107 204 144 / 0.12);
+    --color-warning-soft: rgb(229 179 91 / 0.12);
+    --color-danger-soft: rgb(255 137 121 / 0.12);
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.6);
+    --shadow-poster: 0 0 0 1px rgb(255 255 255 / 0.05), 0 8px 16px -6px rgb(0 0 0 / 0.5);
+    --color-scrim: rgb(0 0 0 / 0.62);
+  }
+}
+
+/* Explicit choice wins over the OS, including in portalled UI. */
+:root[data-surface="studio"][data-theme="dark"] {
+    color-scheme: dark;
+    --color-canvas: #111113;
+    --color-surface: #18181b;
+    --color-raised: #1f1f23;
+    --color-overlay: #27272c;
+    --color-well: #232328;
+    --color-line: #2a2a30;
+    --color-line-strong: #3a3a42;
+    --color-fg: #f2f2f4;
+    --color-fg-muted: #a6a6b0;
+    --color-fg-subtle: #9696a1;
+    --color-accent: #7b8cff;
+    --color-accent-hover: #99a6ff;
+    --color-accent-fg: #111113;
+    --color-accent-soft: rgb(123 140 255 / 0.14);
+    --color-ink: #f2f2f4;
+    --color-ink-hover: #d9d9e0;
+    --color-ink-fg: #111113;
+    --color-success: #6bcc90;
+    --color-warning: #e5b35b;
+    --color-danger: #ff8979;
+    --color-success-soft: rgb(107 204 144 / 0.12);
+    --color-warning-soft: rgb(229 179 91 / 0.12);
+    --color-danger-soft: rgb(255 137 121 / 0.12);
+    --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.6);
+    --shadow-poster: 0 0 0 1px rgb(255 255 255 / 0.05), 0 8px 16px -6px rgb(0 0 0 / 0.5);
+    --color-scrim: rgb(0 0 0 / 0.62);
 }

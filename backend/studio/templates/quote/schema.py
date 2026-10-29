@@ -27,11 +27,13 @@ META = TemplateMeta(
 class Params(TemplateParams):
     kicker: str = text_field(
         "", title="Small heading", max_length=40,
+        help="A short line above the text. Leave empty to hide it.",
         description="An optional short line above the text, e.g. 'Unpopular opinion' or 'What our customers say'. "
                     "Leave empty for none.")
     text: str = text_field(
         "It is not that we have a short time to live, but that we *waste a lot of it*.",
         title="Text", max_length=240, multiline=True,
+        help="Your quote, review or opinion.",
         description="The quote, review or opinion (up to 240 characters). Put *asterisks* around the words you "
                     "want highlighted in the accent color, e.g. 'Make it *simple*'.")
     author: str = text_field("", title="Name", max_length=40,
@@ -39,7 +41,7 @@ class Params(TemplateParams):
     role: str = text_field("", title="Role or handle", max_length=50,
                            description="A line under the name, e.g. 'Owner, Moda Café' or '@handle'. "
                                        "Leave empty for none.")
-    avatar: Optional[str] = image(title="Photo", shape="circle",
+    avatar: Optional[str] = image(title="Photo", shape="circle", crop="circle",
                                   description="A photo of the person, shown as a circle next to the name.")
     initials: bool = toggle(False, title="Show initials when there is no photo",
                             description="Draws a colored circle with the person's initials instead of a photo.")
@@ -48,11 +50,15 @@ class Params(TemplateParams):
     reveal: Literal["words", "lines", "sweep"] = choice(
         "words", title="Reveal",
         labels={"words": "Word by word", "lines": "Line by line", "sweep": "Highlight sweep"},
-        description="words: each word appears in turn; lines: one line at a time; sweep: all the text is "
-                    "shown faded and a highlight reads through it.")
+        option_help={"words": "Each word appears in turn.",
+                     "lines": "Each line appears in turn.",
+                     "sweep": "A highlight moves through the faded text as you read."},
+        description="Word by word: each word appears in turn. Line by line: one line at a time. Highlight "
+                    "sweep: all the text is shown faded and a highlight reads through it.")
     quote_marks: bool = toggle(True, title="Big quote mark", description="A large decorative quote mark above the text.")
     align: Literal["center", "left"] = choice("center", title="Alignment", labels={"center": "Centered", "left": "Left"})
     accent: HexColor = color(None, title="Highlight color",
+                             help="Color for the highlights, quote mark and details.",
                              description="Color of the highlighted words, quote mark and details. Empty = the theme's.")
 
 

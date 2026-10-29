@@ -20,6 +20,8 @@ import os
 
 from manim import FadeOut, Scene, config
 from manim.utils.exceptions import EndSceneEarlyException
+from manim.utils.family import extract_mobject_family_members
+from manim.utils.iterables import list_update
 
 from ..schema import RenderSettings
 from ..themes import theme_tokens
@@ -76,6 +78,7 @@ class StudioScene(Scene):
         self.assets_dir = job.get("assets_dir")
         self._frames = []
         self._poster_done = False
+        self._particle_clearances = []
         fonts.register_bundled()
         self.bg = self._background()
         if self.bg is not None:
@@ -96,6 +99,24 @@ class StudioScene(Scene):
     def asset(self, name):
         """Path of an uploaded asset named in the params, or None."""
         return media.resolve_asset(self.assets_dir, name)
+
+    def keep_particles_clear(self, particles, foreground, *, padding=0.10):
+        """Reserve readable space for lines/marks in every render mode."""
+        from .fx import ParticleClearance
+
+        clearance = ParticleClearance(particles, foreground, padding)
+        self._particle_clearances.append(clearance)
+        return particles
+
+    def update_mobjects(self, dt):
+        clearances = getattr(self, "_particle_clearances", ())
+        for clearance in clearances:
+            clearance.restore()
+        super().update_mobjects(dt)
+        # Run after ALL updaters, including counters that change their width.
+        # poster() also calls this method when jumping to its selected frame.
+        for clearance in clearances:
+            clearance.apply()
 
     @property
     def elapsed(self) -> float:
@@ -136,9 +157,57 @@ class StudioScene(Scene):
             self.wait(0.15)
 
     def play(self, *args, **kwargs):
+        if self.mode == "motion" and self.elapsed >= self.job["max_duration"] - 1e-6:
+            raise EndSceneEarlyException()
         super().play(*args, **kwargs)
+        if self.mode == "motion" and self.elapsed >= self.job["max_duration"] - 1e-6:
+            raise EndSceneEarlyException()
         if self.mode == "storyboard":
             self._capture()
+
+    def get_moving_and_static_mobjects(self, animations):
+        # Cairo normally snapshots a flattened family, retaining obsolete
+        # descendants when an updater rebuilds a counter or a live effect.
+        # Render whole live roots instead. Cache only a complete painter-order
+        # prefix, so a root crossing z layers cannot be drawn twice or in front
+        # of content that should cover it. This applies to previews AND exports.
+        moving, _ = super().get_moving_and_static_mobjects(animations)
+        moving_ids = {id(m) for m in moving}
+        roots = list_update(self.mobjects, self.foreground_mobjects)
+        families = [{id(m) for m in root.get_family()} for root in roots]
+        active = {i for i, family in enumerate(families) if family & moving_ids}
+        # Include empty live groups: they can emit lower-layer children on a
+        # later frame, so their own z position must already bound the prefix.
+        order = {id(m): i for i, m in enumerate(extract_mobject_family_members(
+            roots, use_z_index=self.camera.use_z_index))}
+        positions = [{order[mid] for mid in family if mid in order} for family in families]
+        while active:
+            cutoff = min((p for i in active for p in positions[i]), default=len(order))
+            promoted = {i for i, indexes in enumerate(positions) if any(p >= cutoff for p in indexes)} | active
+            if promoted == active:
+                break
+            active = promoted
+        return ([root for i, root in enumerate(roots) if i in active],
+                [root for i, root in enumerate(roots) if i not in active])
+
+    def get_time_progression(self, run_time, *args, **kwargs):
+        # Limit sampled frames without changing animation.run_time: a countdown
+        # still counts in real seconds, rather than squeezing five minutes into 20s.
+        if self.mode == "motion":
+            run_time = min(run_time, max(0, self.job["max_duration"] - self.elapsed))
+        return super().get_time_progression(run_time, *args, **kwargs)
+
+    def wait(self, duration=1, *args, **kwargs):
+        # Manim's frozen-frame waits bypass get_time_progression.
+        if self.mode == "motion":
+            duration = min(duration, max(0, self.job["max_duration"] - self.elapsed))
+            if duration <= 1e-6:
+                raise EndSceneEarlyException()
+        return super().wait(duration, *args, **kwargs)
+
+    def add_sound(self, *args, **kwargs):
+        if self.mode != "motion":
+            return super().add_sound(*args, **kwargs)
 
     def tear_down(self):
         super().tear_down()

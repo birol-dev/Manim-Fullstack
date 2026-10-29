@@ -85,18 +85,23 @@ def wrap(text: str, *, size: float, width: float, font: str, weight: str = "NORM
 
 
 def _strip_emphasis(text: str) -> tuple:
-    """Text without the asterisks, and the set of emphasized word positions."""
-    plain_words, marked = [], set()
-    pos = 0
+    """Text without the asterisks, and the (start, end) character spans that were emphasized.
+
+    Spans may cover part of a word ("Kadı*köy*", "*today*!"), so punctuation stays attached.
+    """
+    plain, spans, pos = [], [], 0
+    length = 0
     for match in _EMPHASIS.finditer(text):
-        before = text[pos:match.start()].split()
-        plain_words += before
-        for w in match.group(1).split():
-            marked.add(len(plain_words))
-            plain_words.append(w)
+        before = text[pos:match.start()]
+        plain.append(before)
+        length += len(before)
+        inner = match.group(1)
+        spans.append((length, length + len(inner)))
+        plain.append(inner)
+        length += len(inner)
         pos = match.end()
-    plain_words += text[pos:].split()
-    return plain_words, marked
+    plain.append(text[pos:])
+    return "".join(plain), spans
 
 
 def fit_text(
@@ -122,12 +127,10 @@ def fit_text(
     newlines in *text* are kept. At *min_size* the last line is cut with an ellipsis.
     """
     family = fonts.resolve(font)
-    has_emphasis = emphasis_color is not None and "*" in text
-    if has_emphasis:
-        words, marked = _strip_emphasis(text)
-        source = " ".join(words)
+    if emphasis_color is not None and "*" in text:
+        source, spans = _strip_emphasis(text)
     else:
-        source, marked = text.replace("*", "") if emphasis_color is not None else text, set()
+        source, spans = text, []
     _, ref_line = _metrics(family, weight)
 
     chosen, chosen_size = None, size
@@ -137,7 +140,9 @@ def fit_text(
         line_h = ref_line * current / REF_SIZE * line_spacing
         fits_lines = len(lines) <= max_lines
         fits_height = height is None or line_h * len(lines) <= height
-        if fits_lines and fits_height:
+        # one word longer than the line can't wrap: shrink for it too
+        fits_width = all(measure(line, size=current, font=family, weight=weight) <= width for line in lines)
+        if fits_lines and fits_height and fits_width:
             chosen, chosen_size = lines, current
             break
         if current <= min_size:
@@ -152,6 +157,9 @@ def fit_text(
             break
         current = max(min_size, current * 0.92)
 
+    # Lines are the source's words joined by single spaces, in order: map each word back
+    # to its characters in the source to color the emphasized parts.
+    word_spans = [m.span() for m in re.finditer(r"\S+", source)]
     group = VGroup()
     word_index = 0
     for line in chosen:
@@ -159,15 +167,18 @@ def fit_text(
             group.add(Text(" ", font=family, font_size=chosen_size))
             continue
         t2c = {}
-        if marked and emphasis_color:
-            offset = 0
-            for w in line.split(" "):
-                if word_index in marked:
-                    t2c[f"[{offset}:{offset + len(w)}]"] = emphasis_color
-                offset += len(w) + 1
-                word_index += 1
-        else:
-            word_index += len(line.split(" "))
+        offset = 0
+        for w in line.split(" "):
+            if word_index < len(word_spans):
+                start, end = word_spans[word_index]
+                for es, ee in spans:
+                    lo, hi = max(es, start), min(ee, end)
+                    if lo < hi:
+                        a, b = offset + lo - start, min(offset + hi - start, offset + len(w))
+                        if a < b:
+                            t2c[f"[{a}:{b}]"] = emphasis_color
+            offset += len(w) + 1
+            word_index += 1
         group.add(Text(line, font=family, weight=weight, font_size=chosen_size, color=color, t2c=t2c,
                        disable_ligatures=True))
     line_h = ref_line * chosen_size / REF_SIZE * line_spacing
@@ -178,6 +189,9 @@ def fit_text(
         elif align == "right":
             line.align_to([0, 0, 0], RIGHT)
     group.move_to([0, 0, 0])
+    if group.width > width * 1.001:  # a word too long even at min_size: never overflow the box
+        chosen_size *= width / group.width
+        group.scale_to_fit_width(width)
     group.lines = list(group)
     group.font_size = chosen_size
     return group

@@ -39,9 +39,13 @@ LAYOUTS = {
 class Params(TemplateParams):
     layout: Literal["bold", "split", "poster"] = choice(
         "bold", title="Layout", labels=LAYOUTS,
-        description="bold: big centered type with the big text on a color band; split: a photo (or a color "
-                    "panel) beside the text; poster: a ticket-style card, the big text on the stub.")
+        option_help={"bold": "Big centered words with the big text on a color band.",
+                     "split": "Your photo beside the words, or a color panel without a photo.",
+                     "poster": "A ticket card with the big text on the stub."},
+        description="Bold type: big centered words, the big text on a color band. Photo + text: your photo "
+                    "(or a color panel) beside the words. Ticket card: a ticket with the big text on the stub.")
     teaser: str = text("", title="Teaser (optional)", max_length=40, placeholder="Something new is coming…",
+                       help="An opening line before the reveal. Leave empty to skip it.",
                        description="Shown on its own first, then the announcement is revealed. Leave empty to "
                                    "start with the announcement.")
     kicker: str = text("This weekend only", title="Top line", max_length=28,
@@ -59,9 +63,9 @@ class Params(TemplateParams):
                                description="What people should do, e.g. 'Scan to RSVP'.")
     qr_text: str = text("", title="QR code link", max_length=150, placeholder="https://…",
                         description="A link or text to show as a QR code. Leave empty for no QR code.")
-    image: Optional[str] = image_field(title="Photo", description="Optional photo or product shot (Photo + text "
+    image: Optional[str] = image_field(title="Photo", crop="free", description="Optional photo or product shot (Photo + text "
                                                                   "layout shows it largest).")
-    logo: Optional[str] = image_field(title="Logo", shape="logo")
+    logo: Optional[str] = image_field(title="Logo", shape="logo", crop="free", description="Optional logo, shown small in a corner.")
     accent: HexColor = color(None, title="Accent color")
 
 

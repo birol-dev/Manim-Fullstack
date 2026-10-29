@@ -30,8 +30,8 @@ class Template(StudioScene):
         rows = lay.safe.split_rows([title_weight, 0.7, 0.12 if has_note else 0.001], gap=lay.unit * 2)
         title_box, main_box, note_box = rows
 
-        title = fit_text(theme.display(p.title), width=title_box.width, height=title_box.height, size=56,
-                         min_size=32, max_lines=2, font=theme.font, weight=theme.display_weight,
+        title = fit_text(theme.display(p.title), width=title_box.width, height=title_box.height,
+                         size=72 if lay.is_portrait else 56, min_size=32, max_lines=2, font=theme.font, weight=theme.display_weight,
                          color=theme.text) if has_title else None
         note = fit_text(p.subtitle, width=note_box.width, height=note_box.height, size=34, max_lines=1,
                         font=theme.font, color=theme.muted) if has_note else None
@@ -39,6 +39,7 @@ class Template(StudioScene):
             title_box.fit(title, align="center")
         if note is not None:
             note_box.fit(note, align="center")
+        self._confetti_foreground = [mob for mob in (title, note) if mob is not None]
 
         left = ValueTracker(seconds)
         intro = []
@@ -79,7 +80,8 @@ class Template(StudioScene):
 
             arc = make_fill()
             arc.add_updater(lambda f: f.become(make_fill()))
-            digit_h = min(main_box.height * (0.34 if p.style == "bar" else 0.48), main_box.width * 0.16)
+            # m:ss is about four digit-heights wide, so narrow frames are limited by width
+            digit_h = min(main_box.height * (0.34 if p.style == "bar" else 0.48), main_box.width * 0.22)
             meter = VGroup(track, arc)
             center = [main_box.center[0], (bar_y + bar_h / 2 + main_box.top) / 2, 0]
 
@@ -118,13 +120,15 @@ class Template(StudioScene):
 
     def _finish_card(self, box, accent, outgoing):
         p, theme, m = self.p, self.theme, self.motion
-        message = fit_text(theme.display(p.finish_text), width=box.width * 0.9, height=box.height * 0.5, size=96,
+        message = fit_text(theme.display(p.finish_text), width=box.width * 0.9, height=box.height * 0.5, size=200,
                            max_lines=2, font=theme.font, weight=theme.display_weight, color=accent)
         message.move_to(box.center)
         self.play(*[FadeOut(o, run_time=m.exit) for o in outgoing])
         anims = [m.appear(message, "pop", run_time=m.t(0.7))]
         if p.confetti:
             confetti = shapes.Confetti(self.layout.frame_width, self.layout.frame_height, theme.accents)
+            # The same clearance rule applies to the finish card and its labels.
+            self.keep_particles_clear(confetti, [*self._confetti_foreground, message])
             self.add(confetti)
             anims.append(confetti.fall(run_time=3))
         self.play(*anims)
@@ -135,7 +139,7 @@ class Template(StudioScene):
         intro = [m.appear(o, "drop") for o in (title, note) if o is not None]
         if intro:
             self.play(*intro)
-        height = min(box.height * 0.8, box.width * 0.55)
+        height = min(box.height * 0.8, box.width * 0.62)
         size = size_for_height(height, font=theme.font, weight=theme.display_weight)
         count = int(math.ceil(seconds))
         current = None

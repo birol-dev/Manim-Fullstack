@@ -1,6 +1,6 @@
 """Small file helpers shared by the service, the export queue and the preview worker. No Manim.
 
-* ``tree_fingerprint``: a cheap hash of file names, sizes and mtimes (cache keys, reloads).
+* ``tree_fingerprint``: a portable hash of file names and contents (cache keys, reloads).
 * ``png_size``: width and height from a PNG header.
 * ``slugify``: a safe, readable file-name stem.
 * ``prune_previews``: keep the preview cache under a file count.
@@ -41,15 +41,22 @@ TEMP_MARK = ".~"
 
 def _stat_into(digest, path: str) -> None:
     try:
-        info = os.stat(path)
+        with open(path, "rb") as source:
+            if path.endswith((".py", ".svg", ".json", ".txt", ".md")):
+                # Git may check source out as LF or CRLF; neither changes the render.
+                digest.update(source.read().replace(b"\r\n", b"\n"))
+                digest.update(b";")
+                return
+            for chunk in iter(lambda: source.read(128 * 1024), b""):
+                digest.update(chunk)
     except OSError:
         digest.update(b"?")
         return
-    digest.update(f"{info.st_mtime_ns}:{info.st_size};".encode())
+    digest.update(b";")
 
 
 def tree_fingerprint(*roots: str) -> str:
-    """Hash of every file's relative path, size and mtime under *roots* (files or folders).
+    """Hash of every file's relative path and contents under *roots* (files or folders).
 
     ``__pycache__`` folders, dot files and ``.pyc`` files are ignored, so importing a
     module doesn't change its fingerprint.
@@ -131,7 +138,7 @@ def prune_previews(folder: str, keep: int, temp_age: float = 600.0) -> int:
             if now - mtime > temp_age:
                 _unlink(entry.path)
             continue
-        if name.endswith(".png"):
+        if name.endswith((".png", ".mp4")):
             pngs.append((mtime, entry.path))
     if len(pngs) <= keep:
         return 0

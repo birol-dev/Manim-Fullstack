@@ -22,6 +22,34 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def test_real_motion_is_capped_silent_and_playable(tmp_path):
+    svc = StudioService(str(tmp_path / "motion"))
+    try:
+        for params, aspect in [({"seconds": 300, "confetti": False}, "16:9"), (SHORT, "9:16")]:
+            job = run(svc.start_motion("editor", "countdown", params, {"aspect": aspect}))
+            deadline = time.monotonic() + 150
+            while time.monotonic() < deadline:
+                result = run(svc.get_motion(job["id"]))
+                if result["status"] in ("done", "failed"):
+                    break
+                time.sleep(0.1)
+            assert result["status"] == "done", result
+            assert result["duration"] <= 20.1
+            assert result["truncated"] == (params["seconds"] == 300)
+            path = tmp_path / "motion" / "media" / "studio" / "previews" / result["url"].rsplit("/", 1)[-1]
+            assert media_file_is_complete(str(path))
+            if shutil.which("ffprobe"):
+                probe = subprocess.run(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(path)],
+                                       capture_output=True, text=True, timeout=30, check=True)
+                streams = json.loads(probe.stdout)["streams"]
+                assert len(streams) == 1 and streams[0]["codec_type"] == "video"
+                assert streams[0]["r_frame_rate"] == "15/1"
+                assert max(streams[0]["width"], streams[0]["height"]) == 720
+                assert float(streams[0]["duration"]) <= 20.1
+    finally:
+        svc.shutdown_sync()
+
+
 def test_real_previews_and_export(tmp_path):
     svc = StudioService(str(tmp_path / "ws"))
     # Other work may be adding bundled fonts or icons meanwhile; keep cache keys still.

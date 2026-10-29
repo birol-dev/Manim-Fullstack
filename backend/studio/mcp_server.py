@@ -25,6 +25,8 @@ from mcp.types import TextContent
 
 from studio.errors import StudioError
 from studio.registry import TemplateError
+from studio.schema import RenderSettings
+from studio.themes import THEMES
 
 
 def _tool_errors(fn):
@@ -39,12 +41,28 @@ def _tool_errors(fn):
     return wrapped
 
 
+def settings_schema(template: dict) -> dict:
+    """JSON Schema of the shared render settings, narrowed to what *template* accepts."""
+    schema = RenderSettings.model_json_schema()
+    props = schema["properties"]
+    props["theme"]["enum"] = list(THEMES)
+    props["theme"]["description"] = "; ".join(f"{tid}: {t['name']}" for tid, t in THEMES.items())
+    props["aspect"] = {**props["aspect"], "enum": template["aspects"], "default": template["default_aspect"]}
+    if template.get("length_from_params"):
+        props["length"]["description"] = "Ignored: this template's content sets the length."
+    else:
+        props["length"]["description"] = (f"Seconds, {template['min_length']:g}-{template['max_length']:g}; "
+                                          f"omit for the default {template['default_length']:g}.")
+    return schema
+
+
 def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPServer:
     """Build tools without importing Manim. A service may also be a REST bridge."""
     server = MCPServer(
         "Composer Studio", version="1.1.0",
-        instructions=("Make animated clips from installed templates. Search, then get_template for the exact params schema "
-                      "and presets. Create a project, preview its storyboard, revise, then export. Do not invent fields. "
+        instructions=("Make animated clips from installed templates. Search, then get_template for the exact params schema, "
+                      "settings_schema and presets. Create a project, preview its storyboard, revise, then export. Do not "
+                      "invent fields. For photos and logos call add_image and use the returned name. "
                       "update_project replaces params/settings when supplied; get_project first to preserve other fields. "
                       "Exports are background jobs: call get_export until done, then return its URL. No Python code is accepted."))
 
@@ -71,8 +89,10 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def get_template(template: str) -> dict:
-        """Return the template's JSON Schema, defaults, presets, supported formats and timing limits."""
-        return await service.template_info(template)
+        """Return the template's params JSON Schema, settings_schema (theme, aspect, background, brand...),
+        defaults, presets and timing limits."""
+        info = await service.template_info(template)
+        return {**info, "settings_schema": settings_schema(info)}
 
     @server.tool()
     @_tool_errors
@@ -104,15 +124,30 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
 
     @server.tool(structured_output=False)
     @_tool_errors
-    async def preview(project_id: str, mode: Literal["poster", "storyboard"] = "storyboard") -> list:
-        """Look at a project's poster or storyboard as an actual image. Inspect it before exporting."""
+    async def preview(project_id: str, mode: Literal["poster", "storyboard", "motion"] = "storyboard") -> list:
+        """Inspect a poster/storyboard, or queue a silent motion preview (first 20s). Poll get_motion for its video URL."""
         project = await service.get_project(project_id)
+        if mode == "motion":
+            result = await service.start_motion(project_id, project["template"], project["params"], project["settings"])
+            return [TextContent(type="text", text=json.dumps(result))]
         result = await service.preview(project["template"], project["params"], project["settings"], mode)
         if "path" in result:
             image = Image(path=result.pop("path"))
         else:
             image = Image(data=await service.image_bytes(result["url"]), format="png")
         return [TextContent(type="text", text=json.dumps(result)), image.to_image_content()]
+
+    @server.tool()
+    @_tool_errors
+    async def get_motion(preview_id: str) -> dict:
+        """Get a motion preview's status and video URL when done."""
+        return await service.get_motion(preview_id)
+
+    @server.tool()
+    @_tool_errors
+    async def cancel_motion(preview_id: str) -> dict:
+        """Stop a queued or running motion preview."""
+        return await service.cancel_motion(preview_id)
 
     @server.tool(name="export_project")
     @_tool_errors
@@ -137,6 +172,13 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     async def cancel_export(export_id: str) -> dict:
         """Cancel a queued or running export."""
         return await service.cancel_export(export_id)
+
+    @server.tool()
+    @_tool_errors
+    async def add_image(data_base64: str) -> dict:
+        """Add a photo or logo (PNG, JPEG, GIF, WebP or SVG as base64, at most 8 MB). Put the returned name in
+        a template's image field (photo, avatar, image, logo). The same picture always gets the same name."""
+        return await service.add_image(data_base64)
 
     @server.tool()
     @_tool_errors
@@ -185,6 +227,16 @@ class RestBridge:
     async def preview(self, template, params, settings, mode):
         return await self.request("POST", "/preview", json={"template": template, "params": params, "settings": settings, "mode": mode})
 
+    async def start_motion(self, project, template, params, settings):
+        return await self.request("POST", "/motion", json={"project": project, "template": template,
+                                   "params": params, "settings": settings})
+
+    async def get_motion(self, preview_id):
+        return await self.request("GET", "/motion/" + quote(preview_id, safe=""))
+
+    async def cancel_motion(self, preview_id):
+        return await self.request("DELETE", "/motion/" + quote(preview_id, safe=""))
+
     async def image_bytes(self, url):
         if not url.startswith("/media/studio/previews/") or ".." in url:
             raise ToolError("The app returned an invalid preview URL.")
@@ -201,6 +253,9 @@ class RestBridge:
 
     async def cancel_export(self, export_id):
         return await self.request("DELETE", "/exports/" + quote(export_id, safe=""))
+
+    async def add_image(self, data):
+        return await self.request("POST", "/images", json={"data": data})
 
     async def icon_names(self):
         return await self.request("GET", "/icons")

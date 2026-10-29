@@ -46,3 +46,40 @@ def test_long_quiz_answers_leave_space_for_the_timer(dimensions, tmp_path):
         cards_bottom = plan.opt_top - plan.rows * plan.card_h - (plan.rows - 1) * plan.gap
         assert cards_bottom >= plan.bottom_y + plan.bottom_h / 2 - 0.01
         assert min(plan.q_size, plan.opt_size) >= 24
+
+
+def test_a_word_longer_than_the_line_shrinks_to_fit(tmp_path):
+    from manim import tempconfig
+
+    from studio.kit.text import fit_text
+
+    with tempconfig({"media_dir": str(tmp_path)}):
+        fonts.register_bundled()
+        text = fit_text("Supercalifragilisticexpialidocious", width=4, size=48, min_size=24, max_lines=3)
+        assert text.width <= 4 + 0.01
+
+
+def test_emphasis_keeps_punctuation_and_part_words_attached(tmp_path):
+    from manim import tempconfig
+
+    from studio.kit.text import fit_text
+
+    with tempconfig({"media_dir": str(tmp_path)}):
+        fonts.register_bundled()
+        text = fit_text("Save *today*! Kadı*köy* opens", width=50, emphasis_color="#FF0000", color="#FFFFFF")
+        assert [line.original_text for line in text.lines] == ["Save today! Kadıköy opens"]
+        red = "".join("R" if glyph.get_fill_color().to_hex() == "#FF0000" else "." for glyph in text.lines[0])
+        assert red.replace(".", " ").split() == ["RRRRR", "RRR"]  # "today" and "köy", not "!" or "Kadı"
+
+
+def test_svg_photos_render_as_vectors_inside_their_circle(tmp_path):
+    from manim import tempconfig
+
+    from studio.kit import media
+
+    logo = tmp_path / "logo.svg"
+    logo.write_text('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+                    '<rect width="10" height="10" fill="#2f6fed"/></svg>', encoding="utf-8")
+    with tempconfig({"media_dir": str(tmp_path)}):
+        mob = media.image(str(logo), height=2, shape="circle")
+        assert mob.height == pytest.approx(1.4, abs=0.01)  # the square fits inside a circle of 2

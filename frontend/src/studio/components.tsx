@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { iconUrl } from "./api";
 
 export const inputClass =
-  "w-full rounded-lg border border-line-strong bg-raised px-3 text-sm text-fg placeholder:text-fg-subtle transition-colors hover:border-[#3d3d47] focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger aria-[invalid=true]:ring-danger/20";
+  "studio-input w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-fg placeholder:text-fg-subtle transition-colors hover:border-fg-subtle focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30 disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger aria-[invalid=true]:ring-danger/20";
 
 interface SegmentsProps<T extends string> {
   value: T | null;
@@ -41,7 +41,7 @@ export function Segments<T extends string>({ value, options, onChange, invalid, 
       role="radiogroup"
       aria-invalid={invalid || undefined}
       className={cn(
-        "flex min-w-0 gap-0.5 rounded-lg border border-line-strong bg-canvas p-0.5",
+        "studio-segments flex min-w-0 gap-0.5 rounded-lg border border-line-strong bg-canvas p-0.5",
         invalid && "border-danger",
         className,
       )}
@@ -107,7 +107,7 @@ export function FrameIcon({ w, h, className }: { w: number; h: number; className
 export function SectionHeading({ children, action, id }: { children: ReactNode; action?: ReactNode; id?: string }) {
   return (
     <div className="flex items-end justify-between gap-3">
-      <h2 id={id} className="text-base font-semibold tracking-tight text-fg">
+      <h2 id={id} className="studio-section-title text-base font-semibold tracking-tight text-fg">
         {children}
       </h2>
       {action}

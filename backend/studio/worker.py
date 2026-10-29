@@ -36,6 +36,7 @@ import itertools
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -45,7 +46,7 @@ from typing import Optional
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREFIX = "@@studio "
-MODES = ("poster", "storyboard")
+MODES = ("poster", "storyboard", "motion")
 
 # --------------------------------------------------------------------------- #
 # Child process
@@ -109,7 +110,7 @@ class _Child:
         mode = job.get("mode")
         out = job.get("output")
         if mode not in MODES or not out:
-            return {"id": rid, "ok": False, "error": "A render needs mode poster/storyboard and an output path."}
+            return {"id": rid, "ok": False, "error": "A render needs mode poster/storyboard/motion and an output path."}
         started = time.perf_counter()
         try:
             width, height = int(request["width"]), int(request["height"])
@@ -121,13 +122,16 @@ class _Child:
                 "pixel_height": height,
                 "frame_width": frame_width,
                 "frame_height": frame_height,
-                "save_last_frame": True,
-                "write_to_movie": False,
+                "save_last_frame": mode != "motion",
+                "write_to_movie": mode == "motion",
+                "frame_rate": 15,
+                "format": "mp4",
+                "output_file": os.path.splitext(os.path.basename(out))[0],
                 "disable_caching": True,
                 "media_dir": request.get("media_dir") or os.path.join(os.path.dirname(out), "_media"),
                 "verbosity": "ERROR",
                 "progress_bar": "none",
-                "transparent": background.get("kind") == "transparent",
+                "transparent": mode != "motion" and background.get("kind") == "transparent",
             }
             for stale in (out, os.path.splitext(out)[0] + ".json"):
                 if os.path.exists(stale):
@@ -135,7 +139,10 @@ class _Child:
             runtime.set_job(job)
             try:
                 with tempconfig(cfg):
-                    cls().render()
+                    scene = cls()
+                    scene.render()
+                    if mode == "motion":
+                        shutil.copyfile(scene.renderer.file_writer.movie_file_path, out)
             finally:
                 runtime.set_job(None)
         except (Exception, SystemExit) as exc:
@@ -146,6 +153,8 @@ class _Child:
         if not os.path.isfile(out):
             return {"id": rid, "ok": False, "error": "The template finished without writing an image."}
         reply = {"id": rid, "ok": True, "ms": round((time.perf_counter() - started) * 1000), "output": out}
+        if mode == "motion":
+            reply.update(duration=round(scene.elapsed, 2), truncated=scene.elapsed >= job["max_duration"] - 1 / 15)
         if mode == "storyboard":
             try:
                 with open(os.path.splitext(out)[0] + ".json", encoding="utf-8") as f:
@@ -235,6 +244,10 @@ class WorkerCrashed(RuntimeError):
     pass
 
 
+class WorkerCancelled(RuntimeError):
+    pass
+
+
 class WorkerReplyError(RuntimeError):
     """The worker is fine, but the job failed; ``traceback`` comes from the child."""
 
@@ -293,6 +306,7 @@ class PreviewWorker:
         self.starts = 0
         self.jobs = 0  # jobs done by the current process
         self._lock = threading.Lock()
+        self._closing = False
         self._proc: Optional[subprocess.Popen] = None
         self._replies: Optional[queue.Queue] = None
         self._ids = itertools.count(1)
@@ -300,11 +314,13 @@ class PreviewWorker:
     # -- lifecycle -------------------------------------------------------------
     @property
     def alive(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
+        proc = self._proc
+        return proc is not None and proc.poll() is None
 
     @property
     def pid(self) -> Optional[int]:
-        return self._proc.pid if self.alive else None
+        proc = self._proc
+        return proc.pid if proc is not None and proc.poll() is None else None
 
     def _env(self) -> dict:
         env = dict(os.environ)
@@ -323,6 +339,7 @@ class PreviewWorker:
         else:
             kwargs["start_new_session"] = True  # Ctrl+C in the server's terminal isn't for us
         if self.media_dir:
+            shutil.rmtree(self.media_dir, ignore_errors=True)
             os.makedirs(self.media_dir, exist_ok=True)
         proc = subprocess.Popen(self.command, cwd=self.cwd, env=self._env(), stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
@@ -335,20 +352,28 @@ class PreviewWorker:
         self.jobs = 0
         self.starts += 1
 
+    def _check_closing(self) -> None:
+        if self._closing:
+            raise WorkerCrashed("The preview worker is closing.")
+
     def _ensure_started(self) -> None:
+        self._check_closing()
         if self.alive:
             return
         self._kill()
         self.log.clear()
         self._spawn()
+        self._check_closing()
+        replies = self._replies
         deadline = time.monotonic() + self.start_timeout
         while True:
             remaining = deadline - time.monotonic()
             try:
-                message = self._replies.get(timeout=max(remaining, 0.01))
+                message = replies.get(timeout=max(remaining, 0.01))
             except queue.Empty:
                 self._kill()
                 raise WorkerTimeout(f"The preview worker did not start within {self.start_timeout:.0f} s.")
+            self._check_closing()
             if message is _EOF:
                 self._kill()
                 raise WorkerStartError("The preview worker exited while starting. " + self.tail(6))
@@ -406,19 +431,28 @@ class PreviewWorker:
 
     def close(self) -> None:
         """Kill the child now, without waiting for a job in progress (app shutdown)."""
-        self._kill()
+        self._closing = True
+        try:
+            self._kill()
+            with self._lock:
+                self._kill()  # startup may have spawned a child while close was waiting
+        finally:
+            self._closing = False
 
     # -- requests --------------------------------------------------------------
-    def request(self, payload: dict, timeout: Optional[float] = None) -> dict:
+    def request(self, payload: dict, timeout: Optional[float] = None, cancel=None) -> dict:
         with self._lock:
-            return self._request_locked(payload, self.request_timeout if timeout is None else timeout)
+            return self._request_locked(payload, self.request_timeout if timeout is None else timeout, cancel)
 
-    def _request_locked(self, payload: dict, timeout: float) -> dict:
+    def _request_locked(self, payload: dict, timeout: float, cancel=None) -> dict:
         for attempt in (1, 2):
+            if cancel is not None and cancel.is_set():
+                raise WorkerCancelled()
             self._ensure_started()
             rid = next(self._ids)
             line = json.dumps({**payload, "id": rid}, ensure_ascii=True) + "\n"
             proc, replies = self._proc, self._replies
+            self._check_closing()
             try:
                 proc.stdin.write(line.encode("ascii"))
                 proc.stdin.flush()
@@ -430,12 +464,18 @@ class PreviewWorker:
                 raise WorkerCrashed("The preview worker stopped. " + self.tail(6))
             deadline = time.monotonic() + timeout
             while True:
+                if cancel is not None and cancel.is_set():
+                    self._kill()
+                    raise WorkerCancelled()
                 remaining = deadline - time.monotonic()
                 try:
-                    message = replies.get(timeout=max(remaining, 0.01))
+                    message = replies.get(timeout=max(min(remaining, 0.1) if cancel is not None else remaining, 0.01))
                 except queue.Empty:
+                    if remaining > 0 and cancel is not None:
+                        continue
                     self._kill()
                     raise WorkerTimeout(f"The preview took longer than {timeout:.0f} s and was stopped.")
+                self._check_closing()
                 if message is _EOF:
                     self._kill()
                     raise WorkerCrashed("The preview worker crashed. " + self.tail(6))
@@ -444,14 +484,16 @@ class PreviewWorker:
             self.jobs += 1
             if self.max_jobs and self.jobs >= self.max_jobs:
                 self._stop_locked(3.0)  # recycle: the next request starts a fresh process
+                if self.media_dir:
+                    shutil.rmtree(self.media_dir, ignore_errors=True)
             return message
         raise WorkerCrashed("The preview worker stopped.")  # pragma: no cover - loop always returns
 
     def render(self, job: dict, width: int, height: int, media_dir: Optional[str] = None,
-               timeout: Optional[float] = None) -> dict:
+               timeout: Optional[float] = None, cancel=None) -> dict:
         """Render a poster or storyboard; returns the child's reply or raises WorkerReplyError."""
         reply = self.request({"op": "render", "job": job, "width": int(width), "height": int(height),
-                              "media_dir": media_dir or self.media_dir}, timeout)
+                              "media_dir": media_dir or self.media_dir}, timeout, cancel)
         if not reply.get("ok"):
             raise WorkerReplyError(reply.get("error") or "The preview failed.", reply.get("traceback") or "")
         return reply

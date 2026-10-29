@@ -3,9 +3,12 @@
 import asyncio
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from studio import exports as exports_module
 from studio import registry
 from studio import service as service_module
 from studio.errors import BusyError, NotFoundError, RenderError, RendererUnavailable, RenderTimeout
@@ -301,13 +304,117 @@ def test_export_lifecycle(tmp_path):
     runner.release.set()
     done = _settled(svc, export["id"])
     assert done["status"] == "done" and done["progress"] == 100
-    assert done["filename"] == f"happy-new-year-{export['id'][:6]}.mp4"
+    assert done["filename"] == f"happy-new-year-{export['id']}.mp4"
     assert done["url"] == "/media/studio/exports/" + done["filename"]
     assert done["size"] > 0 and done["duration"] == STORYBOARD["length"]
+    assert run(svc.cancel_export(export["id"])) == done
     assert os.path.isfile(os.path.join(svc.exports_dir, done["filename"]))
     assert not os.path.exists(os.path.dirname(runner.job.job_file))  # the job folder is cleaned up
     assert [e["id"] for e in run(svc.list_exports())] == [export["id"]]
     svc.shutdown_sync()
+
+
+@pytest.mark.parametrize("format", ["mp4", "png"])
+def test_same_title_exports_use_the_full_id(tmp_path, monkeypatch, format):
+    ids = iter(["abcdef000001", "abcdef000002"])
+    token_hex = exports_module.secrets.token_hex
+    monkeypatch.setattr(exports_module.secrets, "token_hex", lambda n: next(ids) if n == 6 else token_hex(n))
+    svc, _ = make_service(tmp_path)
+    try:
+        first, second = [_settled(svc, run(svc.start_export("countdown", {}, {}, format=format,
+                                                          quality="draft", title="Same title"))["id"])
+                         for _ in range(2)]
+        assert first["filename"] == f"same-title-{first['id']}.{format}"
+        assert second["filename"] == f"same-title-{second['id']}.{format}"
+        run(svc.remove_export(first["id"]))
+        assert os.path.isfile(os.path.join(svc.exports_dir, second["filename"]))
+    finally:
+        svc.shutdown_sync()
+
+
+def test_export_publication_refuses_to_overwrite(tmp_path):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    os.makedirs(svc.exports_dir)
+    dest = os.path.join(svc.exports_dir, "same-title-abcdef000001.mp4")
+    with open(dest, "wb") as f:
+        f.write(b"original")
+    source = tmp_path / "new.mp4"
+    source.write_bytes(b"replacement")
+    with pytest.raises(FileExistsError):
+        manager._publish({"_slug": "same-title", "id": "abcdef000001"}, str(source), ".MP4")
+    assert open(dest, "rb").read() == b"original"
+    assert source.read_bytes() == b"replacement"
+
+
+def test_queue_restart_rechecks_the_thread_after_join(tmp_path, monkeypatch):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    joined = threading.Barrier(3)
+    stopped = threading.Event()
+    threads = []
+    thread_class = threading.Thread
+
+    class StoppingThread:
+        def is_alive(self):
+            return not stopped.is_set()
+
+        def join(self, timeout):
+            joined.wait(timeout=5)
+            assert stopped.wait(5)
+
+    def make_thread(*args, **kwargs):
+        thread = thread_class(*args, **kwargs)
+        if kwargs.get("name") == "studio-exports":
+            threads.append(thread)
+        return thread
+
+    manager._thread = StoppingThread()
+    manager._stopping = True
+    monkeypatch.setattr(exports_module.threading, "Thread", make_thread)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = [pool.submit(svc.start_export_sync, "countdown", {}, {}, quality="draft")
+                       for _ in range(2)]
+            try:
+                joined.wait(timeout=5)
+            finally:
+                stopped.set()
+            exports = [future.result(timeout=5) for future in pending]
+        assert len(threads) == 1
+        assert all(_settled(svc, export["id"])["status"] == "done" for export in exports)
+    finally:
+        stopped.set()
+        svc.shutdown_sync()
+        for thread in threads:
+            thread.join(5)
+
+
+@pytest.mark.parametrize("format", ["mp4", "png"])
+def test_cancel_during_publication_removes_the_output(tmp_path, monkeypatch, format):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    publish = manager._publish
+    published, release = threading.Event(), threading.Event()
+
+    def paused_publish(*args):
+        path = publish(*args)
+        published.set()
+        assert release.wait(5)
+        return path
+
+    monkeypatch.setattr(manager, "_publish", paused_publish)
+    try:
+        export = run(svc.start_export("countdown", {}, {}, format=format, quality="draft"))
+        assert published.wait(5)
+        assert manager.cancel(export["id"])["message"] == "Stopping"
+        release.set()
+        cancelled = _settled(svc, export["id"])
+        assert cancelled["status"] == "cancelled" and "filename" not in cancelled
+        assert os.listdir(svc.exports_dir) == []
+    finally:
+        release.set()
+        svc.shutdown_sync()
 
 
 def test_export_failure_and_slug_from_template(tmp_path):
@@ -389,6 +496,70 @@ def test_export_index_survives_a_restart(tmp_path):
     os.unlink(os.path.join(again.exports_dir, done["filename"]))
     third, _ = make_service(tmp_path)
     assert done["id"] not in {e["id"] for e in run(third.list_exports())}
+
+
+def test_history_pruning_deletes_the_export_file(tmp_path):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    manager.max_records = 1
+    try:
+        first = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft"))["id"])
+        second = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft"))["id"])
+        assert [record["id"] for record in manager.list()] == [second["id"]]
+        assert not os.path.exists(os.path.join(svc.exports_dir, first["filename"]))
+        assert os.path.isfile(os.path.join(svc.exports_dir, second["filename"]))
+    finally:
+        svc.shutdown_sync()
+
+
+@pytest.mark.parametrize("filename", ["../outside.mp4", "linked/outside.mp4", "link.mp4"])
+def test_history_pruning_preserves_files_outside_exports(tmp_path, filename):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    manager._ensure_loaded()
+    manager.max_records = 1
+    os.makedirs(svc.exports_dir)
+    outside = tmp_path / "outside.mp4"
+    outside.write_bytes(b"keep")
+    if filename == "../outside.mp4":
+        filename = os.path.relpath(outside, svc.exports_dir)
+    else:
+        link = os.path.join(svc.exports_dir, filename.split("/")[0])
+        try:
+            os.symlink(tmp_path if "/" in filename else outside, link, target_is_directory="/" in filename)
+        except OSError:
+            pytest.skip("symlinks are unavailable")
+    with manager._lock:
+        manager._records = {"abcdef000001": {"id": "abcdef000001", "status": "done", "created": "1",
+                                              "filename": filename},
+                            "abcdef000002": {"id": "abcdef000002", "status": "failed", "created": "2"}}
+        manager._save_locked()
+    assert outside.read_bytes() == b"keep"
+    assert [record["id"] for record in manager.list()] == ["abcdef000002"]
+
+
+@pytest.mark.parametrize("index", ["interrupted", "missing", "corrupt"])
+def test_export_recovery_sweeps_abandoned_job_folders(tmp_path, index):
+    svc, _ = make_service(tmp_path)
+    manager = svc._export_manager()
+    job_dir = os.path.join(manager.work_dir, "abcdef000001")
+    orphan_dir = os.path.join(manager.work_dir, "abcdef000002")
+    other_dir = os.path.join(manager.work_dir, "keep")
+    for folder in (job_dir, orphan_dir, other_dir):
+        os.makedirs(folder)
+        with open(os.path.join(folder, "job.json"), "w") as f:
+            f.write("{}")
+    if index != "missing":
+        with open(svc.index_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"exports": [{"id": "abcdef000001", "status": "rendering"}]})
+                    if index == "interrupted" else "{broken")
+    records = manager.list()
+    if index == "interrupted":
+        assert records[0]["status"] == "failed" and records[0]["error"] == INTERRUPTED
+    else:
+        assert records == []
+    assert not os.path.exists(job_dir) and not os.path.exists(orphan_dir)
+    assert os.path.isdir(other_dir)
 
 
 def test_remove_a_finished_export(tmp_path):
@@ -500,6 +671,44 @@ def test_project_validation(svc):
             run(svc.get_project(bad))
     with pytest.raises(NotFoundError):
         run(svc.update_project("0123456789abcdef", title="x"))
+
+
+def test_valid_project_params_are_stored_as_the_template_reads_them(svc):
+    project = run(svc.create_project("countdown", {"seconds": "30"}))
+    assert project["params"] == {"seconds": 30}  # only what was given, but in the template's types
+    updated = run(svc.update_project(project["id"], params={"seconds": "45", "title": "Break"}))
+    assert updated["params"] == {"seconds": 45, "title": "Break"}
+    draft = run(svc.update_project(project["id"], params={"seconds": "soon"}))
+    assert draft["params"] == {"seconds": "soon"}  # drafts that don't validate are kept as typed
+
+
+def test_missing_aspect_uses_the_templates_default_format(svc):
+    spec, _, settings = registry.validate_job("celebration", {}, {})
+    assert settings.aspect == spec.meta.default_aspect == "9:16"
+    assert registry.validate_job("celebration", {}, {"theme": "pop"})[2].aspect == "9:16"
+    assert registry.validate_job("celebration", {}, {"aspect": "16:9"})[2].aspect == "16:9"
+
+
+def test_agent_images_are_checked_and_named_by_content(svc):
+    import base64
+
+    png = tiny_png(4, 3)
+    first = run(svc.add_image(base64.b64encode(png).decode()))
+    assert first["name"].startswith("agent-") and first["name"].endswith(".png")
+    assert (first["width"], first["height"]) == (4, 3)
+    with open(os.path.join(svc.assets_dir, first["name"]), "rb") as f:
+        assert f.read() == png
+    again = run(svc.add_image("data:image/png;base64," + base64.b64encode(png).decode()))
+    assert again["name"] == first["name"]
+    svg = run(svc.add_image(base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"/>').decode()))
+    assert svg["name"].endswith(".svg")
+    for bad in ("not base64!", base64.b64encode(b"just text").decode(),
+                base64.b64encode(b"<html><body/></html>").decode(), "", None):
+        with pytest.raises(TemplateError) as info:
+            run(svc.add_image(bad))
+        assert _errors(info).keys() == {"data"}
+    with pytest.raises(TemplateError):
+        run(svc.add_image(b"\x89PNG" + b"0" * service_module.MAX_IMAGE_BYTES))
 
 
 def test_corrupt_project_files_are_skipped(svc):

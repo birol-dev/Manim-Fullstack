@@ -46,7 +46,7 @@ class Params(TemplateParams):
                       description="A short title under the year. Wrap a word in *asterisks* to color it.")
     name: str = text("", title="Name or handle", max_length=30, placeholder="@yourname",
                      description="Optional: your name, handle or business name.")
-    photo: Optional[str] = image_field(title="Photo", shape="circle",
+    photo: Optional[str] = image_field(title="Photo", shape="circle", crop="circle",
                                        description="Optional profile photo or logo, shown in a circle.")
     stats: list[Stat] = items(
         [Stat(value=38, label="books read", icon="book-open"),
@@ -59,8 +59,10 @@ class Params(TemplateParams):
                         description="The last line, under the recap. Wrap a word in *asterisks* to color it.")
     style: Literal["moments", "grid"] = choice(
         "moments", title="Style", labels=STYLES,
-        description="moments: each number gets the full screen in turn, then the recap; grid: the recap "
-                    "grid builds number by number.")
+        option_help={"moments": "Each number fills the screen, then all appear in a recap.",
+                     "grid": "The recap grid builds one number at a time."},
+        description="One by one: each number gets the full screen in turn, then the recap. Grid build: the "
+                    "recap grid builds number by number.")
 
 
 PRESETS = [

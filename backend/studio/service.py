@@ -23,23 +23,29 @@ Files (``workspace`` and ``media`` are configurable):
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import copy
 import hashlib
+import io
 import json
 import logging
 import os
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
 from typing import Optional
+from xml.etree import ElementTree
 
 from . import registry
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import EXPORT_FORMATS, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
 from .registry import TemplateError
+from .motion import MotionPreviews, LONG_SIDE, FPS, MAX_DURATION
 from .schema import CATEGORY_TITLES
 from .storage import (ICONS_DIR, KIT_ROOTS, STUDIO_DIR, TEMP_MARK, png_size, prune_previews, slugify,
                       template_dir, tree_fingerprint, utc_now)
@@ -60,10 +66,13 @@ EXPORT_QUALITIES = ("draft", "720p", "1080p", "1080p60", "4k")
 MIN_SHORT, MAX_SHORT = 120, 1080
 MAX_INPUT_BYTES = 256 * 1024  # params + settings of one preview, export or project
 MAX_TITLE = 120
-KEY_VERSION = 1
+KEY_VERSION = 2
 PROJECT_ID = re.compile(r"^[0-9a-f]{16}$")
 ICON_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
 ASSET_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg")
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # as base64 it still fits the app's request size limit
+MAX_IMAGE_PIXELS = 40_000_000
+IMAGE_FORMATS = {"PNG": ".png", "JPEG": ".jpg", "GIF": ".gif", "WEBP": ".webp"}
 _UNSET = object()
 
 ASPECT_LABELS = {"16:9": "Landscape", "9:16": "Vertical", "1:1": "Square", "4:5": "Portrait"}
@@ -86,6 +95,7 @@ class StudioService:
     def __init__(self, workspace_dir: Optional[str] = None, media_dir: Optional[str] = None,
                  assets_dir: Optional[str] = None, **options):
         self._worker = None
+        self._motion = None
         self._exports: Optional[ExportManager] = None
         self._render_lock = threading.Lock()  # one preview render at a time; identical ones render once
         self._state_lock = threading.RLock()
@@ -101,7 +111,8 @@ class StudioService:
                   assets_dir: Optional[str] = None, *, app_root: Optional[str] = None, worker_factory=None,
                   runner_factory=None, icons_dir: Optional[str] = None, poster_short: int = 360,
                   preview_timeout: float = 45.0, cache_limit: int = 500, max_worker_jobs: int = 200,
-                  export_timeout: Optional[float] = None, max_active_exports: int = 20, prewarm: bool = False):
+                  export_timeout: Optional[float] = None, max_active_exports: int = 20, prewarm: bool = False,
+                  motion_worker_factory=None):
         """Point the service at a workspace. Stops a worker or export queue from an earlier configuration."""
         self.shutdown_sync()
         workspace = os.path.abspath(workspace_dir or DEFAULT_WORKSPACE)
@@ -124,8 +135,11 @@ class StudioService:
         self.max_active_exports = int(max_active_exports)
         self.prewarm = bool(prewarm)
         self._worker_factory = worker_factory or self._default_worker
+        self._motion_worker_factory = motion_worker_factory or (lambda: PreviewWorker(
+            media_dir=os.path.join(self.tmp_dir, "motion-media"), request_timeout=120.0))
         self._runner_factory = runner_factory or (lambda: ManimVideoRunner(app_root=self.app_root))
         self._worker = None
+        self._motion = None
         self._exports = None
         self._worker_kit_fp = None
         self._icons_fp = (0.0, None)
@@ -155,6 +169,9 @@ class StudioService:
 
     def shutdown_sync(self) -> None:
         """Stop the running export and the preview worker (both restart on next use)."""
+        motion = getattr(self, "_motion", None)
+        if motion is not None:
+            motion.close()
         exports, worker = getattr(self, "_exports", None), getattr(self, "_worker", None)
         if exports is not None:
             exports.shutdown(timeout=10.0, on_stopping=worker.close if worker is not None else None)
@@ -406,6 +423,22 @@ class StudioService:
                     pass
         prune_previews(self.previews_dir, self.cache_limit)
 
+    def _seed_poster(self, key: str, destination: str) -> bool:
+        # Only an exact current request key can select a baked file. Old bakes fall
+        # through to the worker; no writable cache is needed in the installation.
+        source = os.path.join(STUDIO_DIR, "assets", "posters", key + ".png")
+        if png_size(source) is None:
+            return False
+        os.makedirs(self.previews_dir, exist_ok=True)
+        temporary = destination + TEMP_MARK + secrets.token_hex(4)
+        try:
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return True
+
     def preview_sync(self, template, params=None, settings=None, mode: str = "poster", short=None) -> dict:
         started = time.perf_counter()
         if mode not in PREVIEW_MODES:
@@ -420,6 +453,8 @@ class StudioService:
         if not cached:
             with self._render_lock:
                 cached = self._cache_hit(png, meta, mode)
+                if not cached and mode == "poster":
+                    cached = self._seed_poster(key, png)
                 if not cached:
                     self._render_into_cache(spec, params, settings, mode, width, height, key)
         size = png_size(png) or (width, height)
@@ -436,6 +471,34 @@ class StudioService:
     async def preview(self, template, params=None, settings=None, mode: str = "poster", short=None) -> dict:
         """A cached poster or storyboard: ``{url, path, mode, width, height, cached, ms, storyboard?}``."""
         return await asyncio.to_thread(self.preview_sync, template, params, settings, mode, short)
+
+    def _motion_manager(self):
+        with self._state_lock:
+            if self._motion is None:
+                self._motion = MotionPreviews(self, self._motion_worker_factory())
+            return self._motion
+
+    def start_motion_sync(self, project, template, params=None, settings=None):
+        if not isinstance(project, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", project):
+            raise _field_error("project", "Use a project or editor session id (1–64 letters, numbers, - or _).")
+        spec, params, settings, render_settings = self._validate(template, params, settings)
+        # pixel_size uses the short side; round even for MP4's yuv420p encoder.
+        aspect = ASPECT_RATIOS[render_settings.aspect]
+        width = max(2, round(LONG_SIDE * aspect[0] / max(aspect) / 2) * 2)
+        height = max(2, round(LONG_SIDE * aspect[1] / max(aspect) / 2) * 2)
+        key = self._preview_key(spec, params, settings, f"motion-{FPS}-{MAX_DURATION}", LONG_SIDE)
+        return self._motion_manager().start(project, {"template": spec.id, "params": params,
+            "settings": settings, "assets_dir": self.assets_dir}, width, height, key)
+
+    async def start_motion(self, project, template, params=None, settings=None):
+        """Queue a silent 720px/15fps preview (first 20s); supersede this project's prior request."""
+        return await asyncio.to_thread(self.start_motion_sync, project, template, params, settings)
+
+    async def get_motion(self, preview_id):
+        return self._motion_manager().get(preview_id)
+
+    async def cancel_motion(self, preview_id):
+        return self._motion_manager().cancel(preview_id)
 
     def _cached_poster_url(self, template, params, settings) -> Optional[str]:
         try:
@@ -530,6 +593,16 @@ class StudioService:
                                          f"{MAX_INPUT_BYTES // 1024} KB).")
         return data
 
+    @staticmethod
+    def _canonical_params(template_id, params: dict) -> dict:
+        """Valid params as the template reads them (e.g. quiz answers given as plain strings become
+        answer objects), so the editor shows what renders. Drafts that don't validate are kept as given."""
+        try:
+            model = registry.get_template(template_id).params_model(**params)
+            return model.model_dump(mode="json", exclude_unset=True)
+        except Exception:  # noqa: BLE001 - incomplete drafts are allowed
+            return params
+
     def _with_poster(self, project: dict) -> dict:
         return {**project, "poster_url": self._cached_poster_url(project.get("template"), project.get("params"),
                                                                  project.get("settings"))}
@@ -537,6 +610,7 @@ class StudioService:
     def create_project_sync(self, template, params=None, settings=None, title=None) -> dict:
         spec = self._spec(template)
         params, settings = self._object("params", params), self._object("settings", settings)
+        params = self._canonical_params(spec.id, params)
         now = utc_now()
         project = {"id": "", "title": self._title(title, spec.meta.title), "template": spec.id,
                    "params": params, "settings": settings, "created": now, "updated": now}
@@ -564,7 +638,7 @@ class StudioService:
                     pass
                 project["title"] = self._title(title, default or project.get("title") or "Untitled")
             if params is not _UNSET:
-                project["params"] = self._object("params", params)
+                project["params"] = self._canonical_params(project.get("template"), self._object("params", params))
             if settings is not _UNSET:
                 project["settings"] = self._object("settings", settings)
             project["updated"] = utc_now()
@@ -619,6 +693,70 @@ class StudioService:
 
     async def delete_project(self, project_id: str) -> dict:
         return await asyncio.to_thread(self.delete_project_sync, project_id)
+
+    # -- images from agents ---------------------------------------------------------------------
+    @staticmethod
+    def _decode_image(data) -> bytes:
+        if isinstance(data, str):
+            text = data.strip()
+            if text.startswith("data:") and "," in text:  # a data URL
+                text = text.split(",", 1)[1]
+            try:
+                data = base64.b64decode(text, validate=True)
+            except (ValueError, binascii.Error):
+                raise _field_error("data", "Send the image as base64.") from None
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise _field_error("data", "Send the image as base64.")
+        if len(data) > MAX_IMAGE_BYTES:
+            raise _field_error("data", f"Use an image of at most {MAX_IMAGE_BYTES // (1024 * 1024)} MB.")
+        return bytes(data)
+
+    @staticmethod
+    def _image_kind(data: bytes) -> tuple:
+        """(extension, width, height) of a PNG/JPEG/GIF/WebP/SVG; TemplateError for anything else."""
+        unsupported = _field_error("data", "Use a PNG, JPEG, GIF, WebP or SVG image.")
+        head = data[:1024].lstrip()
+        if head.startswith((b"<?xml", b"<svg", b"<!--")):
+            try:
+                root = ElementTree.fromstring(data)
+            except ElementTree.ParseError:
+                raise unsupported from None
+            if root.tag.rsplit("}", 1)[-1] != "svg":
+                raise unsupported
+            return ".svg", None, None
+        from PIL import Image, UnidentifiedImageError
+
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                fmt, (width, height) = img.format, img.size
+                if width * height > MAX_IMAGE_PIXELS:
+                    raise _field_error("data", "The image has too many pixels; send a smaller one.")
+                img.verify()
+        except (UnidentifiedImageError, OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+            raise unsupported from None
+        if fmt not in IMAGE_FORMATS:
+            raise unsupported
+        return IMAGE_FORMATS[fmt], width, height
+
+    def add_image_sync(self, data) -> dict:
+        """Store an image an agent sends (base64 or bytes) with the uploads; ``{name, width, height}``.
+
+        The name comes from the content, so sending the same picture again returns the same name.
+        """
+        data = self._decode_image(data)
+        ext, width, height = self._image_kind(data)
+        name = f"agent-{hashlib.sha256(data).hexdigest()[:16]}{ext}"
+        path = os.path.join(self.assets_dir, name)
+        os.makedirs(self.assets_dir, exist_ok=True)
+        if not os.path.isfile(path):
+            try:
+                file_ops.atomic_write(path, data, exclusive=True)
+            except FileExistsError:
+                pass  # the same picture sent twice at once
+        return {"name": name, "width": width, "height": height}
+
+    async def add_image(self, data) -> dict:
+        return await asyncio.to_thread(self.add_image_sync, data)
 
     # -- icons ---------------------------------------------------------------------------------
     def icon_names_sync(self) -> list:

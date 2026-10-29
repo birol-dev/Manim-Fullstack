@@ -7,10 +7,14 @@ The fake child uses the real ``studio.worker`` channel setup and request loop; o
 import os
 import sys
 import textwrap
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from tests.studio_fakes import wait_until
 from studio.worker import BACKEND_DIR, PreviewWorker, WorkerCrashed, WorkerReplyError, WorkerStartError, WorkerTimeout
+from studio.worker import WorkerCancelled
 
 FAKE_CHILD = textwrap.dedent('''
     import os, sys, time
@@ -58,6 +62,24 @@ def fake_child(tmp_path):
 def _job(tmp_path, name="out.png", **params):
     return {"template": "countdown", "params": params, "settings": {}, "mode": "poster",
             "output": str(tmp_path / name)}
+
+
+def test_cancel_kills_motion_and_next_request_restarts(fake_child, tmp_path):
+    worker = PreviewWorker(command=fake_child, request_timeout=20)
+    cancel = threading.Event()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(worker.render, {**_job(tmp_path, behavior="sleep"), "mode": "motion"},
+                                 480, 270, cancel=cancel)
+            wait_until(lambda: "render chatter" in worker.tail())
+            cancel.set()
+            with pytest.raises(WorkerCancelled):
+                future.result(timeout=5)
+        assert not worker.alive
+        worker.render(_job(tmp_path), 64, 36)
+        assert worker.starts == 2
+    finally:
+        worker.close()
 
 
 def test_render_round_trip_ignores_stdout_chatter(fake_child, tmp_path):
@@ -120,6 +142,86 @@ def test_recycles_after_max_jobs(fake_child, tmp_path):
         pids = [worker.render(_job(tmp_path, f"{i}.png"), 64, 36)["pid"] for i in range(3)]
         assert pids[0] == pids[1] != pids[2]
         assert worker.starts == 2
+    finally:
+        worker.close()
+
+
+def test_scratch_is_cleared_on_start_and_recycle(fake_child, tmp_path):
+    media = tmp_path / "media"
+    cache = media / "texts" / "stale.svg"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("stale")
+    worker = PreviewWorker(command=fake_child, media_dir=str(media), max_jobs=1)
+    output = tmp_path / "out.png"
+    output.write_bytes(b"keep")
+    try:
+        worker.start()
+        assert media.is_dir() and not cache.exists()
+        assert output.read_bytes() == b"keep"
+        cache.parent.mkdir(parents=True)
+        cache.write_text("from this process")
+        worker.render(_job(tmp_path), 64, 36)
+        assert not worker.alive and not media.exists()
+        assert output.read_bytes() == b"png"
+        worker.start()
+        assert media.is_dir() and not cache.exists() and worker.starts == 2
+    finally:
+        worker.close()
+
+
+@pytest.mark.parametrize("phase", ["spawn", "warmup"])
+@pytest.mark.parametrize("operation", ["start", "render"])
+def test_close_synchronizes_with_startup(fake_child, tmp_path, monkeypatch, phase, operation):
+    worker = PreviewWorker(command=fake_child, start_timeout=20)
+    spawn = worker._spawn
+    entered, release = threading.Event(), threading.Event()
+    processes = []
+
+    def paused_spawn():
+        if phase == "spawn":
+            entered.set()
+            assert release.wait(5)
+        spawn()
+        processes.append(worker._proc)
+        if phase == "warmup":
+            entered.set()
+            assert release.wait(5)
+
+    monkeypatch.setattr(worker, "_spawn", paused_spawn)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = (pool.submit(worker.start) if operation == "start" else
+                       pool.submit(worker.render, _job(tmp_path), 64, 36))
+            try:
+                assert entered.wait(5)
+                closing = pool.submit(worker.close)
+                wait_until(lambda: worker._closing)
+            finally:
+                release.set()
+            with pytest.raises(WorkerCrashed, match="closing"):
+                pending.result(timeout=5)
+            closing.result(timeout=5)
+        assert not worker.alive and all(proc.poll() is not None for proc in processes)
+        assert not (tmp_path / "out.png").exists()
+        worker.start()  # a later use can restart after close has finished
+        assert worker.alive
+    finally:
+        release.set()
+        worker.close()
+
+
+def test_close_interrupts_an_active_request(fake_child, tmp_path):
+    worker = PreviewWorker(command=fake_child, request_timeout=20)
+    try:
+        worker.start()
+        proc = worker._proc
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(worker.render, _job(tmp_path, behavior="sleep"), 64, 36)
+            wait_until(lambda: any("render chatter" in line for line in worker.log))
+            worker.close()
+            with pytest.raises(WorkerCrashed):
+                pending.result(timeout=5)
+        assert not worker.alive and proc.poll() is not None and worker.starts == 1
     finally:
         worker.close()
 

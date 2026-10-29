@@ -11,12 +11,14 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
 DESKTOP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DESKTOP))
 from launcher import Backend, WorkspaceLock, configure_logging, smoke
+from sidecar import bind_socket
 from win_job import Job
 import psutil
 
@@ -28,6 +30,58 @@ def wait_until(predicate, timeout=10):
             return
         time.sleep(0.1)
     raise AssertionError("Condition did not become true before the deadline")
+
+
+class PortTests(unittest.TestCase):
+    def test_port_reused_across_launches(self):
+        with tempfile.TemporaryDirectory(prefix="studio-port-") as temporary:
+            port_file = Path(temporary) / "desktop-port"
+            with bind_socket(port_file) as first:
+                port = first.getsockname()[1]
+                self.assertEqual(int(port_file.read_text(encoding="ascii")), port)
+                self.assertEqual(first.getsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE), 1)
+            with bind_socket(port_file) as second:
+                self.assertEqual(second.getsockname()[1], port)
+
+    def test_default_port_when_free(self):
+        with tempfile.TemporaryDirectory(prefix="studio-port-") as temporary:
+            port_file = Path(temporary) / "desktop-port"
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+            with mock.patch("sidecar.DEFAULT_PORT", port):
+                with bind_socket(port_file) as sock:
+                    self.assertEqual(sock.getsockname()[1], port)
+
+    def test_two_data_folders_have_distinct_ports(self):
+        with tempfile.TemporaryDirectory(prefix="studio-port-") as temporary:
+            first_data, second_data = Path(temporary) / "first", Path(temporary) / "second"
+            first_data.mkdir()
+            second_data.mkdir()
+            with bind_socket(first_data / "desktop-port") as first:
+                port = first.getsockname()[1]
+                with mock.patch("sidecar.DEFAULT_PORT", port):
+                    with bind_socket(second_data / "desktop-port") as second:
+                        self.assertNotEqual(second.getsockname()[1], port)
+
+    def test_taken_port_falls_back_and_remembers(self):
+        with tempfile.TemporaryDirectory(prefix="studio-port-") as temporary:
+            port_file = Path(temporary) / "desktop-port"
+            with socket.socket() as taken:
+                taken.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                taken.bind(("127.0.0.1", 0))
+                taken.listen()
+                port = taken.getsockname()[1]
+                for remembered in (False, True):
+                    with self.subTest(remembered=remembered), mock.patch("sidecar.DEFAULT_PORT", port):
+                        if remembered:
+                            port_file.write_text(str(port), encoding="ascii")
+                        with bind_socket(port_file) as fallback:
+                            replacement = fallback.getsockname()[1]
+                            self.assertNotEqual(replacement, port)
+                            self.assertEqual(int(port_file.read_text(encoding="ascii")), replacement)
+                        with bind_socket(port_file) as restarted:
+                            self.assertEqual(restarted.getsockname()[1], replacement)
 
 
 class WindowsTreeTests(unittest.TestCase):
@@ -144,6 +198,25 @@ class BackendTests(unittest.TestCase):
                     second.http.open(urllib.request.Request(second.url + "/__desktop__/ping",
                                      headers={"Authorization": f"Bearer {self.backend.token}"}))
                 self.assertEqual(error.exception.code, 403)
+
+    def test_port_reused_across_backend_launches(self):
+        with tempfile.TemporaryDirectory(prefix="studio-restart-") as temporary:
+            data = Path(temporary)
+            with Backend(DESKTOP.parent, data) as first:
+                address = first.url
+            with Backend(DESKTOP.parent, data) as second:
+                self.assertEqual(second.url, address)
+            with socket.socket() as taken:
+                taken.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                taken.bind(("127.0.0.1", int(address.rsplit(":", 1)[1])))
+                taken.listen()
+                with Backend(DESKTOP.parent, data) as fallback:
+                    replacement = fallback.url
+                    self.assertNotEqual(replacement, address)
+                    self.assertEqual(int((data / "desktop-port").read_text(encoding="ascii")),
+                                     int(replacement.rsplit(":", 1)[1]))
+                with Backend(DESKTOP.parent, data) as restarted:
+                    self.assertEqual(restarted.url, replacement)
 
     def test_token_never_in_log(self):
         self.assertNotIn(self.backend.token, (self.data / "logs/desktop.log").read_text(encoding="utf-8"))

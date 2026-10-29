@@ -17,6 +17,7 @@ if BACKEND not in sys.path:
 
 from studio import registry  # noqa: E402
 from studio.schema import ASPECTS, CATEGORY_TITLES, RenderSettings  # noqa: E402
+from studio.schema import image  # noqa: E402
 from studio.themes import THEMES  # noqa: E402
 
 TEMPLATE_IDS = registry.template_ids()
@@ -67,10 +68,37 @@ def test_every_field_has_a_label_and_known_widget(template_id):
             widget = prop.get("x-widget")
             if widget is not None:
                 assert widget in KNOWN_WIDGETS, f"{where}.{name}: unknown x-widget {widget!r}"
+            if widget == "image":
+                description = prop.get("description", "")
+                assert description.strip() and description != "Optional picture.", f"{where}.{name} needs its own picture help"
+                assert "file name" not in description.lower(), f"{where}.{name} exposes an implementation detail"
 
     check(schema.get("properties", {}), template_id)
     for def_name, definition in schema.get("$defs", {}).items():
         check(definition.get("properties", {}), f"{template_id}.$defs.{def_name}")
+
+
+def test_image_help_default_is_friendly():
+    assert image(title="Picture").description == "Optional picture."
+
+
+@pytest.mark.parametrize("template_id", TEMPLATE_IDS)
+def test_array_choice_markers_reference_sibling_arrays(template_id):
+    props = registry.get_template(template_id).params_model.model_json_schema()["properties"]
+    for name, prop in props.items():
+        if "x-choice-of" not in prop:
+            continue
+        assert prop["type"] == "integer" and prop["minimum"] == 1
+        assert props[prop["x-choice-of"]]["type"] == "array", f"{name} needs a sibling array"
+
+
+def test_quiz_correct_answer_keeps_its_integer_contract():
+    spec = registry.get_template("quiz")
+    field = spec.params_model.model_json_schema()["properties"]["correct"]
+    assert field["x-choice-of"] == "options"
+    assert field["description"] == "The position of the correct answer in the list: 1 is the first answer, 2 the second, and so on."
+    assert field["default"] == 2 and field["minimum"] == 1 and field["maximum"] == 4
+    assert spec.params_model(options=["Yes", "No"], correct=2).correct == 2
 
 
 @pytest.mark.parametrize("template_id", TEMPLATE_IDS)

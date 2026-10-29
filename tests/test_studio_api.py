@@ -6,6 +6,7 @@ import main
 from studio import service as service_module
 from tests.conftest import LocalClient
 from tests.studio_fakes import FakeRunner, RunnerFactory, make_service, wait_until
+from tests.studio_fakes import FakeMotionWorker
 
 LAUNCH = {"seconds": 10, "title": "", "style": "big", "finish_text": "Happy New Year!", "confetti": True}
 
@@ -39,6 +40,22 @@ def test_catalog(api):
     body = res.json()
     assert {"sections", "templates", "themes", "aspects", "qualities", "formats"} <= set(body)
     assert any(t["id"] == "countdown" for t in body["templates"])
+
+
+def test_motion_routes_and_media(api, studio, media_in_tmp):
+    worker = FakeMotionWorker()
+    studio._motion_worker_factory = lambda: worker
+    first = api.post("/api/studio/motion", json={"project": "editor", "template": "countdown"})
+    assert first.status_code == 202
+    rid = first.json()["id"]
+    result = wait_until(lambda: (record if (record := api.get(f"/api/studio/motion/{rid}").json())["status"] == "done" else None))
+    assert not any(key.startswith("_") for key in result)
+    video = api.get(result["url"])
+    assert video.status_code == 200 and video.headers["content-type"] == "video/mp4"
+    assert api.delete(f"/api/studio/motion/{rid}").json()["status"] == "done"
+    assert api.get("/api/studio/motion/missing").status_code == 404
+    assert api.post("/api/studio/motion", json={"template": "countdown"}).status_code == 422
+    assert api.post("/api/studio/motion", json={"project": "editor", "template": "countdown", "other": 1}).status_code == 422
 
 
 def test_template_route(api):
@@ -97,7 +114,7 @@ def test_export_lifecycle(api, studio):
     assert export["status"] == "queued" and export["format"] == "mp4" and export["quality"] == "720p"
     done = wait_until(lambda: (lambda e: e if e["status"] == "done" else None)(
         api.get(f"/api/studio/exports/{export['id']}").json()))
-    assert done["url"] == f"/media/studio/exports/new-year-{export['id'][:6]}.mp4"
+    assert done["url"] == f"/media/studio/exports/new-year-{export['id']}.mp4"
     listed = api.get("/api/studio/exports").json()
     assert [e["id"] for e in listed] == [export["id"]]
     assert api.get("/api/studio/exports/000000000000").status_code == 404
@@ -143,6 +160,18 @@ def test_projects_crud(api):
     assert api.get(f"/api/studio/projects/{pid}").status_code == 404
     assert api.get("/api/studio/projects/..%2F..%2Fsecret").status_code == 404
     assert api.post("/api/studio/projects", json={"template": "nope"}).status_code == 422
+
+
+def test_images_from_agents(api, studio):
+    import base64
+
+    from tests.studio_fakes import tiny_png
+
+    res = api.post("/api/studio/images", json={"data": base64.b64encode(tiny_png(3, 2)).decode()})
+    assert res.status_code == 201 and res.json()["name"].startswith("agent-") and res.json()["width"] == 3
+    bad = api.post("/api/studio/images", json={"data": "bm90IGFuIGltYWdl"})
+    assert bad.status_code == 422 and bad.json()["errors"][0]["field"] == "data"
+    assert api.post("/api/studio/images", json={"data": "x", "name": "../x.png"}).status_code == 422
 
 
 def test_icons(api, studio):

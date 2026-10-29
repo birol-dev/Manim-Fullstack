@@ -35,11 +35,15 @@ export interface JsonSchema {
   maxItems?: number;
   "x-widget"?: string;
   "x-labels"?: Record<string, string>;
+  "x-help"?: string;
+  "x-option-help"?: Record<string, string>;
   "x-item-title"?: string;
   "x-placeholder"?: string;
   "x-unit"?: string;
   "x-step"?: number;
   "x-shape"?: string;
+  "x-crop"?: string;
+  "x-choice-of"?: string;
   [key: string]: unknown;
 }
 
@@ -140,6 +144,15 @@ export interface PreviewResponse {
   cached?: boolean;
   ms?: number;
   storyboard?: StoryboardInfo;
+}
+
+export interface MotionPreview {
+  id: string;
+  status: "queued" | "rendering" | "done" | "failed" | "cancelled";
+  url?: string;
+  duration?: number;
+  truncated?: boolean;
+  error?: string;
 }
 
 export type ExportStatus = "queued" | "rendering" | "done" | "failed" | "cancelled";

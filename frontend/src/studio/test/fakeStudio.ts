@@ -68,7 +68,7 @@ export function installFakeStudio(): FakeStudio {
     if (projectMatch) {
       const project = studio.projects.find((item) => item.id === decodeURIComponent(projectMatch[1]));
       if (!project) return reply(404, { detail: "Project not found." });
-      if (method === "PUT") Object.assign(project, body);
+      if (method === "PUT") Object.assign(project, body, { updated: Number(project.updated) + 1 });
       if (method === "DELETE") studio.projects.splice(studio.projects.indexOf(project), 1);
       return reply(200, project);
     }

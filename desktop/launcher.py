@@ -108,7 +108,7 @@ class Backend:
                                                self.root / "tools", system / "System32", system)))
         self.job = Job()
         self.process = subprocess.Popen([str(self.python), "-B", "-u", str(SHELL_DIR / "sidecar.py"),
-                                         "--app-root", str(self.root)],
+                                         "--app-root", str(self.root), "--data-dir", str(self.data)],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         env=env, cwd=self.data, creationflags=subprocess.CREATE_NO_WINDOW)
         # Sidecar blocks on stdin before importing backend code or starting any children.

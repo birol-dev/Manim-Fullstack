@@ -85,6 +85,26 @@ async def post_export(request: Request):
                                             title=body.get("title"))
 
 
+@router.post("/motion", status_code=202)
+@_errors
+async def post_motion(request: Request):
+    body = await _body(request, ("project", "template", "params", "settings"))
+    return await get_service().start_motion(body.get("project"), body.get("template"),
+                                             body.get("params"), body.get("settings"))
+
+
+@router.get("/motion/{preview_id}")
+@_errors
+async def get_motion(preview_id: str):
+    return await get_service().get_motion(preview_id)
+
+
+@router.delete("/motion/{preview_id}")
+@_errors
+async def delete_motion(preview_id: str):
+    return await get_service().cancel_motion(preview_id)
+
+
 @router.get("/exports")
 @_errors
 async def get_exports():
@@ -138,6 +158,14 @@ async def put_project(project_id: str, request: Request):
 @_errors
 async def delete_project(project_id: str):
     return await get_service().delete_project(project_id)
+
+
+@router.post("/images", status_code=201)
+@_errors
+async def post_image(request: Request):
+    """An image for a template's image field, sent as base64 (agents use this; people upload files)."""
+    body = await _body(request, ("data",))
+    return await get_service().add_image(body.get("data"))
 
 
 @router.get("/icons")

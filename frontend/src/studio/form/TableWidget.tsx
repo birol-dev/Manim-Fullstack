@@ -5,6 +5,7 @@ import { ClipboardPaste, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+import { ColorPickerButton } from "../ColorPicker";
 import { newItem, type FieldSpec } from "../schemaForm";
 import { formatCellNumber, isMultiCell, parseLocaleNumber, pasteIntoRows } from "../table";
 import type { Params } from "../types";
@@ -57,6 +58,7 @@ function NumberCell({ column, value, onChange, label, invalid, locale, onPaste, 
 
 function Cell(props: CellProps) {
   const { column, value, onChange, label, invalid, onPaste, onKeyDown, cellRef } = props;
+  const { theme } = useFormContext();
   if (column.widget === "number" || column.widget === "integer" || column.widget === "duration") return <NumberCell {...props} />;
   if (column.widget === "toggle") {
     return (
@@ -96,15 +98,7 @@ function Cell(props: CellProps) {
     const hex = typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : "#2563eb";
     return (
       <div className="flex h-8 items-center justify-center gap-1">
-        <input
-          ref={cellRef}
-          type="color"
-          aria-label={label}
-          value={hex.toLowerCase()}
-          onChange={(event) => onChange(event.target.value.toUpperCase())}
-          onKeyDown={onKeyDown}
-          className="h-6 w-8 cursor-pointer rounded border border-line-strong bg-transparent"
-        />
+        <ColorPickerButton ref={cellRef} aria-label={label} aria-invalid={invalid || undefined} value={hex} swatches={[...new Set([...(theme?.accent ?? []), theme?.text, theme?.bg].filter((c): c is string => !!c).map((c) => c.toUpperCase()))]} onChange={onChange} onKeyDown={(event) => { if (event.key !== "Enter" && event.key !== " ") onKeyDown(event); }} className="studio-table-color" style={{ background: hex }}><span className="sr-only">Choose color</span></ColorPickerButton>
         {column.nullable && value != null && (
           <button type="button" onClick={() => onChange(null)} aria-label={`${label}: use the theme color`} className="text-fg-subtle hover:text-fg">
             <X className="size-3.5" />
@@ -210,7 +204,7 @@ export function TableWidget({ field, value, onChange, path, id, describedBy }: T
 
   return (
     <div className="flex flex-col gap-2" role="group" aria-labelledby={`${id}-label`} aria-describedby={describedBy}>
-      <div className="overflow-x-auto rounded-lg border border-line-strong">
+      <div className="studio-table-well overflow-x-auto">
         <table className="w-full border-collapse text-left">
           <thead>
             <tr className="bg-raised">
@@ -221,7 +215,7 @@ export function TableWidget({ field, value, onChange, path, id, describedBy }: T
                 <th
                   key={column.key}
                   scope="col"
-                  title={column.description}
+                  title={column.help ?? column.description}
                   className={cn(
                     "border-b border-l border-line-strong px-2 py-1.5 text-xs font-medium text-fg-muted",
                     (column.widget === "number" || column.widget === "integer") && "text-right",
@@ -238,7 +232,7 @@ export function TableWidget({ field, value, onChange, path, id, describedBy }: T
           </thead>
           <tbody>
             {rows.map((row, rowIndex) => (
-              <tr key={rowIds.keys[rowIndex]} className="border-b border-line last:border-b-0">
+              <tr key={rowIds.keys[rowIndex]} className="studio-table-row border-b border-line last:border-b-0">
                 <td className="px-2 text-center text-xs tabular-nums text-fg-subtle">{rowIndex + 1}</td>
                 {columns.map((column, columnIndex) => (
                   <td key={column.key} className="min-w-24 border-l border-line p-0.5">
@@ -264,7 +258,7 @@ export function TableWidget({ field, value, onChange, path, id, describedBy }: T
                     onClick={() => removeRow(rowIndex)}
                     disabled={rows.length <= min}
                     aria-label={`Remove row ${rowIndex + 1}`}
-                    className="inline-flex size-7 items-center justify-center rounded-md text-fg-subtle hover:bg-danger-soft hover:text-danger disabled:pointer-events-none disabled:opacity-30"
+                    className="studio-table-remove inline-flex size-7 items-center justify-center rounded-md text-fg-subtle hover:bg-danger-soft hover:text-danger disabled:pointer-events-none disabled:opacity-30"
                   >
                     <X className="size-3.5" />
                   </button>
@@ -282,7 +276,7 @@ export function TableWidget({ field, value, onChange, path, id, describedBy }: T
         </ul>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={addRow} disabled={rows.length >= max}>
+        <Button size="md" className="studio-add-row" onClick={addRow} disabled={rows.length >= max}>
           <Plus />
           Add {rowWord}
         </Button>

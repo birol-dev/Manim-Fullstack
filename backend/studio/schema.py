@@ -3,7 +3,9 @@
 A template's ``schema.py`` declares ``META``, ``Params`` and ``PRESETS`` with these
 helpers. ``Params.model_json_schema()`` drives the app's form and is the MCP tool's
 input schema, so every field gets a ``title`` (the form label) and, where it helps an
-agent, a ``description``. ``x-widget`` tells the form which control to draw.
+agent, a ``description``. ``x-widget`` tells the form which control to draw. Optional
+``x-help`` replaces the description in the UI; ``x-option-help`` describes just the
+selected enum value. Agent-facing descriptions stay intact.
 """
 
 from __future__ import annotations
@@ -39,67 +41,80 @@ def _extra(widget: str, **more) -> dict:
 
 
 def text(default: str = "", *, title: str, max_length: int = 60, description: Optional[str] = None,
-         placeholder: Optional[str] = None, multiline: bool = False) -> Any:
+         placeholder: Optional[str] = None, multiline: bool = False, help: Optional[str] = None) -> Any:
     """One line of text (or a paragraph with ``multiline``). Templates fit it to the frame."""
     return Field(default, title=title, description=description, max_length=max_length,
-                 json_schema_extra=_extra("textarea" if multiline else "text", placeholder=placeholder))
+                 json_schema_extra=_extra("textarea" if multiline else "text", placeholder=placeholder, help=help))
 
 
 def number(default: float = 0, *, title: str, ge: Optional[float] = None, le: Optional[float] = None,
-           description: Optional[str] = None, step: Optional[float] = None, unit: Optional[str] = None) -> Any:
+           description: Optional[str] = None, step: Optional[float] = None, unit: Optional[str] = None,
+           help: Optional[str] = None) -> Any:
     return Field(default, title=title, description=description, ge=ge, le=le,
-                 json_schema_extra=_extra("number", step=step, unit=unit))
+                 json_schema_extra=_extra("number", step=step, unit=unit, help=help))
 
 
 def integer(default: int = 0, *, title: str, ge: Optional[int] = None, le: Optional[int] = None,
-            description: Optional[str] = None, unit: Optional[str] = None) -> Any:
+            description: Optional[str] = None, unit: Optional[str] = None, choice_of: Optional[str] = None,
+            help: Optional[str] = None) -> Any:
+    """An integer; ``choice_of`` presents a 1-based index into a sibling array as choices."""
     return Field(default, title=title, description=description, ge=ge, le=le,
-                 json_schema_extra=_extra("integer", unit=unit))
+                 json_schema_extra=_extra("integer", unit=unit, choice_of=choice_of, help=help))
 
 
-def duration(default: float, *, title: str, ge: float = 1, le: float = 3600, description: Optional[str] = None) -> Any:
+def duration(default: float, *, title: str, ge: float = 1, le: float = 3600, description: Optional[str] = None,
+             help: Optional[str] = None) -> Any:
     """Seconds, shown as mm:ss in the form."""
-    return Field(default, title=title, description=description, ge=ge, le=le, json_schema_extra=_extra("duration"))
+    return Field(default, title=title, description=description, ge=ge, le=le,
+                 json_schema_extra=_extra("duration", help=help))
 
 
-def choice(default: str, *, title: str, labels: Optional[dict] = None, description: Optional[str] = None) -> Any:
+def choice(default: str, *, title: str, labels: Optional[dict] = None, description: Optional[str] = None,
+           help: Optional[str] = None, option_help: Optional[dict[str, str]] = None) -> Any:
     """Use with a ``Literal[...]`` annotation. ``labels`` maps values to what the form shows."""
-    return Field(default, title=title, description=description, json_schema_extra=_extra("choice", labels=labels))
+    return Field(default, title=title, description=description,
+                 json_schema_extra=_extra("choice", labels=labels, help=help, option_help=option_help))
 
 
-def toggle(default: bool, *, title: str, description: Optional[str] = None) -> Any:
-    return Field(default, title=title, description=description, json_schema_extra=_extra("toggle"))
+def toggle(default: bool, *, title: str, description: Optional[str] = None, help: Optional[str] = None) -> Any:
+    return Field(default, title=title, description=description, json_schema_extra=_extra("toggle", help=help))
 
 
-def color(default: Optional[str] = None, *, title: str, description: Optional[str] = None) -> Any:
+def color(default: Optional[str] = None, *, title: str, description: Optional[str] = None,
+          help: Optional[str] = None) -> Any:
     """A ``#RRGGBB`` color, or None for the theme's accent. Annotate the field with ``HexColor``."""
     return Field(default, title=title, description=description or "Leave empty to use the theme color.",
-                 json_schema_extra=_extra("color"))
+                 json_schema_extra=_extra("color", help=help if help is not None else "Choose a color, or use the theme color."))
 
 
-def image(*, title: str, description: Optional[str] = None, shape: Literal["any", "circle", "logo"] = "any") -> Any:
+def image(*, title: str, description: Optional[str] = None, shape: Literal["any", "circle", "logo"] = "any",
+          help: Optional[str] = None, crop: Optional[str] = None) -> Any:
     """An uploaded asset's file name (workspace/assets), or None."""
-    return Field(None, title=title, description=description or "An uploaded image file name.",
-                 json_schema_extra=_extra("image", shape=shape))
+    if crop is not None and (not isinstance(crop, str) or
+                             (crop not in ("circle", "free") and not re.fullmatch(r"[1-9]\d{0,3}:[1-9]\d{0,3}", crop))):
+        raise ValueError("crop must be 'circle', 'free', or a positive aspect ratio such as '16:9'")
+    return Field(None, title=title, description=description or "Optional picture.",
+                 json_schema_extra=_extra("image", shape=shape, help=help, crop=crop))
 
 
-def icon(default: Optional[str] = None, *, title: str, description: Optional[str] = None) -> Any:
+def icon(default: Optional[str] = None, *, title: str, description: Optional[str] = None,
+         help: Optional[str] = None) -> Any:
     """A name from the bundled icon set (``studio.icons.ICON_NAMES``), or None."""
     return Field(default, title=title, description=description or "Name of a bundled icon, e.g. 'gift' or 'clock'.",
-                 json_schema_extra=_extra("icon"))
+                 json_schema_extra=_extra("icon", help=help if help is not None else "Choose an icon, or leave empty for none."))
 
 
-def datetime_text(default: str = "", *, title: str, description: Optional[str] = None) -> Any:
+def datetime_text(default: str = "", *, title: str, description: Optional[str] = None, help: Optional[str] = None) -> Any:
     """A date and/or time as the person wants it written ("Sat 14 June, 7 pm"). Shown as typed."""
     return Field(default, title=title, description=description, max_length=60,
-                 json_schema_extra=_extra("text", placeholder="Sat 14 June, 7 pm"))
+                 json_schema_extra=_extra("text", placeholder="Sat 14 June, 7 pm", help=help))
 
 
 def items(default: list, *, title: str, min_items: int = 1, max_items: int = 10, description: Optional[str] = None,
-          widget: Literal["list", "table"] = "list", item_title: str = "Item") -> Any:
+          widget: Literal["list", "table"] = "list", item_title: str = "Item", help: Optional[str] = None) -> Any:
     """A repeated group (``list[SomeModel]``). ``table`` draws a spreadsheet grid that accepts pasted rows."""
     return Field(default, title=title, description=description, min_length=min_items, max_length=max_items,
-                 json_schema_extra=_extra(widget, item_title=item_title))
+                 json_schema_extra=_extra(widget, item_title=item_title, help=help))
 
 
 def check_color(value):

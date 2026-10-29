@@ -33,6 +33,17 @@ import {
 } from "./select";
 
 describe("UI Components", () => {
+  it("gives sheets edge positioning without centered dialog translations", () => {
+    const view = render(<Dialog open><DialogContent variant="sheet"><DialogTitle>Sheet</DialogTitle><DialogDescription>Exports</DialogDescription></DialogContent></Dialog>);
+    const sheet = screen.getByRole("dialog");
+    expect(sheet).toHaveClass("inset-y-4", "right-4", "left-auto");
+    expect(sheet).not.toHaveClass("-translate-x-1/2");
+    expect(sheet).not.toHaveClass("-translate-y-1/2");
+    expect(sheet.className).not.toContain("zoom-in");
+    view.rerender(<Dialog open><DialogContent><DialogTitle>Center</DialogTitle><DialogDescription>Default dialog</DialogDescription></DialogContent></Dialog>);
+    expect(screen.getByRole("dialog")).toHaveClass("-translate-x-1/2", "-translate-y-1/2");
+  });
+
   describe("Button Component", () => {
     it("renders with default variant and handles clicks", async () => {
       const user = userEvent.setup();

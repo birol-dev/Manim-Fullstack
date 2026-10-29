@@ -39,6 +39,9 @@ export interface FieldSpec {
   widget: WidgetKind;
   title: string;
   description?: string;
+  /** Short UI copy; description remains available to agents. */
+  help?: string;
+  optionHelp?: Record<string, string>;
   required: boolean;
   /** null is allowed (optional image, icon, color). */
   nullable: boolean;
@@ -58,8 +61,12 @@ export interface FieldSpec {
   /** Fields of one list/table row. */
   itemFields?: FieldSpec[];
   shape?: string;
+  /** Client-side crop mask; omitted means free crop. */
+  crop?: string;
   /** The description says `*word*` highlights words. */
   emphasis?: boolean;
+  /** A 1-based index into a sibling list, presented as live choices. */
+  choiceOf?: string;
 }
 
 type Defs = Record<string, JsonSchema>;
@@ -157,6 +164,8 @@ export function fieldSpec(key: string, raw: JsonSchema, defs: Defs, required: bo
     widget,
     title: schema.title || humanize(key),
     description: schema.description,
+    help: schema["x-help"],
+    optionHelp: schema["x-option-help"],
     required,
     nullable,
     type,
@@ -171,7 +180,9 @@ export function fieldSpec(key: string, raw: JsonSchema, defs: Defs, required: bo
   if (typeof schema["x-step"] === "number") spec.step = schema["x-step"];
   if (typeof schema["x-unit"] === "string") spec.unit = schema["x-unit"];
   if (typeof schema["x-placeholder"] === "string") spec.placeholder = schema["x-placeholder"];
+  if (typeof schema["x-crop"] === "string") spec.crop = schema["x-crop"];
   if (typeof schema["x-shape"] === "string") spec.shape = schema["x-shape"];
+  if (typeof schema["x-choice-of"] === "string") spec.choiceOf = schema["x-choice-of"];
   if (widget === "list" || widget === "table") {
     spec.minItems = schema.minItems;
     spec.maxItems = schema.maxItems;
@@ -187,6 +198,35 @@ export function fieldsOf(schema: JsonSchema, defs: Defs = schema.$defs ?? schema
   const resolved = resolveRef(schema, defs);
   const required = new Set(resolved.required ?? []);
   return Object.entries(resolved.properties ?? {}).map(([key, prop]) => fieldSpec(key, prop, defs, required.has(key)));
+}
+
+export const itemBadge = (title: string, index: number) => /^answer$/i.test(title) && index < 26 ? String.fromCharCode(65 + index) : String(index + 1);
+
+export interface ArrayChoice { value: number; label: string; badge: string }
+
+export function arrayChoices(source: FieldSpec | undefined, values: Params): ArrayChoice[] {
+  if (!source || !Array.isArray(values[source.key])) return [];
+  const textFields = source.itemFields?.filter((field) => field.widget === "text" || field.widget === "textarea") ?? [];
+  const title = source.itemTitle ?? "Item";
+  return (values[source.key] as unknown[]).map((item, index) => {
+    const label = typeof item === "string" ? item.trim() : textFields.map((field) => (item as Params)?.[field.key]).find((value) => typeof value === "string" && value.trim());
+    return { value: index + 1, badge: itemBadge(title, index), label: typeof label === "string" && label.trim() ? label.trim() : `${title} ${index + 1}` };
+  });
+}
+
+/** Keep referenced items selected across reordering/removal; renaming keeps their position. */
+export function arrayChoiceChanges(fields: FieldSpec[], values: Params, key: string, next: unknown): Params {
+  const previous = values[key];
+  if (!Array.isArray(previous) || !Array.isArray(next)) return {};
+  const patch: Params = {};
+  for (const field of fields) {
+    if (field.choiceOf !== key || typeof values[field.key] !== "number") continue;
+    const selected = values[field.key] as number;
+    const retained = selected >= 1 && selected <= previous.length ? next.indexOf(previous[selected - 1]) : -1;
+    const index = retained >= 0 ? retained + 1 : Math.max(1, Math.min(selected, next.length));
+    if (index !== selected) patch[field.key] = index;
+  }
+  return patch;
 }
 
 function clone<T>(value: T): T {
@@ -220,9 +260,11 @@ export function newItem(fields: FieldSpec[]): Params {
   return Object.fromEntries(fields.map((field) => [field.key, emptyValue(field)]));
 }
 
-/** Template defaults, then the card's (or project's) params on top. */
+/** Template defaults, then the card's (or project's) params on top. Keys the template doesn't
+ * have (an agent's typo) are dropped: the form can't show them, and they'd block every preview. */
 export function initialParams(defaults: Params | undefined, overrides: Params | undefined): Params {
-  return { ...clone(defaults ?? {}), ...clone(overrides ?? {}) };
+  const known = defaults ? Object.entries(overrides ?? {}).filter(([key]) => key in defaults) : Object.entries(overrides ?? {});
+  return { ...clone(defaults ?? {}), ...clone(Object.fromEntries(known)) };
 }
 
 /** Every value path a form shows (params.title, params.items.0.value, ...), for error matching. */
