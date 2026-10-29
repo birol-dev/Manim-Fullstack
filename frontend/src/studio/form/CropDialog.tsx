@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { assetUrl, friendlyError } from "../api";
 import { Spinner } from "../components";
 import { clamp } from "../color";
-import { cropGeometry, cropPhoto, cropRatio, RESET_CROP } from "./crop";
+import { cropGeometry, cropPhoto, cropPositionLabel, cropRatio, RESET_CROP } from "./crop";
 import type { ImageCropRecipe } from "../types";
 import "../editor.css";
 
@@ -55,11 +55,12 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
     const start = drag.current;
     if (busy || !start || !event.currentTarget.hasPointerCapture(event.pointerId) || !rect || !dimensions) return;
     const bounds = event.currentTarget.getBoundingClientRect();
-    const dx = (dimensions.width / rect.width - 1) * bounds.width / 2;
-    const dy = (dimensions.height / rect.height - 1) * bounds.height / 2;
+    // Half the window's on-screen travel: one position unit is 2 × travel pixels.
+    const travelX = (dimensions.width / rect.width - 1) * bounds.width / 2;
+    const travelY = (dimensions.height / rect.height - 1) * bounds.height / 2;
     // Capture coordinates before React runs the updater: pointerup may clear drag meanwhile.
-    const x = dx ? clamp(start.startX - (event.clientX - start.x) / dx, -1, 1) : 0;
-    const y = dy ? clamp(start.startY - (event.clientY - start.y) / dy, -1, 1) : 0;
+    const x = travelX ? clamp(start.startX + (event.clientX - start.x) / travelX, -1, 1) : start.startX;
+    const y = travelY ? clamp(start.startY + (event.clientY - start.y) / travelY, -1, 1) : start.startY;
     setPosition((previous) => ({ ...previous, x, y }));
   };
   const stopDrag = (event: PointerEvent<HTMLDivElement>) => {
@@ -70,8 +71,8 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
     if (busy || !ready || !event.key.startsWith("Arrow")) return;
     event.preventDefault();
     const step = event.shiftKey ? .1 : .02;
-    const dx = event.key === "ArrowLeft" ? step : event.key === "ArrowRight" ? -step : 0;
-    const dy = event.key === "ArrowUp" ? step : event.key === "ArrowDown" ? -step : 0;
+    const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
+    const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
     setPosition((previous) => ({ ...previous, x: clamp(previous.x + dx, -1, 1), y: clamp(previous.y + dy, -1, 1) }));
   };
   const confirm = async () => {
@@ -100,7 +101,9 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
       onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}>
       <DialogHeader>
         <DialogTitle>Adjust photo</DialogTitle>
-        <DialogDescription>Drag to position your photo. Use the arrow keys for small adjustments.</DialogDescription>
+        <DialogDescription>
+          Drag the {shape === "circle" ? "circle" : "frame"} to choose what shows in your video. Arrow keys move it too.
+        </DialogDescription>
       </DialogHeader>
       <div className="studio-crop-stage">
         <div className="studio-crop-frame" style={{ width: `min(100%, ${frameWidth}px)`, aspectRatio: String(frameRatio) }}>
@@ -123,16 +126,15 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
                 width: `${rect.width / dimensions.width * 100}%`, height: `${rect.height / dimensions.height * 100}%`,
                 aspectRatio: String(ratio),
               }}
-              role="group" tabIndex={0} aria-label="Photo position" aria-describedby={helpId} aria-disabled={busy || !ready}
+              role="group" tabIndex={0} aria-label="Photo position" aria-valuetext={cropPositionLabel(position)}
+              aria-describedby={helpId} aria-disabled={busy || !ready}
               onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}
               onLostPointerCapture={() => { drag.current = null; }} onKeyDown={moveWithKeys} />
           )}
         </div>
         {!dimensions && !loadFailed && <span className="studio-crop-loading" role="status"><Spinner /> Loading photo…</span>}
       </div>
-      <p id={helpId} className="studio-crop-help">
-        {shape === "circle" ? "The circle shows what will appear in your video." : "The frame shows what will appear in your video."} Shift + arrow moves farther.
-      </p>
+      <p id={helpId} className="studio-crop-help">Shift + arrow moves farther.</p>
       {(!shape || shape === "free") && <label className="studio-crop-slider">
         Crop width <span>{ratio.toFixed(2)}:1</span>
         <input type="range" aria-label="Crop width" aria-valuetext={`${ratio.toFixed(2)} to 1`} min={.25} max={4} step={.01} value={clamp(ratio, .25, 4)} disabled={busy || !ready}

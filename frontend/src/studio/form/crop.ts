@@ -1,6 +1,15 @@
 export interface CropPosition { x: number; y: number; zoom: number }
 export const RESET_CROP: CropPosition = { x: 0, y: 0, zoom: 1 };
 const bound = (n: number) => Math.max(-1, Math.min(1, n));
+/** Plain words for where the crop window sits, e.g. "Top left", "Center". */
+export function cropPositionLabel(position: CropPosition) {
+  const x = bound(position.x);
+  const y = bound(position.y);
+  const vertical = y <= -1 / 3 ? "top" : y >= 1 / 3 ? "bottom" : "";
+  const horizontal = x <= -1 / 3 ? "left" : x >= 1 / 3 ? "right" : "";
+  const label = [vertical, horizontal].filter(Boolean).join(" ");
+  return label ? `${label[0].toUpperCase()}${label.slice(1)}` : "Center";
+}
 export function cropGeometry(width: number, height: number, ratio: number, position: CropPosition) {
   const sourceWidth = Math.min(width, height * ratio) / Math.max(1, Math.min(4, position.zoom));
   const sourceHeight = sourceWidth / ratio;

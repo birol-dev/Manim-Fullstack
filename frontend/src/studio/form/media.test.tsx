@@ -83,7 +83,7 @@ it("reopens the original with the saved crop after a reload and crops from it ag
   expect(parseFloat(stage.style.left)).toBeCloseTo(50, 4);
   expect(parseFloat(stage.style.top)).toBeCloseTo(12.5, 4);
   upload.mockResolvedValueOnce("test_photo-crop-new.png");
-  await user.keyboard("{Shift>}{ArrowLeft}{/Shift}");
+  await user.keyboard("{Shift>}{ArrowRight}{/Shift}");
   await user.click(screen.getByRole("button", { name: "Use photo" }));
   expect(saveImageCrop).toHaveBeenCalledWith("test_photo-crop-new.png", { ...recipe, position: { ...recipe.position, x: .6 } });
   expect(upload.mock.calls[0][0].name).toBe("test_photo-crop.png");
