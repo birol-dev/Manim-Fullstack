@@ -216,9 +216,12 @@ returns the actual address and a workspace credential. This credential works onl
 for Studio projects, previews, exports and MCP tools; it does not open the Author API
 in desktop mode. The server's Host/Origin checks also apply to MCP.
 
-Tools: `search_templates`, `get_template`, `create_project`, `list_projects`,
-`get_project`, `update_project`, `duplicate_project`, `delete_project`, `preview`,
-`get_motion`, `cancel_motion`, `export_project`, `list_exports`, `get_export`,
+The server is named **Manim Studio**. Its `instructions` give the core workflow and send
+an agent to `guide()` when unsure.
+
+Tools: `guide`, `quick_video`, `search_templates`, `get_template`, `create_project`,
+`list_projects`, `get_project`, `update_project`, `duplicate_project`, `delete_project`,
+`preview`, `get_motion`, `cancel_motion`, `export_project`, `list_exports`, `get_export`,
 `cancel_export`, `retry_export`, `remove_export`, `add_image`, `list_icons`,
 `upload_audio`, `list_music_tracks`. A preview returns an image for the agent to inspect.
 `list_exports` returns the Exports page's records, newest first, each finished file with
@@ -239,6 +242,36 @@ serves an audition (`kind` is `music` or `effects`).
 Exports return immediately; poll `get_export` for the completed download URL.
 Project updates replace each supplied object; fetch first to preserve other fields.
 Draft projects can save incomplete input, while previews and exports validate it.
+
+### Teaching the agent: guide, prompts, resources, quick_video
+
+`guide(topic="start")` returns markdown for one topic: `start` (the ten-step workflow),
+`templates` (one line per template: what it is for, what it is not for, its presets),
+`writing` (on-screen text tactics and every field's limit), `platforms` (aspect, length
+and safe zone per destination), `look` (themes, backgrounds, energy, ending, brand),
+`sound` (effects, tracks, uploads, volume, fade), `export` (formats, qualities,
+transparency, render times, retries) and `troubleshooting` (field errors, missing images,
+failed exports). An unknown topic lists the topics. `mcp_guide.py` generates template
+ids, `when_to_use`/`not_for`, field limits, presets, themes, aspects, formats, qualities
+and tracks from the live catalog, so the guide cannot drift from what is installed; only
+the tactics are hand-written.
+
+`quick_video(template, preset="", params=None, settings=None, title="")` is the fastest
+start: it creates a project from a preset (or the template's defaults) merged with the
+given overrides and returns `{project_id, project, storyboard, preview, app_url}` with the
+storyboard image, in one call. It works in-process and over the stdio `RestBridge` using
+the existing service/API calls.
+
+MCP prompts (slash commands in Claude Desktop/Code, Cursor, VS Code) each return one user
+message that names the tools to call in order, with the relevant tactics inlined:
+`make_video(goal, audience="", platform="")`, `make_quiz(topic, questions="1")`,
+`classroom_timer(minutes, activity="")`, `announce_event(what, when="", where="")` and
+`review_video(project_id)` (critique a project's storyboard and apply concrete edits).
+
+Resources: `studio://catalog` (compact JSON of templates, presets, themes, aspects,
+formats, qualities and tracks), `studio://guide/{topic}` (the same markdown as the tool)
+and `studio://templates/{template_id}` (params schema, defaults, presets and tips).
+Clients without prompt/resource support get the same knowledge through the `guide` tool.
 
 For clients that use stdio, run the bridge against the same running app:
 

@@ -2423,8 +2423,20 @@ except ImportError:
 async def studio_connection(request: Request):
     """Local connection details for the app's Connect to AI dialog."""
     base = str(request.base_url).rstrip("/")
+    script = os.path.join(BASE_DIR, "backend", "studio", "mcp_server.py")
+    python = os.path.abspath(sys.executable)
+    if os.environ.get("MANIM_API_TOKEN") and os.environ.get("MANIM_WORKSPACE"):
+        # The desktop shell sets both; its data folder is the workspace's parent.
+        stdio = {"command": python, "args": ["-B", script, "--desktop-data", os.path.dirname(WORKSPACE_DIR)],
+                 "background": True}
+    else:
+        # A source checkout: HTTP only works while this server is running.
+        stdio = {"command": python,
+                 "args": [script, "--url", base, "--token-file", os.path.join(WORKSPACE_DIR, "studio", "mcp-token")],
+                 "background": False}
     return JSONResponse({"available": studio_mcp is not None, "url": base + "/mcp/",
-                         "token": agent_token(WORKSPACE_DIR)}, headers={"Cache-Control": "no-store"})
+                         "token": agent_token(WORKSPACE_DIR), "stdio": stdio},
+                        headers={"Cache-Control": "no-store"})
 
 # Serve the built frontend (index.html + static files). /assets is handled above.
 if os.path.isdir(FRONTEND_DIR):

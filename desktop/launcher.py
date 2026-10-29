@@ -24,6 +24,12 @@ from win_job import Job
 
 SHELL_DIR = Path(__file__).resolve().parent
 
+# An agent host publishes this marker while it owns the workspace lock. The app
+# may then ask it to hand the backend over instead of refusing to start.
+AGENT_HOST_MARKER = "agent-host.json"
+HANDOVER_REQUEST = "handover-request"
+HANDOVER_TIMEOUT = 20
+
 
 def app_data() -> Path:
     base = os.environ.get("LOCALAPPDATA")
@@ -32,8 +38,43 @@ def app_data() -> Path:
     return Path(base) / "ManimStudio"
 
 
+class WorkspaceBusy(RuntimeError):
+    """Another Studio process owns this data folder."""
+
+
+def _process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    kernel32.WaitForSingleObject.restype = ctypes.c_ulong
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_int
+    process = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not process:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(process, 0) == 0x102  # WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(process)
+
+
+def agent_host_owner(folder: Path) -> int | None:
+    """The live agent host that published ownership of this folder, if any."""
+    try:
+        record = json.loads((folder / AGENT_HOST_MARKER).read_text(encoding="utf-8"))
+        pid = record.get("pid")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if type(pid) is int and _process_alive(pid):
+        return pid
+    return None
+
+
 class WorkspaceLock:
-    def __init__(self, folder: Path):
+    def __init__(self, folder: Path, *, handover_timeout: float = HANDOVER_TIMEOUT):
         folder.mkdir(parents=True, exist_ok=True)
         self.file = (folder / "desktop.lock").open("a+b")
         try:
@@ -43,11 +84,36 @@ class WorkspaceLock:
             if self.file.tell() == 0:
                 self.file.write(b"0")
                 self.file.flush()
-            self.file.seek(0)
-            msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            self._acquire()
         except OSError:
-            self.file.close()
-            raise RuntimeError("Studio is already using this data folder. Close its other window first.") from None
+            if agent_host_owner(folder) is None:
+                self.file.close()
+                raise WorkspaceBusy("Studio is already using this data folder. Close its other window first.") from None
+            try:
+                (folder / HANDOVER_REQUEST).write_text(str(os.getpid()), encoding="ascii")
+            except OSError:
+                self.file.close()
+                raise WorkspaceBusy("Studio is already using this data folder. Close its other window first.") from None
+            deadline = time.monotonic() + handover_timeout
+            while True:
+                try:
+                    self._acquire()
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        try:
+                            (folder / HANDOVER_REQUEST).unlink()
+                        except OSError:
+                            pass
+                        self.file.close()
+                        raise WorkspaceBusy(
+                            "Studio's background agent did not release this data folder. Close it and try again."
+                        ) from None
+                    time.sleep(0.1)
+
+    def _acquire(self):
+        self.file.seek(0)
+        msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
 
     def close(self):
         if not self.file.closed:

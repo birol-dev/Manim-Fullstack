@@ -3,6 +3,8 @@
 HTTP: mounted by main.py at /mcp (explicit bearer credential required).
 stdio: ``python backend/studio/mcp_server.py --url http://127.0.0.1:8000``
 bridges to the running app, so it never starts a second render queue.
+``--desktop-data <folder>`` (the desktop app's setup) uses the app when it is open
+and otherwise starts its backend in the background (desktop/agent_host.py).
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
 
 from studio.errors import StudioError
+from studio.mcp_guide import register_guidance
 from studio.registry import TemplateError
 from studio.schema import RenderSettings
 from studio.themes import THEMES
@@ -59,12 +62,18 @@ def settings_schema(template: dict) -> dict:
 def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPServer:
     """Build tools without importing Manim. A service may also be a REST bridge."""
     server = MCPServer(
-        "Composer Studio", version="1.1.0",
-        instructions=("Make animated clips from installed templates. Search, then get_template for the exact params schema, "
-                      "settings_schema and presets. Create a project, preview its storyboard, revise, then export. Do not "
-                      "invent fields. For photos and logos call add_image and use the returned name. "
-                      "update_project replaces params/settings when supplied; get_project first to preserve other fields. "
-                      "Exports are background jobs: call get_export until done, then return its URL. No Python code is accepted."))
+        "Manim Studio", version="1.2.0",
+        instructions=(
+            "Manim Studio makes short animated videos from installed templates. Call guide() first if "
+            "unsure: it teaches the workflow, writing, platforms, look, sound and export.\n"
+            "Workflow: search_templates -> get_template (exact params schema and presets) -> quick_video or "
+            "create_project -> preview(mode=\"storyboard\") and look at the image -> update_project -> "
+            "export_project -> poll get_export until done, then give the person download_url and the project id.\n"
+            "Rules: never invent fields; keep text inside its maxLength (the layout is tested against them); "
+            "get_project before update_project, because params and settings replace the whole object; images "
+            "must be uploaded with add_image first; exports are background jobs, never assume one is done.\n"
+            "Pick the aspect for the platform: 16:9 for YouTube and slides, 9:16 with safe_zone=true for "
+            "Shorts/Reels/TikTok, 4:5 or 1:1 for Instagram feed. No Python code is accepted."))
 
     def origin(ctx):
         try:
@@ -74,10 +83,15 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
         # HTTP host already passed the app's origin/host policy. stdio uses --url.
         return f"http://{host}" if host else base_url
 
+    register_guidance(server, service)
+
     @server.tool()
     @_tool_errors
     async def search_templates(query: str = "", category: str = "") -> list[dict]:
-        """Find templates and ready-to-use presets by everyday task: sale, birthday, timer, quiz, quote, year review."""
+        """Find templates and presets by the everyday job: sale, birthday, timer, quiz, quote, year
+        review. Start here when you don't know an id. Matches id, title, summary, tags and preset
+        text; category filters a gallery section. Returns id, title, summary, when_to_use, presets
+        and aspects (not the params schema: call get_template for that)."""
         catalog = await service.catalog()
         words = query.casefold().split()
         return [{"id": t["id"], "title": t["title"], "summary": t["summary"], "when_to_use": t["when_to_use"],
@@ -89,8 +103,9 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def get_template(template: str) -> dict:
-        """Return the template's params JSON Schema, settings_schema (theme, aspect, background, brand...),
-        defaults, presets and timing limits."""
+        """Everything needed before creating a project: params JSON Schema (types, enums, maxLength,
+        min/max items), settings_schema (theme, aspect, background, brand, sound), defaults, presets
+        and timing limits. Call it instead of guessing a field: unknown fields are refused."""
         info = await service.template_info(template)
         return {**info, "settings_schema": settings_schema(info)}
 
@@ -98,27 +113,60 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @_tool_errors
     async def create_project(template: str, ctx: Context, params: dict | None = None, settings: dict | None = None,
                              title: str | None = None) -> dict:
-        """Save a project visible in the app. Copy a preset's params/settings or follow get_template's schema."""
+        """Save a project visible in the app and return it, including id and poster_url. Start from a
+        preset's params/settings (get_template) or quick_video. Drafts may save incomplete input:
+        preview and export validate it, so a bad field is reported then, with its path."""
         result = await service.create_project(template, params, settings, title)
         return {**result, "app_url": f"{origin(ctx)}/#/project/{result['id']}"}
+
+    @server.tool(structured_output=False)
+    @_tool_errors
+    async def quick_video(template: str, ctx: Context, preset: str = "", params: dict | None = None,
+                          settings: dict | None = None, title: str = "") -> list:
+        """The fastest start: create a project from a preset (or the template's defaults) merged with
+        your params/settings overrides, and return {project_id, project, storyboard, preview, app_url}
+        together with the storyboard image. Look at that image, then update, preview or export.
+        Use an unknown preset name and the error lists the valid ones."""
+        info = await service.template_info(template)
+        cards = {card["id"]: card for card in info.get("presets") or []}
+        if preset and preset not in cards:
+            raise ToolError(f"Unknown preset {preset!r} for {template}; use one of: "
+                            + (", ".join(cards) or "none (this template has no presets)") + ".")
+        card = cards.get(preset) or {}
+        merged_params = {**(info.get("defaults") or {}), **(card.get("params") or {}), **(params or {})}
+        merged_settings = {**(card.get("settings") or {}), **(settings or {})}
+        project = await service.create_project(template, merged_params, merged_settings,
+                                               title or card.get("title") or None)
+        storyboard = await service.preview(project["template"], project["params"], project["settings"],
+                                           "storyboard")
+        path = storyboard.pop("path", None)
+        image = Image(path=path) if path else Image(data=await service.image_bytes(storyboard["url"]),
+                                                    format="png")
+        payload = {"project_id": project["id"], "project": project, "storyboard": storyboard.get("storyboard"),
+                   "preview": storyboard, "app_url": f"{origin(ctx)}/#/project/{project['id']}"}
+        return [TextContent(type="text", text=json.dumps(payload)), image.to_image_content()]
 
     @server.tool()
     @_tool_errors
     async def list_projects() -> list[dict]:
-        """List saved projects, newest first."""
+        """Saved projects, most recently updated first. Returns id, title, template, created, updated
+        and poster_url. Use it to find a project id the person mentions by name."""
         return await service.list_projects()
 
     @server.tool()
     @_tool_errors
     async def get_project(project_id: str) -> dict:
-        """Read a project's full params and settings before revising it."""
+        """A project's full template, params, settings, title, timestamps and poster_url. Always call
+        this before update_project: params and settings replace the whole object, not merge."""
         return await service.get_project(project_id)
 
     @server.tool()
     @_tool_errors
     async def update_project(project_id: str, params: dict | None = None, settings: dict | None = None,
                              title: str | None = None) -> dict:
-        """Replace the supplied fields; omitted fields stay unchanged. Params/settings replace the whole object."""
+        """Revise a saved project. Only supplied fields change, but a supplied params or settings
+        object replaces the whole object: call get_project first and send the complete object.
+        Leave title out to keep the current one. Returns the updated project."""
         fields = {k: v for k, v in {"params": params, "settings": settings, "title": title}.items() if v is not None}
         return await service.update_project(project_id, **fields)
 
@@ -138,7 +186,9 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool(structured_output=False)
     @_tool_errors
     async def preview(project_id: str, mode: Literal["poster", "storyboard", "motion"] = "storyboard") -> list:
-        """Inspect a silent poster/storyboard, or queue a motion preview with sound (first 20s). Poll get_motion."""
+        """Look at a project. poster and storyboard return an image you must inspect (storyboard adds
+        frame count and times); motion queues a 720p preview with sound for the first 20 s and returns
+        a job, which you poll with get_motion. Storyboard is the cheap way to check text and layout."""
         project = await service.get_project(project_id)
         if mode == "motion":
             result = await service.start_motion(project_id, project["template"], project["params"], project["settings"])
@@ -153,20 +203,25 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def get_motion(preview_id: str) -> dict:
-        """Get a motion preview's status and video URL when done."""
+        """Poll a motion preview started by preview(mode="motion"). Returns status (queued,
+        rendering, done, failed or cancelled); when done, url points to an MP4 of the first 20 s
+        with the sound mix, with duration and truncated. Keep polling until it leaves queued."""
         return await service.get_motion(preview_id)
 
     @server.tool()
     @_tool_errors
     async def cancel_motion(preview_id: str) -> dict:
-        """Stop a queued or running motion preview."""
+        """Stop a queued or running motion preview and return its record. A finished preview stays."""
         return await service.cancel_motion(preview_id)
 
     @server.tool(name="export_project")
     @_tool_errors
     async def export_project(project_id: str, format: Literal["mp4", "png", "gif", "webm", "mov"] = "mp4",
                              quality: Literal["draft", "720p", "1080p", "1080p60", "4k"] = "1080p") -> dict:
-        """Queue a saved project for export. Return immediately with a job id; poll get_export. PNG is a still."""
+        """Queue a saved project for export and return the job immediately (status queued); poll
+        get_export until done. mp4 is the universal choice; gif loops silently; png is one still;
+        webm/mov keep transparency but need settings.background.kind="transparent". draft is for
+        checking, 1080p for publishing. The project is validated here, so a bad field errors now."""
         project = await service.get_project(project_id)
         return await service.start_export(project["template"], project["params"], project["settings"],
                                           format=format, quality=quality, title=project["title"])
@@ -174,7 +229,9 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def get_export(export_id: str, ctx: Context) -> dict:
-        """Read a job's status and progress. When done, download_url points to the finished file."""
+        """An export job's status/progress/error and, once done, download_url (absolute) plus
+        filename and size. Poll until status is done, failed or cancelled; a failed job's error
+        says what broke. Give the person download_url, not a local path."""
         result = await service.get_export(export_id)
         if result.get("url"):
             result["download_url"] = origin(ctx) + result["url"]
@@ -183,8 +240,8 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def list_exports(ctx: Context) -> list[dict]:
-        """List past exports, newest first, like the app's Exports page. Each finished record includes
-        a download_url for its file."""
+        """The export history, newest first, like the app's Exports page. Every finished record
+        carries a download_url. Use it when the person asks for "the video I made earlier"."""
         base = origin(ctx)
         records = await service.list_exports()
         for record in records:
@@ -195,65 +252,102 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def cancel_export(export_id: str) -> dict:
-        """Cancel a queued or running export."""
+        """Stop a queued or running export and return its record (status cancelled). A running job
+        may take a moment to stop; wait for the status before removing it."""
         return await service.cancel_export(export_id)
 
     @server.tool()
     @_tool_errors
     async def retry_export(export_id: str) -> dict:
-        """Make a finished, failed or cancelled export again from its saved request. Returns the new
-        job; poll get_export."""
+        """Queue a new export from the request saved on a finished, failed or cancelled record. The
+        new job has a new id: poll get_export for it. Records without a stored request answer an
+        error; start a fresh export_project instead."""
         return await service.retry_export(export_id)
 
     @server.tool()
     @_tool_errors
     async def remove_export(export_id: str, delete_file: bool = True) -> dict:
-        """Delete a finished, failed or cancelled export from the history. delete_file (the default)
-        also deletes its file; false keeps the file. Cancel a running export before removing it."""
+        """Forget a finished, failed or cancelled export. delete_file (the default) also deletes its
+        file; false keeps the file in the exports folder. Cancel a running export first."""
         return await service.remove_export(export_id, delete_file=delete_file)
 
     @server.tool()
     @_tool_errors
     async def add_image(data_base64: str) -> dict:
-        """Add a photo or logo (PNG, JPEG, GIF, WebP or SVG as base64, at most 8 MB). Put the returned name in
-        a template's image field (photo, avatar, image, logo). The same picture always gets the same name."""
+        """Upload a photo or logo for an image field: PNG, JPEG, GIF, WebP or SVG as base64 (a data
+        URL is fine), at most 8 MB. Returns {name, width, height}; put `name` in the template's image
+        field (photo, avatar, image, logo). The same picture always gets the same name."""
         return await service.add_image(data_base64)
 
     @server.tool()
     @_tool_errors
     async def list_icons() -> list[str]:
-        """List the bundled icon names accepted by template icon fields."""
+        """The bundled icon names accepted by template icon fields (e.g. calendar, clock, gift). Use
+        one of these instead of emoji in text."""
         return await service.icon_names()
 
     @server.tool()
     @_tool_errors
     async def upload_audio(data_base64: str, filename: str = "music") -> dict:
-        """Upload MP3, M4A/AAC, WAV or OGG (base64, at most 50 MB/10 minutes).
-        Put the returned name in settings.sound.music.asset; omit music.track."""
+        """Upload music (MP3, M4A/AAC, WAV or OGG as base64, at most 50 MB and 10 minutes). Returns
+        {name, title, duration, url}; put `name` in settings.sound.music.asset and leave
+        music.track empty — the two sources are mutually exclusive."""
         return await service.upload_audio(data_base64, filename)
 
     @server.tool()
     @_tool_errors
     async def list_music_tracks() -> list[dict]:
-        """Original bundled music. Put its id in settings.sound.music.track; omit music.asset."""
+        """The original bundled music with audition URLs. Put a track's id in
+        settings.sound.music.track and leave music.asset empty."""
         return await service.list_music_tracks()
 
     return server
 
 
 class RestBridge:
-    """One stdio client proxies the running app, sharing its cache, projects and export queue."""
-    def __init__(self, client):
+    """One stdio client proxies the running app, sharing its cache, projects and export queue.
+
+    With a host (--desktop-data), the base URL is resolved for every request, so the app
+    opening or closing mid-session is invisible: a connection error restarts or reattaches
+    once, then the same request is retried.
+    """
+    def __init__(self, client, *, host=None):
         self.client = client
+        self.host = host
+
+    async def _base(self):
+        import asyncio
+
+        if self.host is None:
+            return ""
+        try:
+            return (await asyncio.to_thread(self.host.ensure)).rstrip("/")
+        except (OSError, RuntimeError) as exc:
+            raise ToolError(f"Could not start Manim Studio ({exc}).") from None
+
+    async def _send(self, method, path, **kwargs):
+        import httpx2 as httpx
+
+        base = await self._base()
+        try:
+            return await self.client.request(method, base + path, **kwargs)
+        except httpx.ConnectError:
+            # Nothing was sent, so a retry cannot repeat a create or export: the app may
+            # have closed or opened since the last call, and ensure() finds the new backend.
+            if self.host is None:
+                raise
+            base = await self._base()
+            return await self.client.request(method, base + path, **kwargs)
 
     async def request(self, method, path, **kwargs):
         import httpx2 as httpx
 
         try:
-            response = await self.client.request(method, "/api/studio" + path, **kwargs)
+            response = await self._send(method, "/api/studio" + path, **kwargs)
             data = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise ToolError(f"Could not reach Composer Studio. Open the app and check --url ({type(exc).__name__}).") from None
+            hint = "The Studio service could not be started" if self.host is not None else "Open the app and check --url"
+            raise ToolError(f"Could not reach Manim Studio. {hint} ({type(exc).__name__}).") from None
         if response.is_error:
             raise ToolError(json.dumps(data))
         return data
@@ -299,7 +393,12 @@ class RestBridge:
     async def image_bytes(self, url):
         if not url.startswith("/media/studio/previews/") or ".." in url:
             raise ToolError("The app returned an invalid preview URL.")
-        response = await self.client.get(url)
+        import httpx2 as httpx
+
+        try:
+            response = await self._send("GET", url)
+        except httpx.HTTPError:
+            raise ToolError("The preview image could not be loaded.") from None
         if response.is_error:
             raise ToolError("The preview image could not be loaded.")
         return response.content
@@ -342,10 +441,43 @@ def main():
     import asyncio
     import httpx2 as httpx
 
-    parser = argparse.ArgumentParser(description="Connect an MCP client to the running Composer Studio app over stdio.")
-    parser.add_argument("--url", default=os.environ.get("COMPOSER_URL", "http://127.0.0.1:8000"))
+    parser = argparse.ArgumentParser(description="Connect an MCP client to Manim Studio over stdio (the desktop mode starts it in the background).")
+    parser.add_argument("--url", default=os.environ.get("COMPOSER_URL", "http://127.0.0.1:8000"),
+                        help="Base URL of the running app (ignored with --desktop-data).")
     parser.add_argument("--token-file", help="Read the app's workspace/studio/mcp-token (or set COMPOSER_TOKEN).")
+    parser.add_argument("--desktop-data",
+                        help="Data folder holding workspace/, desktop-port and desktop.lock; starts the app's "
+                             "backend in the background when the app is closed.")
+    parser.add_argument("--app-root", help="Application root; defaults to two levels above backend/studio.")
     args = parser.parse_args()
+
+    if args.desktop_data:
+        if args.token_file:
+            parser.error("--desktop-data reads the workspace token itself; do not pass --token-file.")
+        data = os.path.abspath(os.path.expanduser(args.desktop_data))
+        root = os.path.abspath(args.app_root) if args.app_root else os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        for folder in ("desktop", "shell"):
+            candidate = os.path.join(root, folder)
+            if os.path.isfile(os.path.join(candidate, "agent_host.py")):
+                sys.path.insert(0, candidate)
+                break
+        else:
+            parser.error(f"--desktop-data needs agent_host.py under {root}/desktop or {root}/shell")
+        from agent_host import AgentHost
+
+        host = AgentHost(root, data)
+        client = httpx.AsyncClient(timeout=90, headers={"Authorization": f"Bearer {host.token}"}, trust_env=False)
+
+        async def run_desktop():
+            try:
+                await create_server(RestBridge(client, host=host), base_url=host.base_url).run_stdio_async()
+            finally:
+                await client.aclose()
+                host.close()
+        asyncio.run(run_desktop())
+        return
+
     url = urlsplit(args.url)
     if url.scheme != "http" or url.hostname not in ("localhost", "127.0.0.1", "::1") or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
         parser.error("--url must name the local app, e.g. http://127.0.0.1:8000")

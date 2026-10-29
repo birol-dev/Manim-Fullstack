@@ -43,6 +43,24 @@ The embedded CPython archive is versioned and SHA-256 pinned in `runtime.json`; 
 * Saved AI connections to `http://127.0.0.1:<port>/mcp/` survive restarts using the same data folder while its remembered port remains available. If another process takes that port, Studio starts on a new saved port; update the AI client's MCP address from Connect to AI.
 * Close requests an authenticated shutdown, closes the lifetime pipe, waits up to ten seconds, then closes the Job handle. Windows kills all remaining descendants, including orphaned workers/render processes. An abrupt shell crash also closes the Job handle. No broad process-name kills. The packaged native starter owns an outer Job so its failure also tears down the shell and service.
 
+## Agent host: MCP works with the app closed
+
+`desktop/agent_host.py` lets the stdio MCP server work whether or not a Studio window is open. The AI app launches:
+
+```text
+<runtime python> -B <app root>/backend/studio/mcp_server.py --desktop-data <data dir>
+```
+
+`<data dir>` is the folder that holds `workspace/`, `desktop-port` and `desktop.lock`; `--app-root` defaults to two levels above `backend/studio/`. The command carries no token: the process reads or creates `workspace/studio/mcp-token` with `agent_token()`, then sends it as `Authorization: Bearer` on the same Studio routes the app uses.
+
+* `AgentHost.ensure()` pings `GET /api/studio/catalog` on the port saved in `desktop-port`. A live backend — the app's or another agent host's — is reused, so there is still never a second render queue.
+* With nothing listening it starts `Backend` from `launcher.py` headlessly (no window) and returns that URL. If the workspace lock is held but the port is not answering yet (the app, or another host, is still starting), it waits up to 90 s for the other process instead of failing.
+* Handover to the app: while an agent host owns the backend it writes `agent-host.json` (with its PID) in the data folder. If a person then opens Manim Studio, `WorkspaceLock` sees the live marker, writes `handover-request` and retries the lock for up to 20 s. The agent host polls every 0.5 s, stops its backend (releasing the lock), deletes the request and keeps bridging; its next call finds the app's backend through `desktop-port`. Without a live marker, a second window is refused immediately as before, so two app windows never share a data folder.
+* The owned backend stops when the stdio session ends (stdin EOF, then process exit; the backend's Job object also kills the sidecar if the process dies) and after 10 minutes without an MCP call. It restarts transparently on the next call. The stdio bridge resolves the URL per request, so opening or closing the app mid-session only causes one retry.
+* `GET /api/studio/connection` now also returns `stdio`: `{"command", "args", "background"}`. In the desktop app `background` is `true` and the args are `-B …/backend/studio/mcp_server.py --desktop-data <data>`; in a source checkout they keep `--url` and `--token-file` with `background: false`, because HTTP works only while that server runs.
+
+The stdio entry looks for `agent_host.py` in `<app root>/desktop` and `<app root>/shell`. Packaging must copy it next to `launcher.py` in the packaged `shell/` folder.
+
 ## Portable packaging
 
 ```powershell

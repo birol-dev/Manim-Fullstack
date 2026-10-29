@@ -29,6 +29,15 @@ def listing(result):
     return [json.loads(c.text) for c in result.content if c.type == "text"]
 
 
+def text_of(result):
+    """A tool that returns markdown answers one text block."""
+    assert not result.is_error, result
+    return "\n".join(c.text for c in result.content if c.type == "text")
+
+
+GUIDE_TOPICS = ("start", "templates", "writing", "platforms", "look", "sound", "export", "troubleshooting")
+
+
 def test_agent_motion_preview(tmp_path):
     service, _ = make_service(tmp_path, motion_worker_factory=FakeMotionWorker)
     server = create_server(service)
@@ -260,6 +269,176 @@ def test_stdio_bridge_shares_app_state(tmp_path):
             assert (await service.get_project(project["id"]))["title"] == "Changed"
             await bridge.preview("countdown", {"seconds": 7}, {}, "poster")
             assert len(worker.calls) == 1
+    try:
+        run(scenario())
+    finally:
+        api.service_module.service = original
+        service.shutdown_sync()
+
+
+def test_guide_teaches_from_the_live_catalog(tmp_path):
+    service, _ = make_service(tmp_path)
+    server = create_server(service)
+    try:
+        catalog = run(service.catalog())
+        ids = [template["id"] for template in catalog["templates"]]
+        rendered = {}
+        for topic in GUIDE_TOPICS:
+            rendered[topic] = text_of(run(server.call_tool("guide", {"topic": topic})))
+            assert rendered[topic].strip()
+            for template_id in ids:  # every topic ends with the live catalog
+                assert template_id in rendered[topic]
+        assert text_of(run(server.call_tool("guide", {}))).startswith("# Start here")
+
+        announcement = next(t for t in catalog["templates"] if t["id"] == "announcement")
+        headline_limit = announcement["schema"]["properties"]["headline"]["maxLength"]
+        assert f"headline ≤ {headline_limit}" in rendered["writing"]
+        for preset in announcement["presets"]:
+            assert preset["id"] in rendered["templates"]
+        for theme in catalog["themes"]:
+            assert theme["id"] in rendered["look"]
+        for track in catalog["music_tracks"]:
+            assert track["id"] in rendered["sound"]
+        for fmt in catalog["formats"]:
+            assert f"`{fmt['id']}`" in rendered["export"]
+        assert "safe_zone=true" in rendered["platforms"] and "check the platform's current limit" in rendered["platforms"]
+        assert "retry_export" in rendered["troubleshooting"] and "add_image" in rendered["troubleshooting"]
+
+        unknown = text_of(run(server.call_tool("guide", {"topic": "nonsense"})))
+        for topic in GUIDE_TOPICS:
+            assert topic in unknown
+    finally:
+        service.shutdown_sync()
+
+
+def test_instructions_prompts_and_resources_describe_the_real_tools(tmp_path):
+    service, _ = make_service(tmp_path)
+    server = create_server(service)
+    try:
+        assert server.name == "Manim Studio"
+        assert "Manim Studio" in server.instructions and "guide()" in server.instructions
+
+        prompts = {prompt.name: prompt for prompt in run(server.list_prompts())}
+        assert {"make_video", "make_quiz", "classroom_timer", "announce_event", "review_video"} <= set(prompts)
+        assert [a.name for a in prompts["make_video"].arguments] == ["goal", "audience", "platform"]
+        assert [a.name for a in prompts["make_quiz"].arguments] == ["topic", "questions"]
+        assert [a.name for a in prompts["classroom_timer"].arguments] == ["minutes", "activity"]
+        assert [a.name for a in prompts["announce_event"].arguments] == ["what", "when", "where"]
+        assert [a.name for a in prompts["review_video"].arguments] == ["project_id"]
+
+        texts = {}
+        for name, arguments in {
+            "make_video": {"goal": "a weekend sale for a bakery"},
+            "make_quiz": {"topic": "the water cycle", "questions": "2"},
+            "classroom_timer": {"minutes": "5", "activity": "Quiet reading"},
+            "announce_event": {"what": "the summer party", "when": "Saturday", "where": "the roof"},
+            "review_video": {"project_id": "0123456789abcdef"},
+        }.items():
+            message = run(server.get_prompt(name, arguments)).messages[0]
+            assert message.role == "user"
+            texts[name] = message.content.text
+
+        tools = {tool.name for tool in run(server.list_tools())}
+        assert {"guide", "quick_video"} <= tools
+        for text in texts.values():  # a prompt only names tools that exist
+            for tool in ("search_templates", "get_template", "create_project", "quick_video", "preview",
+                         "update_project", "get_project", "export_project", "get_export"):
+                if f"`{tool}" in text:
+                    assert tool in tools
+        assert "quick_video" in texts["make_video"] and "export_project" in texts["make_video"]
+        assert "countdown" in texts["classroom_timer"] and '"seconds": 300' in texts["classroom_timer"]
+        assert "announcement" in texts["announce_event"] and "details" in texts["announce_event"]
+        assert "get_project" in texts["review_video"] and "update_project" in texts["review_video"]
+
+        resources = {str(resource.uri) for resource in run(server.list_resources())}
+        assert "studio://catalog" in resources
+        templates = {resource.uri_template for resource in run(server.list_resource_templates())}
+        assert {"studio://guide/{topic}", "studio://templates/{template_id}"} <= templates
+
+        guide = run(server.read_resource("studio://guide/start"))[0]
+        assert guide.mime_type == "text/markdown" and guide.content.startswith("# Start here")
+        assert guide.content.strip() == text_of(run(server.call_tool("guide", {"topic": "start"}))).strip()
+
+        catalog = run(service.catalog())
+        compact = json.loads(run(server.read_resource("studio://catalog"))[0].content)
+        assert [t["id"] for t in compact["templates"]] == [t["id"] for t in catalog["templates"]]
+        assert compact["themes"] == catalog["themes"]
+
+        detail = json.loads(run(server.read_resource("studio://templates/countdown"))[0].content)
+        assert detail["schema"]["properties"]["seconds"]["maximum"] == 3600
+        assert detail["defaults"]["seconds"] == 300
+        assert {preset["id"] for preset in detail["presets"]} == {
+            preset["id"] for preset in next(t for t in catalog["templates"] if t["id"] == "countdown")["presets"]}
+        assert any("quick_video" in tip for tip in detail["tips"])
+    finally:
+        service.shutdown_sync()
+
+
+def test_quick_video_starts_from_a_preset_with_overrides(tmp_path):
+    service, worker = make_service(tmp_path)
+    server = create_server(service)
+    try:
+        catalog = run(service.catalog())
+        announcement = next(template for template in catalog["templates"] if template["id"] == "announcement")
+        preset = next(card for card in announcement["presets"] if card["id"] == "weekend-sale")
+
+        result = run(server.call_tool("quick_video", {
+            "template": "announcement", "preset": "weekend-sale",
+            "params": {"headline": "Fresh *bread* at nine"},
+            "settings": {"theme": "midnight"}, "title": "Bakery sale"}))
+        assert not result.is_error, result
+        data = json.loads(next(c.text for c in result.content if c.type == "text"))
+        assert data["project_id"] == data["project"]["id"]
+        assert data["project"]["title"] == "Bakery sale"
+        assert data["project"]["params"]["headline"] == "Fresh *bread* at nine"
+        assert data["project"]["params"]["big_text"] == preset["params"]["big_text"]  # preset kept
+        assert data["project"]["params"]["details"] == preset["params"]["details"]
+        assert data["project"]["settings"] == {**preset["settings"], "theme": "midnight"}
+        assert data["storyboard"]["frames"] and data["preview"]["mode"] == "storyboard"
+        assert data["app_url"].endswith("/#/project/" + data["project_id"])
+        assert any(block.type == "image" and block.mime_type == "image/png" for block in result.content)
+        assert worker.calls[-1]["job"]["mode"] == "storyboard"
+        assert run(service.get_project(data["project_id"]))["title"] == "Bakery sale"
+
+        plain = json.loads(next(c.text for c in run(server.call_tool(
+            "quick_video", {"template": "countdown"})).content if c.type == "text"))
+        assert plain["project"]["params"]["seconds"] == 300  # the template's defaults
+        assert plain["project"]["title"] == "Countdown timer"
+        assert plain["preview"]["mode"] == "storyboard"
+
+        with pytest.raises(ToolError, match="classroom-timer"):
+            run(server.call_tool("quick_video", {"template": "countdown", "preset": "nope"}))
+    finally:
+        service.shutdown_sync()
+
+
+def test_quick_video_over_the_rest_bridge(tmp_path):
+    import httpx
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from studio import api
+
+    service, _ = make_service(tmp_path)
+    os.makedirs(service.media_dir, exist_ok=True)
+    app = FastAPI()
+    app.include_router(api.router)
+    app.mount("/media", StaticFiles(directory=service.media_dir), name="media")
+    original = api.service_module.service
+    api.service_module.service = service
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+            server = create_server(RestBridge(client))
+            result = await server.call_tool("quick_video", {"template": "countdown",
+                                                            "preset": "classroom-timer"})
+            assert not result.is_error, result
+            data = json.loads(next(c.text for c in result.content if c.type == "text"))
+            assert data["project"]["params"]["seconds"] == 300
+            assert data["storyboard"]["frames"]
+            assert any(block.type == "image" and block.mime_type == "image/png" for block in result.content)
+            assert (await service.get_project(data["project_id"]))["params"]["seconds"] == 300
+            assert "guide" in {tool.name for tool in await server.list_tools()}
+            assert (await server.call_tool("guide", {"topic": "start"})).content[0].text.startswith("# Start here")
     try:
         run(scenario())
     finally:

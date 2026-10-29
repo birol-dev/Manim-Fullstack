@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -17,7 +18,7 @@ import urllib.request
 
 DESKTOP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DESKTOP))
-from launcher import Backend, WorkspaceLock, configure_logging, smoke
+from launcher import AGENT_HOST_MARKER, HANDOVER_REQUEST, Backend, WorkspaceLock, configure_logging, smoke
 from sidecar import bind_socket
 from win_job import Job
 import psutil
@@ -125,6 +126,47 @@ class WindowsTreeTests(unittest.TestCase):
             finally:
                 first.close()
             WorkspaceLock(Path(temporary)).close()
+
+
+class HandoverTests(unittest.TestCase):
+    def test_second_window_is_refused_without_an_agent_host(self):
+        with tempfile.TemporaryDirectory(prefix="studio-handover-") as temporary:
+            folder = Path(temporary)
+            first = WorkspaceLock(folder)
+            try:
+                with self.assertRaises(RuntimeError):
+                    WorkspaceLock(folder, handover_timeout=5)
+                self.assertFalse((folder / HANDOVER_REQUEST).exists())
+            finally:
+                first.close()
+
+    def test_agent_host_releases_the_folder_for_the_app(self):
+        with tempfile.TemporaryDirectory(prefix="studio-handover-") as temporary:
+            folder = Path(temporary)
+            first = WorkspaceLock(folder)
+            (folder / AGENT_HOST_MARKER).write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+            releaser = threading.Timer(0.5, first.close)
+            releaser.start()
+            try:
+                second = WorkspaceLock(folder, handover_timeout=15)
+            finally:
+                releaser.cancel()
+                first.close()
+            second.close()
+            # The agent host deletes the request once its backend has stopped.
+            self.assertTrue((folder / HANDOVER_REQUEST).exists())
+
+    def test_dead_agent_host_marker_does_not_wait(self):
+        with tempfile.TemporaryDirectory(prefix="studio-handover-") as temporary:
+            folder = Path(temporary)
+            first = WorkspaceLock(folder)
+            (folder / AGENT_HOST_MARKER).write_text(json.dumps({"pid": 999999999}), encoding="utf-8")
+            try:
+                with self.assertRaises(RuntimeError):
+                    WorkspaceLock(folder, handover_timeout=5)
+                self.assertFalse((folder / HANDOVER_REQUEST).exists())
+            finally:
+                first.close()
 
 
 class BackendTests(unittest.TestCase):
