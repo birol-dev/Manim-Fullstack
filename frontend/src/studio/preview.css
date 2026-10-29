@@ -1,0 +1,36 @@
+/* Preview-only layout. Shared studio styles live in studio.css. */
+
+/* The caption row under the artwork holds the Play pill and the format/duration text. */
+.studio-preview-caption-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px 14px;
+  min-height: 44px;
+  flex-shrink: 0;
+}
+
+/* Override studio.css's floating overlay position: under the card it sits in the flow. */
+.studio-preview-caption-row > .studio-motion-controls {
+  position: relative;
+  inset: auto;
+  width: auto;
+  max-width: min(100%, 440px);
+  flex: 0 0 auto;
+}
+
+/* During playback the bar floats over the video and slips away after a couple of seconds. */
+.studio-motion-video .studio-motion-controls {
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+}
+
+.studio-motion-video .studio-motion-controls.studio-motion-controls-hidden {
+  opacity: 0;
+  transform: translateY(6px);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-motion-video .studio-motion-controls { transition: none; }
+}

@@ -14,8 +14,8 @@ const themes: Theme[] = [...CATALOG.themes!, {
   accent: ["#7C9CFF", "#5EEAD4", "#FBBF24"],
 }];
 
-function Panel({ background = { kind: "theme", color: null, color2: null } }: { background?: Background }) {
-  const [settings, setSettings] = useState(initialSettings(CATALOG.templates[0], { background }));
+function Panel({ background = { kind: "theme", color: null, color2: null }, theme = "clean" }: { background?: Background; theme?: string }) {
+  const [settings, setSettings] = useState(initialSettings(CATALOG.templates[0], { background, theme }));
   return <>
     <LookPanel settings={settings} onChange={(patch) => setSettings((previous) => ({ ...previous, ...patch }))} template={CATALOG.templates[0]} themes={themes} errors={{}} />
     <output data-testid="background">{JSON.stringify(settings.background)}</output>
@@ -43,6 +43,24 @@ it("starts Color with a soft theme tint and Gradient with two different colours"
   await user.click(choose("Theme"));
   await user.click(choose("Gradient"));
   expect(current()).toEqual(before);
+});
+
+it("prefills Color and Gradient on a saved Midnight project that still uses the theme background", async () => {
+  const user = userEvent.setup();
+  render(<Panel theme="midnight" background={{ kind: "theme", color: null, color2: null }} />);
+  await user.click(choose("Color"));
+  const solid = current();
+  expect(solid.kind).toBe("solid");
+  expect(solid.color).toMatch(/^#[0-9A-F]{6}$/);
+  expect(solid.color).not.toBeNull();
+  const midnight = themes[2];
+  expect(solid.color).not.toBe(midnight.bg);
+  expect(within(screen.getByRole("radiogroup", { name: "Color" })).getByRole("radio", { name: "Theme color" })).not.toBeChecked();
+  await user.click(choose("Gradient"));
+  expect(current()).toMatchObject({ kind: "gradient", color: solid.color });
+  expect(current().color2).toMatch(/^#[0-9A-F]{6}$/);
+  expect(current().color2).not.toBeNull();
+  expect(current().color2).not.toBe(current().color);
 });
 
 it("uses the currently selected theme when opening Gradient for the first time", async () => {

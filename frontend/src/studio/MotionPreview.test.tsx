@@ -54,12 +54,55 @@ it("renders only on click, plays silently inline with controls, and returns to t
   expect(screen.getByRole("button", { name: "Play animation" })).toBeInTheDocument();
 });
 
+it("keeps the Play pill below the artwork, in the caption row", () => {
+  render(<PreviewPanel {...props} />);
+  const frame = screen.getByRole("img", { name: "Preview of your video" }).closest(".studio-preview-frame")!;
+  const play = screen.getByRole("button", { name: "Play animation" });
+  expect(frame).not.toContainElement(play);
+  expect(play.closest(".studio-preview-caption-row")).not.toBeNull();
+  expect(play.closest(".studio-preview-caption-row")).toHaveTextContent("16:9 · 5 min 5 s");
+  play.focus();
+  expect(play).toHaveFocus();
+});
+
+it("hides the playback bar after a moment and brings it back on movement, focus, or pause", async () => {
+  render(<PreviewPanel {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
+  const video = await screen.findByLabelText("Your animation");
+  fireEvent.pause(video);
+  const container = screen.getByLabelText("Animation preview");
+  const controls = screen.getByRole("slider", { name: "Preview position" }).closest<HTMLElement>(".studio-motion-controls")!;
+  expect(controls).toHaveAttribute("data-controls", "shown");
+  vi.useFakeTimers();
+  try {
+    fireEvent.play(video);
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(controls).toHaveAttribute("data-controls", "hidden");
+    fireEvent.pointerMove(container);
+    expect(controls).toHaveAttribute("data-controls", "shown");
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(controls).toHaveAttribute("data-controls", "hidden");
+    fireEvent.focus(container);
+    expect(controls).toHaveAttribute("data-controls", "shown");
+    fireEvent.blur(container);
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(controls).toHaveAttribute("data-controls", "hidden");
+    fireEvent.pause(video);
+    expect(controls).toHaveAttribute("data-controls", "shown");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("polls one preview, prevents repeat clicks, and cancels on edit", async () => {
   vi.mocked(startMotion).mockResolvedValue({ id: "m1", status: "rendering" });
   vi.mocked(getMotion).mockResolvedValue({ id: "m1", status: "rendering" });
   const view = render(<PreviewPanel {...props} />);
   fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
-  expect(await screen.findByText("Making a quick preview…")).toBeInTheDocument();
+  const making = (await screen.findByText("Making a quick preview…")).closest<HTMLElement>(".studio-motion-controls");
+  expect(making).not.toBeNull();
+  expect(screen.getByRole("img", { name: "Preview of your video" }).closest(".studio-preview-frame")).not.toContainElement(making);
+  expect(making!.closest(".studio-preview-caption-row")).not.toBeNull();
   expect(screen.getByRole("img", { name: "Preview of your video" })).toHaveAttribute("src", "/still.png");
   expect(screen.getByRole("progressbar", { name: "Making a quick preview" })).not.toHaveAttribute("aria-valuenow");
   expect(screen.getByRole("button", { name: "Cancel preview" })).toBeInTheDocument();
