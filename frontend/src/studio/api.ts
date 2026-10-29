@@ -21,10 +21,20 @@ import type {
 /** What the studio says when the server can't be reached (the shared message names the code app). */
 export const STUDIO_OFFLINE = "Can't reach the app's server. Is it still running?";
 
+export interface AIStdio {
+  /** The program an AI app runs to start our MCP server. */
+  command: string;
+  args: string[];
+  /** True when the AI app starts the server itself, so Manim Studio may be closed. */
+  background: boolean;
+}
+
 export interface AIConnection {
   available: boolean;
   url: string;
   token: string;
+  /** Missing on older servers: the dialog then offers the web address instead. */
+  stdio?: AIStdio | null;
 }
 
 /** Credentials are fetched on demand and never cached. */
