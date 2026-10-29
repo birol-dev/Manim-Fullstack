@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { BarChart3, ChevronDown, ChevronRight, Code2, FolderDown, GraduationCap, Home, LayoutGrid, MapPin, Menu, Monitor, Moon, PanelLeftClose, PanelLeftOpen, PartyPopper, Play, Plug, Repeat, Search, Sun, Timer, Trophy, Video, X, Megaphone } from "lucide-react";
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 
-import { readCollapsed, SIDEBAR_KEY, storePreference, type Appearance } from "./appearance";
+import { CATEGORIES_KEY, readCategoriesOpen, readCollapsed, SIDEBAR_KEY, storePreference, type Appearance } from "./appearance";
 import { Segments } from "./components";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { useExportActivity, useExports } from "./hooks";
@@ -27,6 +27,21 @@ interface ShellProps {
 
 const CATEGORY_ICONS = { announce: Megaphone, celebrate: PartyPopper, timers: Timer, creator: Video, teach: GraduationCap, numbers: BarChart3, sports: Trophy, travel: MapPin, screens: Repeat };
 
+/** Keep in step with the compact-height rules in shell.css. */
+const SHORT_HEIGHT = "(max-height: 760px)";
+
+/** Whether the window is too short for the full-height sidebar (the category list starts closed). */
+function useShortViewport() {
+  const [short, setShort] = useState(() => window.matchMedia(SHORT_HEIGHT).matches);
+  useEffect(() => {
+    const media = window.matchMedia(SHORT_HEIGHT);
+    const changed = () => setShort(media.matches);
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  return short;
+}
+
 interface SidebarProps extends Omit<ShellProps, "children" | "push" | "replace"> {
   collapsed: boolean;
   collapsible: boolean;
@@ -42,7 +57,33 @@ interface SidebarProps extends Omit<ShellProps, "children" | "push" | "replace">
 }
 
 function Sidebar({ route, catalog, appearance, onAppearance, collapsed, collapsible, onToggle, onNavigate, onConnect, onSearch, onFocusSearch, searchRef, projectsCount, exportsCount, activity }: SidebarProps) {
-  const [categoriesOpen, setCategoriesOpen] = useState(true);
+  const short = useShortViewport();
+  // Short windows start with the category list closed; an explicit choice always wins.
+  const [categoriesChoice, setCategoriesChoice] = useState(readCategoriesOpen);
+  const categoriesOpen = categoriesChoice ?? !short;
+  const [navFade, setNavFade] = useState({ top: false, bottom: false });
+  const navRef = useRef<HTMLElement>(null);
+  const measureNav = useCallback(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const top = nav.scrollTop > 2;
+    const bottom = nav.scrollTop + nav.clientHeight < nav.scrollHeight - 2;
+    setNavFade((current) => (current.top === top && current.bottom === bottom ? current : { top, bottom }));
+  }, []);
+  useLayoutEffect(measureNav);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const observer = new ResizeObserver(measureNav);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [measureNav]);
+  const toggleCategories = () => {
+    const next = !categoriesOpen;
+    setCategoriesChoice(next);
+    storePreference(CATEGORIES_KEY, String(next));
+  };
+  const fade = navFade.top && navFade.bottom ? "both" : navFade.top ? "top" : navFade.bottom ? "bottom" : undefined;
   const query = route.kind === "templates" ? route.query ?? "" : "";
   const navLink = (target: Route, label: string, icon: ReactNode, active: boolean, count?: number | null, dot = false) => (
     <Tooltip content={label} side="right">
@@ -69,11 +110,11 @@ function Sidebar({ route, catalog, appearance, onAppearance, collapsed, collapsi
         {query ? <button type="button" aria-label="Clear search" onClick={() => onSearch("")}><X /></button> : <kbd aria-hidden>Ctrl K</kbd>}
       </>}
     </div>
-    <nav aria-label="Studio" className="studio-sidebar-nav">
+    <nav ref={navRef} aria-label="Studio" className="studio-sidebar-nav" data-fade={fade} onScroll={measureNav}>
       {navLink({ kind: "gallery" }, "Home", <Home />, route.kind === "gallery")}
       <div className="studio-nav-templates">
         {navLink({ kind: "templates" }, "Templates", <LayoutGrid />, route.kind === "templates" && (!route.category || collapsed || !categoriesOpen), catalog?.sections.reduce((count, section) => count + section.cards.length, 0))}
-        {!collapsed && <button type="button" className="studio-category-toggle" aria-label={categoriesOpen ? "Collapse template categories" : "Expand template categories"} aria-expanded={categoriesOpen} aria-controls="studio-template-categories" onClick={() => setCategoriesOpen((value) => !value)}>{categoriesOpen ? <ChevronDown /> : <ChevronRight />}</button>}
+        {!collapsed && <button type="button" className="studio-category-toggle" aria-label={categoriesOpen ? "Collapse template categories" : "Expand template categories"} aria-expanded={categoriesOpen} aria-controls="studio-template-categories" onClick={toggleCategories}>{categoriesOpen ? <ChevronDown /> : <ChevronRight />}</button>}
       </div>
       {!collapsed && categoriesOpen && <div id="studio-template-categories" className="studio-nav-categories" role="group" aria-label="Template categories">
         {catalog?.sections.map((section) => {
