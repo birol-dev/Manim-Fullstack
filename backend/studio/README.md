@@ -202,7 +202,7 @@ For clients that use stdio, run the bridge against the same running app:
 ```json
 {
   "mcpServers": {
-    "composer": {
+    "manim-studio": {
       "command": "/absolute/path/to/python",
       "args": ["/absolute/path/to/Manim/backend/studio/mcp_server.py", "--url", "http://127.0.0.1:8000", "--token-file", "/absolute/path/to/workspace/studio/mcp-token"]
     }

@@ -31,10 +31,10 @@ import type { ExportFormat, ExportJob, ExportQuality, FieldError } from "./types
 
 const POLL_MS = 700;
 
-function DownloadLink({ job, size = "md", className, secondary = false }: { job: ExportJob; size?: "sm" | "md"; className?: string; secondary?: boolean }) {
+function DownloadLink({ job, size = "md", className, secondary = false, iconOnly = false }: { job: ExportJob; size?: "sm" | "md"; className?: string; secondary?: boolean; iconOnly?: boolean }) {
   if (!job.url) return null;
   return (
-    <Button asChild variant={secondary ? "secondary" : "primary"} size={size} className={className}>
+    <Button asChild variant={secondary ? "secondary" : "primary"} size={iconOnly ? "icon" : size} className={cn(iconOnly && "studio-download-icon-only", className)}>
       <a href={apiUrl(job.url)} download={job.filename ?? true} aria-label="Download" title="Download">
         <Download />
         <span className="studio-download-label">Download</span>
@@ -452,9 +452,11 @@ interface ExportRowProps {
   onView?: (job: ExportJob) => void;
   /** Called once the row has finished animating out. */
   onDeleted?: (job: ExportJob) => void;
+  /** Narrow rows (the editor's sheet) keep only the download icon. */
+  compact?: boolean;
 }
 
-export function ExportRow({ job, onCancel, onView, onDeleted }: ExportRowProps) {
+export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }: ExportRowProps) {
   const active = ACTIVE_EXPORT.has(job.status);
   const finished = job.status === "done" || job.status === "failed";
   const title = job.title || "Untitled video";
@@ -498,7 +500,7 @@ export function ExportRow({ job, onCancel, onView, onDeleted }: ExportRowProps) 
           </span>
         )}
       </div>
-      {job.status === "done" && <DownloadLink job={job} size="sm" secondary />}
+      {job.status === "done" && <DownloadLink job={job} size="sm" secondary iconOnly={compact} />}
       {active && onCancel && (
         <Button variant="danger-ghost" size="sm" onClick={() => onCancel(job)}>
           Cancel
@@ -552,7 +554,7 @@ function groupExportsByDay(jobs: ExportJob[], now = new Date()): ExportDayGroup[
   return groups.filter((group) => group.jobs.length > 0);
 }
 
-function ExportsList({ jobs, onCancel, onRefresh, grouped = false }: { jobs: ExportJob[]; onCancel?: (job: ExportJob) => void; onRefresh?: () => void; grouped?: boolean }) {
+function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = false }: { jobs: ExportJob[]; onCancel?: (job: ExportJob) => void; onRefresh?: () => void; grouped?: boolean; compact?: boolean }) {
   const [viewing, setViewing] = useState<ExportJob | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const visible = jobs.filter((job) => !hidden.has(job.id));
@@ -560,7 +562,7 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false }: { jobs: Exp
     setHidden((current) => new Set(current).add(job.id));
     onRefresh?.();
   };
-  const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} />;
+  const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} compact={compact} />;
   return <>
     {grouped
       ? groupExportsByDay(visible).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>
@@ -593,7 +595,7 @@ export function ExportsPanel({ open, onOpenChange, refreshKey }: { open: boolean
           ) : error && jobs.length === 0 ? null : jobs.length === 0 ? (
             <p className="py-6 text-sm text-fg-muted">Nothing yet. Use Export in a video to make a file.</p>
           ) : (
-            <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} />
+            <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} compact />
           )}
         </div>
         <DialogFooter className="shrink-0"><Button variant="ghost" size="md" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>

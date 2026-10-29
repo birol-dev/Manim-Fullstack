@@ -179,13 +179,22 @@ export function friendlyExportMessage(message: string | null | undefined): strin
 export const formatLabel = (format: string) => EXPORT_FORMATS.find((item) => item.value === format)?.label ?? format.toUpperCase();
 export const qualityLabel = (quality: string) => QUALITIES.find((item) => item.value === quality)?.label ?? quality;
 
-/** Cards whose title, summary, tags (or their template's) contain every typed word. */
+/** Cards whose title, summary, tags (or their template's) contain every typed word, most relevant first. */
 export function filterCards(cards: Card[], query: string, templates: Map<string, TemplateInfo>): Card[] {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!words.length) return cards;
-  return cards.filter((card) => {
-    const template = templates.get(card.template);
-    const haystack = [card.title, card.summary, ...card.tags, template?.title, ...(template?.tags ?? [])].join(" ").toLowerCase();
-    return words.every((word) => haystack.includes(word));
-  });
+  const matches = (text: string) => words.every((word) => text.includes(word));
+  return cards
+    .map((card, index) => {
+      const template = templates.get(card.template);
+      const title = card.title.toLowerCase();
+      const tagged = [title, ...card.tags.map((tag) => tag.toLowerCase())].join(" ");
+      const summarized = [tagged, card.summary.toLowerCase()].join(" ");
+      const everything = [summarized, template?.title ?? "", ...(template?.tags ?? [])].join(" ").toLowerCase();
+      const tier = matches(title) ? 0 : matches(tagged) ? 1 : matches(summarized) ? 2 : matches(everything) ? 3 : -1;
+      return { card, index, tier };
+    })
+    .filter(({ tier }) => tier >= 0)
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map(({ card }) => card);
 }

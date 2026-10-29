@@ -190,6 +190,7 @@
 :root[data-surface="studio"] .studio-export-icon svg { width: 18px; height: 18px; }
 :root[data-surface="studio"] .studio-export-title { font-size: 14px; font-weight: 500; }
 :root[data-surface="studio"] .studio-export-meta { font-size: 12.5px; color: var(--color-fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-surface="studio"] .studio-download-icon-only .studio-download-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 :root[data-surface="studio"] .studio-export-thumb { display: block; flex-shrink: 0; width: 88px; height: 64px; padding: 0; overflow: hidden; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-well); transition: border-color 160ms ease-out, box-shadow 160ms ease-out; }
 :root[data-surface="studio"] .studio-export-thumb :is(video, img) { display: block; width: 100%; height: 100%; object-fit: contain; object-position: center; }
 :root[data-surface="studio"] .studio-export-thumb:is(:hover, :active, :focus-visible) { border-color: var(--color-accent); }
@@ -389,6 +390,7 @@
 :root[data-surface="studio"] .studio-export-viewer-note { padding: 36px 24px; text-align: center; font-size: 13px; color: var(--color-fg-muted); }
 :root[data-surface="studio"] .studio-file-meta { color: var(--color-fg-muted); font-size: 12.5px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 :root[data-surface="studio"] [data-ui="dialog-content"].studio-exports-panel { width: min(520px, calc(100vw - 32px)); max-width: 520px; }
+:root[data-surface="studio"] .studio-exports-panel .studio-export-meta { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow: hidden; text-overflow: clip; line-height: 1.35; }
 :root[data-surface="studio"] .studio-exports-scroll { min-height: 0; flex: 1; overflow-y: auto; }
 :root[data-surface="studio"] .studio-exports-button { position: relative; }
 :root[data-surface="studio"] .studio-export-activity { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 999px; background: var(--color-accent); }

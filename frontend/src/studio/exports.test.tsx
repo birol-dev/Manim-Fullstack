@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { Toaster, toast } from "sonner";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { ExportDialog, ExportsPage } from "./exports";
+import { ExportDialog, ExportsPage, ExportsPanel } from "./exports";
 import { installFakeStudio } from "./test/fakeStudio";
 import type { ExportJob } from "./types";
 
@@ -160,7 +160,21 @@ it("keeps Download labelled when a narrow row hides its text, and lets the meta 
   const link = screen.getByRole("link", { name: "Download" });
   expect(link).toHaveAttribute("aria-label", "Download");
   expect(link).toHaveAttribute("title", "Download");
+  expect(link).not.toHaveClass("studio-download-icon-only");
   expect(link.querySelector(".studio-download-label")).toHaveTextContent("Download");
+  expect(document.querySelector(".studio-export-meta")).not.toHaveClass("truncate");
+});
+
+it("uses the icon-only Download in the editor's exports sheet and lets the meta wrap", async () => {
+  const studio = installFakeStudio();
+  studio.exports = [job()];
+  render(<ExportsPanel open onOpenChange={vi.fn()} />);
+  const link = await screen.findByRole("link", { name: "Download" });
+  expect(link).toHaveClass("studio-download-icon-only");
+  expect(link).toHaveAttribute("aria-label", "Download");
+  expect(link).toHaveAttribute("title", "Download");
+  expect(link.querySelector(".studio-download-label")).toHaveTextContent("Download");
+  expect(link.closest(".studio-exports-panel")).toBeInTheDocument();
   expect(document.querySelector(".studio-export-meta")).not.toHaveClass("truncate");
 });
 

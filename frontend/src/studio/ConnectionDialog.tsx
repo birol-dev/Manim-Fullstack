@@ -24,7 +24,7 @@ export function ConnectionDialog({ onClose }: { onClose: () => void }) {
     return () => { live = false; };
   }, [attempt]);
 
-  const configurationFor = (token: string) => JSON.stringify({ mcpServers: { composer: { url: connection?.url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2);
+  const configurationFor = (token: string) => JSON.stringify({ mcpServers: { "manim-studio": { url: connection?.url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2);
   const configuration = connection?.available ? configurationFor(connection.token) : null;
   const displayed = connection?.available ? configurationFor(showToken ? connection.token : `${connection.token.slice(0, 4)}•••`) : null;
 

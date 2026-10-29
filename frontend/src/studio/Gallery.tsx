@@ -161,7 +161,7 @@ export function Gallery({ catalog, route, library, exports }: { catalog: Catalog
   const category = route.kind === "templates" ? route.category : undefined;
   const query = route.kind === "templates" ? route.query ?? "" : "";
   const sections = catalog.sections.filter((section) => !category || section.id === category).map((section) => ({ ...section, cards: filterCards(section.cards, query, templates) })).filter((section) => section.cards.length);
-  const cards = sections.flatMap((section) => section.cards);
+  const cards = filterCards(sections.flatMap((section) => section.cards), query, templates);
   const videos = query ? (library.projects ?? []).filter((project) => matchesVideo(project, query)) : [];
   const summary = query
     ? `${[

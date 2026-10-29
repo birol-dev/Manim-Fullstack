@@ -306,11 +306,11 @@ describe("gallery", () => {
     expect(studio.calls.some((call) => call.path === "/api/studio/connection")).toBe(false);
     await user.click(connect);
     const configuration = await screen.findByRole("textbox", { name: "MCP configuration" });
-    expect(JSON.parse(configuration.textContent!)).toEqual({ mcpServers: { composer: {
+    expect(JSON.parse(configuration.textContent!)).toEqual({ mcpServers: { "manim-studio": {
       url: "http://127.0.0.1:8123/mcp/", headers: { Authorization: "Bearer test•••" },
     } } });
     await user.click(screen.getByRole("button", { name: "Copy configuration" }));
-    expect(JSON.parse(clipboard.mock.calls[0][0])).toEqual({ mcpServers: { composer: {
+    expect(JSON.parse(clipboard.mock.calls[0][0])).toEqual({ mcpServers: { "manim-studio": {
       url: "http://127.0.0.1:8123/mcp/", headers: { Authorization: "Bearer test-token" },
     } } });
     await user.click(screen.getByRole("button", { name: "Show token" }));
@@ -408,6 +408,22 @@ describe("gallery", () => {
     await user.clear(search);
     await user.type(search, "zebra");
     expect(screen.getByText(/Nothing matches "zebra"/)).toBeInTheDocument();
+  });
+
+  it("ranks template search results by relevance across categories", async () => {
+    const user = userEvent.setup();
+    studio.catalog.sections[0].cards.push({ id: "team-note", template: "countdown", title: "Team note", summary: "", category: "timers", params: {}, settings: {}, tags: [] });
+    studio.catalog.sections[1].cards.push({ id: "classroom-chart", template: "chart", title: "Classroom chart", summary: "", category: "numbers", params: {}, settings: {}, tags: [] });
+    open("#/");
+    await user.type(await screen.findByRole("searchbox", { name: "Search designs" }), "classroom");
+    const templates = await screen.findByRole("region", { name: "Templates" });
+    const hrefs = within(templates).getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(hrefs).toEqual([
+      "#/new/countdown/classroom-timer",
+      "#/new/chart/classroom-chart",
+      "#/new/countdown/launch-countdown",
+      "#/new/countdown/team-note",
+    ]);
   });
 
   it("finds saved videos by title alongside templates", async () => {
