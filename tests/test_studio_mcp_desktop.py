@@ -75,6 +75,46 @@ class CatalogServer(http.server.ThreadingHTTPServer):
         self.server_close()
 
 
+class ExportsHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        server = self.server
+        if self.headers.get("Authorization") != "Bearer test-token":
+            body, status = b'{"detail":"Unauthorized"}', 401
+        elif self.path == "/api/studio/catalog":
+            body, status = b"[]", 200
+        elif self.path == "/api/studio/exports":
+            server.export_calls += 1
+            body, status = json.dumps(server.exports).encode(), 200
+        else:
+            body, status = b"{}", 404
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+class ExportsServer(http.server.ThreadingHTTPServer):
+    """Serves the catalog ping and a list of exports the test can change."""
+
+    def __init__(self):
+        super().__init__(("127.0.0.1", 0), ExportsHandler)
+        self.exports = []
+        self.export_calls = 0
+        self.thread = threading.Thread(target=self.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_):
+        self.shutdown()
+        self.server_close()
+
+
 def port_of(server):
     return server.server_address[1]
 
@@ -170,6 +210,27 @@ def test_idle_backend_stops_and_restarts_on_the_next_call(tmp_path):
         assert len(made) == 2
     finally:
         host.close()
+
+
+def test_idle_stop_waits_while_an_export_is_active(tmp_path):
+    with ExportsServer() as server:
+        server.exports = [{"id": "abcdef000001", "status": "rendering"},
+                          {"id": "abcdef000002", "status": "queued"}]
+        fake = FakeBackend(ROOT, tmp_path, f"http://127.0.0.1:{port_of(server)}")
+        host = AgentHost(ROOT, tmp_path, backend_factory=lambda root, data: fake,
+                         idle_timeout=0.15, poll_interval=0.02)
+        try:
+            assert host.ensure() == fake.url  # no desktop-port: the fake backend is owned
+            deadline = time.monotonic() + 5
+            while server.export_calls < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert server.export_calls >= 2, "an idle stop never checked the export queue"
+            assert not fake.stopped.is_set()
+            server.exports = [{"id": "abcdef000001", "status": "done"},
+                              {"id": "abcdef000002", "status": "cancelled"}]
+            assert fake.stopped.wait(5)
+        finally:
+            host.close()
 
 
 def test_bridge_retries_once_after_a_connection_error():

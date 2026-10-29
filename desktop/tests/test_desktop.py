@@ -5,6 +5,7 @@ import http.cookiejar
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -262,6 +263,59 @@ class BackendTests(unittest.TestCase):
 
     def test_token_never_in_log(self):
         self.assertNotIn(self.backend.token, (self.data / "logs/desktop.log").read_text(encoding="utf-8"))
+
+
+class PackagingTests(unittest.TestCase):
+    def test_packaged_shell_runs_the_desktop_stdio_command(self):
+        """A fake packaged tree: mcp_server.py finds agent_host.py in shell/, as package.py copies it."""
+        scripts = DESKTOP / "scripts"
+        sys.path.insert(0, str(scripts))
+        try:
+            import package
+        finally:
+            sys.path.remove(str(scripts))
+        with tempfile.TemporaryDirectory(prefix="studio-package-") as temporary:
+            root = Path(temporary) / "ManimStudio"
+            package.copy_shell(DESKTOP, root / "shell")
+            self.assertEqual({entry.name for entry in (root / "shell").iterdir()},
+                             {"launcher.py", "sidecar.py", "agent_host.py", "win_job.py"})
+            (root / "backend" / "studio").mkdir(parents=True)
+            shutil.copy2(DESKTOP.parent / "backend/studio/mcp_server.py",
+                         root / "backend/studio/mcp_server.py")
+            data = root / "data"
+            data.mkdir()
+            code = r"""
+import json, runpy, sys
+server, data = sys.argv[1], sys.argv[2]
+module = runpy.run_path(server)
+seen = {}
+class Stub:
+    def __init__(self, bridge, base_url=None):
+        seen["bridge"] = type(bridge).__name__
+        seen["host_root"] = str(bridge.host.root)
+        seen["base_url"] = base_url
+    async def run_stdio_async(self):
+        seen["ran"] = True
+module["main"].__globals__["create_server"] = lambda bridge, base_url=None: Stub(bridge, base_url)
+sys.argv = [server, "--desktop-data", data]
+module["main"]()
+import agent_host
+print(json.dumps({"agent_host": agent_host.__file__, "seen": seen}))
+"""
+            environment = {name: value for name, value in os.environ.items()
+                           if name not in {"MANIM_MCP_TOKEN", "MANIM_API_TOKEN", "MANIM_WORKSPACE",
+                                           "PYTHONHOME", "PYTHONPATH"}}
+            environment["PYTHONIOENCODING"] = "utf-8"
+            completed = subprocess.run(
+                [sys.executable, "-B", "-c", code, str(root / "backend/studio/mcp_server.py"), str(data)],
+                capture_output=True, text=True, timeout=120, cwd=str(root), env=environment,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            self.assertEqual(completed.returncode, 0, completed.stderr[-4000:])
+            report = json.loads(completed.stdout.strip().splitlines()[-1])
+            self.assertEqual(Path(report["agent_host"]).resolve(), (root / "shell/agent_host.py").resolve())
+            self.assertEqual(report["seen"]["host_root"], str(root.resolve()))
+            self.assertEqual(report["seen"]["bridge"], "RestBridge")
+            self.assertTrue(report["seen"]["ran"])
 
 
 class CrashTests(unittest.TestCase):

@@ -11,6 +11,17 @@ import sys
 
 from prepare import DESKTOP, ROOT, RUNTIME, remove_generated, runtime_paths
 
+# The stdio command in GET /api/studio/connection runs backend/studio/mcp_server.py,
+# which looks for agent_host.py next to launcher.py in the packaged shell/ folder.
+SHELL_FILES = ("launcher.py", "sidecar.py", "agent_host.py", "win_job.py")
+
+
+def copy_shell(source: Path, destination: Path) -> None:
+    """Copy the lifecycle host and the stdio agent host into the packaged shell folder."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in SHELL_FILES:
+        shutil.copy2(source / name, destination / name)
+
 
 def main():
     sys.path.insert(0, str(ROOT))
@@ -38,8 +49,7 @@ def main():
     shutil.copytree(DESKTOP / "build/frontend", destination / "frontend/dist")
     shell = destination / "shell"
     shell.mkdir()
-    for name in ("launcher.py", "sidecar.py", "win_job.py"):
-        shutil.copy2(DESKTOP / name, shell / name)
+    copy_shell(DESKTOP, shell)
     runtime_paths(destination / "runtime", destination / "backend", shell)
     snapshot = {p.relative_to(destination / "backend").as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in sorted((destination / "backend").rglob("*")) if p.is_file()}

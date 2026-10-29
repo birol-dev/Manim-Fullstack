@@ -9,8 +9,9 @@ so they never share the IDE's render queue or media folders. PNG exports are a
 full-resolution poster from the warm preview worker.
 
 State lives in memory and in a small JSON index (``workspace/studio/exports.json``)
-so the list survives a restart; exports that were queued or rendering when the app
-stopped come back as ``failed``.
+so the list survives a restart. A clean shutdown writes queued and rendering exports
+as ``queued`` with ``resume``; the next launch renders them again from the start.
+Exports a crashed or killed process left active come back as ``failed``.
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ EXPORT_FORMATS = ("mp4", "gif", "webm", "mov", "png")
 ACTIVE = ("queued", "rendering")
 FINISHED = ("done", "failed", "cancelled")
 INTERRUPTED = "Interrupted: the app stopped before this export finished."
+RESUMING = "Waiting to continue"
+RESUME_FAILED = "Could not continue this export"
 _EXPORT_ID = re.compile(r"^[0-9a-f]{12}$")
 _ERROR_LINE = re.compile(r"\b[A-Za-z_][\w.]*(?:Error|Exception)\b")
 _BOX_CHARS = "│┃╭╰─━┏┗┓┛╮╯"
@@ -237,17 +240,36 @@ def public(record: dict) -> dict:
     return {key: value for key, value in record.items() if not key.startswith("_")}
 
 
+def job_from_request(record: dict) -> dict:
+    """Rebuild the render job of a record from its stored request, or raise why it can't be."""
+    request = record.get("request")
+    if not isinstance(request, dict):
+        raise ValueError("it has no saved request")
+    template = request.get("template")
+    if not isinstance(template, str) or not template:
+        raise ValueError("its saved request has no template")
+    params, settings = request.get("params"), request.get("settings")
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("its saved parameters are not valid")
+    if settings is not None and not isinstance(settings, dict):
+        raise ValueError("its saved settings are not valid")
+    return {"template": template, "params": dict(params or {}), "settings": dict(settings or {})}
+
+
 class ExportManager:
     """The export queue. Thread-safe; the service wraps it in async calls.
 
     *plan(job)* returns the storyboard metadata of a job (``plays``, ``length``) or raises;
     *still(job, width, height, out)* renders a full-size poster; *runner_factory()*
-    returns a fresh ``ManimVideoRunner``-like object per video.
+    returns a fresh ``ManimVideoRunner``-like object per video; *resume_job(record)*
+    rebuilds the job of an export a clean shutdown handed back to the queue (raises when
+    its stored request can no longer be used).
     """
 
     def __init__(self, *, exports_dir: str, work_dir: str, index_path: str, media_root: str,
                  plan: Callable, still: Callable, runner_factory: Callable, base_timeout: Optional[float] = None,
-                 max_active: int = 20, max_records: int = 200):
+                 max_active: int = 20, max_records: int = 200,
+                 resume_job: Optional[Callable[[dict], dict]] = None):
         self.exports_dir = exports_dir
         self.work_dir = work_dir
         self.index_path = index_path
@@ -255,12 +277,14 @@ class ExportManager:
         self.plan = plan
         self.still = still
         self.runner_factory = runner_factory
+        self.resume_job = resume_job or job_from_request
         self.base_timeout = base_timeout
         self.max_active = max_active
         self.max_records = max_records
         self._lock = threading.RLock()
         self._wake = threading.Condition(self._lock)
         self._records: dict = {}
+        self._sequence = 0  # queue order, needed when two records share a ``created`` stamp
         self._loaded = False
         self._stopping = False
         self._thread: Optional[threading.Thread] = None
@@ -268,6 +292,7 @@ class ExportManager:
 
     # -- index -------------------------------------------------------------------
     def _ensure_loaded(self) -> None:
+        resumed = False
         with self._lock:
             if self._loaded:
                 return
@@ -285,14 +310,32 @@ class ExportManager:
                 logger.warning("studio: ignoring unreadable export index %s (%s)", self.index_path, exc)
                 return
             changed = False
-            for raw in data.get("exports", []) if isinstance(data, dict) else []:
+            stored = data.get("exports") if isinstance(data, dict) else None
+            # Oldest first, so records created in the same instant keep their queue order.
+            for raw in reversed(stored if isinstance(stored, list) else []):
                 if not isinstance(raw, dict) or not _EXPORT_ID.match(str(raw.get("id", ""))):
                     continue
                 record = dict(raw)
                 record["time_left"] = None  # estimates never survive a process restart
+                record["_queued"] = self._sequence  # ascending with age, like the queue
+                self._sequence += 1
                 if record.get("status") in ACTIVE:
-                    record.update(status="failed", progress=None, message=INTERRUPTED, error=INTERRUPTED)
-                    changed = True
+                    if record.get("resume") is True:
+                        try:
+                            record["_job"] = self.resume_job(record)
+                        except Exception as exc:  # noqa: BLE001 - the request can no longer be built
+                            reason = str(exc) or type(exc).__name__
+                            record.update(status="failed", progress=None, message=RESUME_FAILED,
+                                          error=f"{RESUME_FAILED}: {reason}", finished=utc_now())
+                            record.pop("resume", None)
+                        else:
+                            self._requeue_locked(record)
+                            resumed = True
+                        changed = True
+                    else:
+                        # No resume flag: a crash or a killed process. Never pretend it ran.
+                        record.update(status="failed", progress=None, message=INTERRUPTED, error=INTERRUPTED)
+                        changed = True
                 if record.get("status") == "done":
                     filename = record.get("filename") or ""
                     if os.path.basename(filename) != filename or not os.path.isfile(
@@ -302,6 +345,24 @@ class ExportManager:
                 self._records[record["id"]] = record
             if changed:
                 self._save_locked()
+        if resumed:
+            with self._lock:
+                self._ensure_thread()
+
+    def _requeue_locked(self, record: dict, save: bool = False) -> None:
+        """Hand an active record back to the queue for the next launch (or the next run)."""
+        if record.pop("_cancel", None):  # the person cancelled it before the stop: keep that
+            record.pop("resume", None)
+            record.update(status="cancelled", progress=None, message="Cancelled", time_left=None,
+                          finished=utc_now())
+            if save:
+                self._save_locked()
+            return
+        record.update(status="queued", progress=None, message=RESUMING, time_left=None, resume=True)
+        for key in ("phase", "rendered_frames", "total_frames", "error", "log", "finished", "started"):
+            record.pop(key, None)
+        if save:
+            self._save_locked()
 
     def _prunable(self, record: dict) -> bool:
         """Whether trimming may drop this record from the index.
@@ -326,7 +387,8 @@ class ExportManager:
         return not (inside and os.path.isfile(path))
 
     def _save_locked(self) -> None:
-        records = sorted(self._records.values(), key=lambda r: r.get("created", ""), reverse=True)
+        records = sorted(self._records.values(), key=lambda r: (r.get("created", ""), r.get("_queued", 0)),
+                         reverse=True)
         prunable = 0
         for record in records:
             if not self._prunable(record):
@@ -356,7 +418,8 @@ class ExportManager:
                 export_id = secrets.token_hex(6)
             entry = {"id": export_id, **record, "status": "queued", "progress": None,
                      "message": "Waiting to start", "time_left": None, "created": utc_now(), "_job": dict(job),
-                     "_log": deque(maxlen=40)}
+                     "_log": deque(maxlen=40), "_queued": self._sequence}
+            self._sequence += 1
             entry.setdefault("request", {
                 "template": entry.get("template"),
                 "params": dict(job.get("params") or {}),
@@ -396,7 +459,8 @@ class ExportManager:
     def list(self) -> list:
         self._ensure_loaded()
         with self._lock:
-            records = sorted(self._records.values(), key=lambda r: r.get("created", ""), reverse=True)
+            records = sorted(self._records.values(), key=lambda r: (r.get("created", ""), r.get("_queued", 0)),
+                             reverse=True)
             return [public(r) for r in records]
 
     def cancel(self, export_id: str) -> dict:
@@ -405,6 +469,7 @@ class ExportManager:
         with self._lock:
             record = self._get_locked(export_id)
             if record["status"] == "queued":
+                record.pop("resume", None)  # cancelled by the person, not waiting to continue
                 record.update(status="cancelled", progress=None, message="Cancelled", finished=utc_now())
                 self._save_locked()
             elif record["status"] == "rendering":
@@ -438,13 +503,19 @@ class ExportManager:
             return public(record)
 
     def shutdown(self, timeout: float = 10.0, on_stopping: Optional[Callable] = None) -> None:
-        """Stop the running export and the queue thread. The running one ends as failed
-        (interrupted); queued ones stay queued: in this process they run when the queue is
-        used again, after a restart they come back as failed (interrupted). *on_stopping*
-        runs once the queue is stopping, before waiting for the thread (the service closes
-        the preview worker there, so a storyboard in progress ends at once)."""
+        """Stop the running export and the queue thread. A clean stop hands every queued
+        or rendering record back to the queue (``queued`` with ``resume``) and writes the
+        index before waiting, so even a process killed during the wait leaves a complete
+        index that the next launch continues. *on_stopping* runs once the queue is
+        stopping, before waiting for the thread (the service closes the preview worker
+        there, so a storyboard in progress ends at once)."""
         with self._lock:
             self._stopping = True
+            if self._loaded:
+                for record in self._records.values():
+                    if record.get("status") in ACTIVE:
+                        self._requeue_locked(record)
+                self._save_locked()  # the resume flag is on disk before anything waits
             current, thread = self._current, self._thread
             self._wake.notify_all()
         if current is not None:
@@ -455,6 +526,9 @@ class ExportManager:
             thread.join(timeout)
         with self._lock:
             if self._loaded:
+                for record in self._records.values():
+                    if record.get("status") in ACTIVE:
+                        self._requeue_locked(record)
                 self._save_locked()
 
     # -- worker thread -------------------------------------------------------------
@@ -484,7 +558,7 @@ class ExportManager:
         queued = [r for r in self._records.values() if r.get("status") == "queued" and "_job" in r]
         if not queued:
             return None
-        return min(queued, key=lambda r: r.get("created", ""))["id"]
+        return min(queued, key=lambda r: (r.get("created", ""), r.get("_queued", 0)))["id"]
 
     def _run_forever(self) -> None:
         while True:
@@ -503,7 +577,7 @@ class ExportManager:
                 logger.exception("studio: export %s crashed the queue", export_id)
                 with self._lock:
                     record = self._records.get(export_id)
-                    if record is not None and record.get("status") in ACTIVE:
+                    if record is not None and record.get("status") in ACTIVE and not self._stopping:
                         record.update(status="failed", progress=None, message="Export failed", time_left=None,
                                       error="Internal error in the export queue.")
                         record.pop("_job", None)
@@ -540,7 +614,13 @@ class ExportManager:
             record = self._records.get(export_id)
             if record is None or record.get("status") != "queued":
                 return
-            record.update(status="rendering", progress=0, message="Getting ready", started=utc_now())
+            # A fresh render from frame 0: nothing from the stopped attempt carries over.
+            for key in ("resume", "phase", "rendered_frames", "total_frames", "error", "log", "finished",
+                        "started"):
+                record.pop(key, None)
+            record.setdefault("_log", deque(maxlen=40))
+            record.update(status="rendering", progress=0, message="Getting ready", time_left=None,
+                          started=utc_now())
             record.setdefault("_slug", record.get("template") or "video")
             self._save_locked()
         job = record["_job"]
@@ -634,19 +714,29 @@ class ExportManager:
             if record.get("_cancel"):
                 self._update(record, save=True, status="cancelled", progress=None, message="Cancelled",
                              finished=utc_now())
-            else:  # the app is shutting down
+            elif self._stopping:  # a clean stop: the next launch continues this export
+                with self._lock:
+                    if record.get("status") != "cancelled":  # shutdown already kept a cancel
+                        self._requeue_locked(record, save=True)
+            else:
                 self._update(record, save=True, status="failed", progress=None, message=INTERRUPTED,
                              error=INTERRUPTED, finished=utc_now())
         except Exception as exc:  # noqa: BLE001 - every failure ends up on the record
-            message = INTERRUPTED if self._stopping else (str(exc) or type(exc).__name__)
-            fields = {"status": "failed", "progress": None, "message": "Export failed", "error": message,
-                      "finished": utc_now()}
-            if record["_log"]:
-                fields["log"] = list(record["_log"])[-20:]
-            self._update(record, save=True, **fields)
+            if self._stopping:
+                with self._lock:
+                    if record.get("status") != "cancelled":
+                        self._requeue_locked(record, save=True)
+            else:
+                message = str(exc) or type(exc).__name__
+                fields = {"status": "failed", "progress": None, "message": "Export failed", "error": message,
+                          "finished": utc_now()}
+                if record["_log"]:
+                    fields["log"] = list(record["_log"])[-20:]
+                self._update(record, save=True, **fields)
         finally:
             with self._lock:
                 if self._current and self._current[0] == export_id:
                     self._current = None
-                record.pop("_job", None)
+                if not record.get("resume"):
+                    record.pop("_job", None)  # a record handed back to the queue keeps its job
             shutil.rmtree(job_dir, ignore_errors=True)

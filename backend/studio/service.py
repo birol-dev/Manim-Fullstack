@@ -166,7 +166,8 @@ class StudioService:
                     exports_dir=self.exports_dir, work_dir=os.path.join(self.tmp_dir, "exports"),
                     index_path=self.index_path, media_root=self.media_dir, plan=self._plan_export,
                     still=self._render_still, runner_factory=self._runner_factory,
-                    base_timeout=self.export_timeout, max_active=self.max_active_exports)
+                    base_timeout=self.export_timeout, max_active=self.max_active_exports,
+                    resume_job=self._resume_export_job)
             return self._exports
 
     def shutdown_sync(self) -> None:
@@ -545,6 +546,13 @@ class StudioService:
     # -- exports -------------------------------------------------------------------------
     def _plan_export(self, job: dict) -> dict:
         return self.preview_sync(job["template"], job["params"], job["settings"], "storyboard")["storyboard"]
+
+    def _resume_export_job(self, record: dict) -> dict:
+        """Rebuild the render job of an export a clean shutdown handed back to the queue."""
+        request = record.get("request") or {}
+        spec, params, settings, _ = self._validate(request.get("template"), request.get("params"),
+                                                   request.get("settings"))
+        return {"template": spec.id, "params": params, "settings": settings, "assets_dir": self.assets_dir}
 
     def _render_still(self, job: dict, width: int, height: int, out: str) -> None:
         with self._render_lock:

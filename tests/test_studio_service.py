@@ -488,25 +488,137 @@ def test_export_queue_is_capped(tmp_path):
     svc.shutdown_sync()
 
 
-def test_export_index_survives_a_restart(tmp_path):
+def test_clean_shutdown_requeues_and_resumes_exports(tmp_path):
     blocker = FakeRunner("block")
     svc, _ = make_service(tmp_path, runners=RunnerFactory(FakeRunner("ok"), blocker))
-    done = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft"))["id"])
-    running = run(svc.start_export("countdown", {}, {}, quality="draft"))
-    queued = run(svc.start_export("countdown", {}, {}, quality="draft"))
+    done = _settled(svc, run(svc.start_export("countdown", {"seconds": 5}, {}, quality="draft"))["id"])
+    running = run(svc.start_export("countdown", {"seconds": 10}, {}, quality="draft"))
+    queued = run(svc.start_export("countdown", {"seconds": 20}, {}, quality="draft"))
     assert blocker.started.wait(5)
-    svc.shutdown_sync()  # app shutdown: the running export is stopped
-    assert run(svc.get_export(running["id"]))["error"] == INTERRUPTED
+    svc.shutdown_sync()  # a clean stop hands the active exports back to the queue
 
-    again, _ = make_service(tmp_path)
-    by_id = {e["id"]: e for e in run(again.list_exports())}
-    assert by_id[done["id"]]["status"] == "done" and by_id[done["id"]]["url"] == done["url"]
+    assert run(svc.get_export(running["id"]))["status"] == "queued"
+    saved = {e["id"]: e for e in json.load(open(svc.index_path, encoding="utf-8"))["exports"]}
+    assert saved[done["id"]]["status"] == "done"
     for export in (running, queued):
-        assert by_id[export["id"]]["status"] == "failed" and by_id[export["id"]]["error"] == INTERRUPTED
+        record = saved[export["id"]]
+        assert record["status"] == "queued" and record["resume"] is True
+        assert record["progress"] is None and record["message"] == exports_module.RESUMING
+        assert record["request"] == export["request"]  # the same request retry_export would use
+        assert not any(key.startswith("_") for key in record)
+
+    class ParamsRunner(FakeRunner):
+        def run(self, job, on_progress, on_log):
+            with open(job.job_file, encoding="utf-8") as f:
+                self.params = json.load(f)["params"]
+            return super().run(job, on_progress, on_log)
+
+    first = ParamsRunner("block")
+    factory = RunnerFactory(first, ParamsRunner("ok"))
+    again, _ = make_service(tmp_path, runners=factory)
+    run(again.list_exports())
+    assert first.started.wait(5)
+    listed = {e["id"]: e for e in run(again.list_exports())}
+    # The older export (the one that had been rendering) is resumed first; the
+    # other waits with its resume flag until the queue picks it up.
+    assert listed[running["id"]]["status"] == "rendering" and "resume" not in listed[running["id"]]
+    assert listed[queued["id"]]["status"] == "queued" and listed[queued["id"]]["resume"] is True
+    first.release.set()
+    for export in (running, queued):
+        resumed = _settled(again, export["id"])
+        assert resumed["status"] == "done" and resumed["progress"] == 100
+        assert "resume" not in resumed and resumed["request"] == export["request"]
+    assert [r.params["seconds"] for r in factory.made] == [10, 20]
+
     # A done export whose file was deleted drops out of the list after a restart.
     os.unlink(os.path.join(again.exports_dir, done["filename"]))
+    again.shutdown_sync()
     third, _ = make_service(tmp_path)
-    assert done["id"] not in {e["id"] for e in run(third.list_exports())}
+    try:
+        assert done["id"] not in {e["id"] for e in run(third.list_exports())}
+    finally:
+        third.shutdown_sync()
+
+
+def test_a_crash_without_resume_flags_still_fails_interrupted(tmp_path):
+    index = tmp_path / "ws" / "studio" / "exports.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(json.dumps({"version": 1, "exports": [
+        {"id": "abcdef000001", "status": "rendering", "created": "2", "progress": 50},
+        {"id": "abcdef000002", "status": "queued", "created": "1"},
+    ]}), encoding="utf-8")
+    runners = RunnerFactory()
+    svc, _ = make_service(tmp_path, runners=runners)
+    try:
+        records = {e["id"]: e for e in run(svc.list_exports())}
+        for export_id in ("abcdef000001", "abcdef000002"):
+            assert records[export_id]["status"] == "failed"
+            assert records[export_id]["error"] == INTERRUPTED
+            assert "resume" not in records[export_id]
+        assert runners.made == []  # nothing was resumed
+    finally:
+        svc.shutdown_sync()
+
+
+def test_a_resumed_export_whose_request_is_gone_fails_clearly(tmp_path):
+    index = tmp_path / "ws" / "studio" / "exports.json"
+    index.parent.mkdir(parents=True)
+    index.write_text(json.dumps({"version": 1, "exports": [
+        {"id": "abcdef000001", "status": "queued", "resume": True, "created": "1", "width": 640,
+         "height": 360, "fps": 15, "format": "mp4",
+         "request": {"template": "template-that-was-deleted", "params": {}, "settings": {}}},
+    ]}), encoding="utf-8")
+    svc, _ = make_service(tmp_path)
+    try:
+        record = run(svc.list_exports())[0]
+        assert record["status"] == "failed" and "resume" not in record
+        assert record["message"] == exports_module.RESUME_FAILED
+        assert exports_module.RESUME_FAILED in record["error"]
+        assert "template-that-was-deleted" in record["error"]
+    finally:
+        svc.shutdown_sync()
+
+
+def test_cancel_and_remove_a_resumed_export(tmp_path):
+    blocker = FakeRunner("block")
+    svc, _ = make_service(tmp_path, runners=RunnerFactory(FakeRunner("ok"), blocker, blocker))
+    _settled(svc, run(svc.start_export("countdown", {"seconds": 5}, {}, quality="draft"))["id"])
+    running = run(svc.start_export("countdown", {"seconds": 10}, {}, quality="draft"))
+    queued = run(svc.start_export("countdown", {"seconds": 20}, {}, quality="draft"))
+    assert blocker.started.wait(5)
+    svc.shutdown_sync()
+
+    resumed_blocker = FakeRunner("block")
+    again, _ = make_service(tmp_path, runners=RunnerFactory(resumed_blocker, FakeRunner("ok")))
+    run(again.list_exports())
+    assert resumed_blocker.started.wait(5)
+    record = run(again.get_export(running["id"]))
+    assert record["status"] == "rendering" and "resume" not in record  # cleared once started
+    assert run(again.get_export(queued["id"]))["resume"] is True
+    cancelled = run(again.cancel_export(running["id"]))
+    assert cancelled["status"] == "cancelled"
+    assert _settled(again, queued["id"])["status"] == "done"
+    removed = run(again.remove_export(running["id"]))
+    assert removed["id"] == running["id"]
+    assert running["id"] not in {e["id"] for e in run(again.list_exports())}
+    again.shutdown_sync()
+
+
+def test_a_cancel_pending_at_shutdown_stays_cancelled(tmp_path):
+    blocker = FakeRunner("block")
+    svc, _ = make_service(tmp_path, runners=RunnerFactory(FakeRunner("ok"), blocker))
+    _settled(svc, run(svc.start_export("countdown", {"seconds": 5}, {}, quality="draft"))["id"])
+    running = run(svc.start_export("countdown", {"seconds": 10}, {}, quality="draft"))
+    assert blocker.started.wait(5)
+    manager = svc._export_manager()
+    with manager._lock:  # the person pressed Cancel, then closed the app before it stopped
+        manager._records[running["id"]]["_cancel"] = True
+    svc.shutdown_sync()
+
+    again, _ = make_service(tmp_path, runners=RunnerFactory(FakeRunner("ok")))
+    record = run(again.get_export(running["id"]))
+    assert record["status"] == "cancelled" and "resume" not in record
+    again.shutdown_sync()
 
 
 def test_history_pruning_keeps_finished_files(tmp_path):

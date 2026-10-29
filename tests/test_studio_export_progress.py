@@ -272,6 +272,47 @@ def test_export_request_is_saved_and_survives_a_reload(tmp_path):
         again.shutdown()
 
 
+def test_a_saved_request_rebuilds_its_job_or_says_why_not():
+    assert exports.job_from_request({"request": {"template": "countdown", "params": {"seconds": 3},
+                                                 "settings": {"theme": "pop"}}}) == {
+        "template": "countdown", "params": {"seconds": 3}, "settings": {"theme": "pop"}}
+    assert exports.job_from_request({"request": {"template": "countdown"}}) == {
+        "template": "countdown", "params": {}, "settings": {}}
+    for record in ({}, {"request": None}, {"request": {}},
+                   {"request": {"template": "countdown", "params": []}},
+                   {"request": {"template": "countdown", "settings": "dark"}}):
+        with pytest.raises(ValueError):
+            exports.job_from_request(record)
+
+
+def test_shutdown_hands_the_export_back_before_waiting(tmp_path):
+    """A stop that is killed mid-wait still leaves a complete index to resume from."""
+    started, release = threading.Event(), threading.Event()
+
+    class StuckRunner:
+        def run(self, job, on_progress, on_log):
+            started.set()
+            release.wait(5)
+            raise exports.ExportCancelled()
+
+        def cancel(self):
+            pass  # still winding down; the index must not depend on this
+
+    manager = _export_manager(tmp_path, runner_factory=StuckRunner)
+    manager.start({"template": "countdown", "format": "mp4", "fps": 15, "width": 640, "height": 360},
+                  {"template": "countdown", "params": {}, "settings": {}})
+    assert started.wait(5)
+    began = time.monotonic()
+    manager.shutdown(timeout=0.1)
+    assert time.monotonic() - began < 5
+    saved = json.loads((tmp_path / "index.json").read_text(encoding="utf-8"))["exports"]
+    assert saved[0]["status"] == "queued" and saved[0]["resume"] is True
+    assert saved[0]["progress"] is None and saved[0]["message"] == exports.RESUMING
+    assert not any(key.startswith("_") for key in saved[0])
+    release.set()
+    manager._thread.join(5)
+
+
 def test_records_without_a_request_still_load(tmp_path):
     index = tmp_path / "index.json"
     index.write_text(json.dumps({"version": 1, "exports": [

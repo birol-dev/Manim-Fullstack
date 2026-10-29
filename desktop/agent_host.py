@@ -3,7 +3,8 @@
 The stdio MCP server runs with the desktop runtime Python. This host reuses a
 backend that is already listening (the app's, or another agent host's), starts a
 headless one when nothing answers, yields the data folder when the app asks for
-it, and stops an idle backend so a forgotten AI session leaves nothing running.
+it, and stops an idle backend so a forgotten AI session leaves nothing running,
+except while an export is queued or rendering (its next launch continues it).
 No Manim imports are needed here, so the stdio process can import this first.
 """
 from __future__ import annotations
@@ -21,6 +22,8 @@ from launcher import AGENT_HOST_MARKER, HANDOVER_REQUEST, Backend, WorkspaceBusy
 from sidecar import DEFAULT_PORT
 
 CATALOG_PATH = "/api/studio/catalog"
+EXPORTS_PATH = "/api/studio/exports"
+ACTIVE_EXPORTS = ("queued", "rendering")
 
 
 class AgentHost:
@@ -182,11 +185,34 @@ class AgentHost:
                     self._drop_request()
                     return
                 if self._clock() - self._last_use >= self.idle_timeout:
+                    if self._exports_active():
+                        self._last_use = self._clock()  # the export is using the backend
+                        continue
                     try:
                         self._release()
                     except Exception as exc:
                         print(f"Studio agent host: idle stop failed: {exc}", file=sys.stderr)
                     return
+
+    def _exports_active(self) -> bool:
+        """Whether the owned backend has an export queued or rendering.
+
+        Stopping it would interrupt work the person is waiting for. A backend that
+        cannot answer is treated as idle: that is what the host did before exports
+        existed, and a broken backend must still stop.
+        """
+        backend = self._backend
+        if backend is None:
+            return False
+        request = urllib.request.Request(backend.url + EXPORTS_PATH,
+                                         headers={"Authorization": f"Bearer {self._agent_token()}"})
+        try:
+            with self._http.open(request, timeout=self.ping_timeout) as response:
+                exports = json.load(response)
+        except (OSError, ValueError, http.client.HTTPException):
+            return False
+        return isinstance(exports, list) and any(
+            isinstance(record, dict) and record.get("status") in ACTIVE_EXPORTS for record in exports)
 
     def _drop_request(self):
         try:
