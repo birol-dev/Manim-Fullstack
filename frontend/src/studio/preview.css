@@ -1,5 +1,14 @@
 /* Preview-only layout. Shared studio styles live in studio.css. */
 
+/* The artwork fills the preview area: as wide as the stage, as tall as the stage allows,
+   at the chosen format's ratio. The ratio is set on the frame (--studio-preview-ratio). */
+.studio-preview-frame {
+  aspect-ratio: var(--studio-preview-ratio);
+  width: min(100cqw, calc(100cqh * var(--studio-preview-ratio)));
+  max-width: 100%;
+  max-height: 100%;
+}
+
 /* The caption row under the artwork holds the Play pill and the format/duration text. */
 .studio-preview-caption-row {
   display: flex;

@@ -29,4 +29,12 @@ describe("storyboard fit", () => {
   it.each([[305, "5 min 5 s"], [120, "2 min"], [90, "1 min 30 s"], [60, "1 min"], [119.9, "2 min"], [17.03, "17 seconds"], [10.9, "11 seconds"], [7.54, "7.5 seconds"], [7, "7 seconds"], [1, "1 second"]])("speaks %s naturally", (value, expected) => {
     expect(spokenDuration(value as number)).toBe(expected);
   });
+
+  // The preview area of the 900–1199px split at 1000x680, 1093x614 and 900x680.
+  it.each([[616, 484], [709, 418], [516, 484]])("keeps nine frames readable in a %sx%s preview", (width, height) => {
+    const fit = fitStoryboard(9, 16 / 9, width, height);
+    expect(fit.columns).toBe(3);
+    expect(fit.frameWidth).toBeGreaterThanOrEqual(140);
+    expect(fit.width).toBeLessThanOrEqual(width - 32 + 0.001);
+  });
 });

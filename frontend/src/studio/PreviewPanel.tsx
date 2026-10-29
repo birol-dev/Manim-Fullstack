@@ -52,7 +52,7 @@ function Stage({ feed, ratio, transparent, label, children }: { feed: PreviewFee
           "studio-preview-frame",
           transparent ? "studio-checker" : "bg-raised",
         )}
-        style={{ aspectRatio: String(ratio), width: `min(100cqw, calc(100cqh * ${ratio}))` }}
+        style={{ "--studio-preview-ratio": ratio } as CSSProperties}
       >
         {shown ? (
           <img src={shown} alt={label} className="absolute inset-0 size-full object-contain" draggable={false} />
