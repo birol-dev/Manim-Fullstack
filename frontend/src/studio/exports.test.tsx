@@ -4,12 +4,13 @@ import { Toaster, toast } from "sonner";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { ExportDialog, ExportRow, ExportsPage, ExportsPanel } from "./exports";
-import { resetCatalogCache, type ExportRequest } from "./api";
+import { resetCatalogCache, resetHostCapabilities, type ExportRequest } from "./api";
 import { installFakeStudio } from "./test/fakeStudio";
 import type { ExportJob } from "./types";
 
 beforeEach(() => {
   resetCatalogCache();
+  resetHostCapabilities();
 });
 
 const request = () => ({ template: "countdown", params: { seconds: 7 }, settings: {}, title: "Timer" });
@@ -328,6 +329,7 @@ it("asks before deleting an export and calls the remove endpoint only after conf
   try {
     const { retry } = renderPage([job()]);
     render(<Toaster />);
+    const removals = () => requests.filter((entry) => String(entry.input) === "/api/studio/exports/e1?remove=true");
 
     await user.click(screen.getByRole("button", { name: "Options for Weekend sale" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete file" }));
@@ -335,15 +337,14 @@ it("asks before deleting an export and calls the remove endpoint only after conf
     expect(within(dialog).getByText("The video file is removed from your computer. Your project stays.")).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(requests).toHaveLength(0);
+    expect(removals()).toHaveLength(0);
 
     await user.click(screen.getByRole("button", { name: "Options for Weekend sale" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete file" }));
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete file" }));
 
-    await waitFor(() => expect(requests).toHaveLength(1));
-    expect(String(requests[0].input)).toBe("/api/studio/exports/e1?remove=true");
-    expect(requests[0].init?.method).toBe("DELETE");
+    await waitFor(() => expect(removals()).toHaveLength(1));
+    expect(removals()[0].init?.method).toBe("DELETE");
     expect(await screen.findByText("Export deleted")).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: "Weekend sale" })).not.toBeInTheDocument());
     expect(retry).toHaveBeenCalled();
@@ -422,9 +423,8 @@ it("gives cancelled rows a menu that removes them from the list", async () => {
     await user.click(screen.getByRole("button", { name: "Options for Stopped sale" }));
     await user.click(screen.getByRole("menuitem", { name: "Remove from list" }));
 
-    await waitFor(() => expect(requests).toHaveLength(1));
-    expect(String(requests[0].input)).toBe("/api/studio/exports/e3?remove=true");
-    expect(requests[0].init?.method).toBe("DELETE");
+    await waitFor(() => expect(requests.filter((entry) => String(entry.input) === "/api/studio/exports/e3?remove=true")).toHaveLength(1));
+    expect(requests.find((entry) => String(entry.input) === "/api/studio/exports/e3?remove=true")?.init?.method).toBe("DELETE");
     await waitFor(() => expect(screen.queryByText("Stopped sale")).not.toBeInTheDocument());
     expect(retry).toHaveBeenCalled();
   } finally {
@@ -443,4 +443,89 @@ it("offers Make again on a finished file with a stored request", async () => {
   await user.click(screen.getByRole("menuitem", { name: "Make again" }));
   await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports")).toBe(true));
   expect(studio.calls.find((call) => call.method === "POST" && call.path === "/api/studio/exports")?.body).toEqual(request);
+});
+
+/** Answers the capability probe and the two 204 host actions; everything else falls through. */
+function hostReply(capabilities: { reveal: boolean; copy_file: boolean }) {
+  return (call: { path: string; method: string }) => {
+    if (call.path === "/api/studio/host") return { status: 200, body: capabilities };
+    if (call.method === "POST" && /^\/api\/studio\/exports\/[^/]+\/(reveal|copy)$/.test(call.path)) return { status: 204, body: null };
+    return null;
+  };
+}
+
+it("shows Show in folder and Copy file for a finished file and toasts after copying", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.reply = hostReply({ reveal: true, copy_file: true });
+  render(<>
+    <ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />
+    <Toaster />
+  </>);
+  await user.click(screen.getByRole("button", { name: "Make video" }));
+  await screen.findByRole("heading", { name: "Making your video…" });
+  studio.exports = [{ ...studio.exports[0], status: "done", progress: 100, url: "/timer.mp4", filename: "timer.mp4", size: 2048, duration: 7 }];
+
+  const dialog = screen.getByRole("dialog");
+  await within(dialog).findByRole("heading", { name: "Your file is ready" });
+  const copy = await within(dialog).findByRole("button", { name: "Copy file" });
+  expect(within(dialog).getByRole("button", { name: "Show in folder" })).toBeInTheDocument();
+  expect(within(dialog).getByRole("link", { name: "Download" })).toBeInTheDocument();
+
+  await user.click(copy);
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports/e1/copy")).toBe(true));
+  expect(await screen.findByText("Copied — paste it into an email or chat")).toBeInTheDocument();
+
+  await user.click(within(dialog).getByRole("button", { name: "Show in folder" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports/e1/reveal")).toBe(true));
+});
+
+it("shows only the finished-file actions this computer supports", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.reply = (call) => call.path === "/api/studio/host" ? { status: 200, body: { reveal: true, copy_file: false } } : null;
+  render(<ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "Make video" }));
+  await screen.findByRole("heading", { name: "Making your video…" });
+  studio.exports = [{ ...studio.exports[0], status: "done", progress: 100, url: "/timer.mp4", filename: "timer.mp4" }];
+
+  const dialog = screen.getByRole("dialog");
+  await within(dialog).findByRole("heading", { name: "Your file is ready" });
+  expect(await within(dialog).findByRole("button", { name: "Show in folder" })).toBeInTheDocument();
+  expect(within(dialog).queryByRole("button", { name: "Copy file" })).not.toBeInTheDocument();
+});
+
+it("puts the host actions in the finished row menu and fetches the capabilities once", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.reply = hostReply({ reveal: false, copy_file: true });
+  render(<>
+    <ExportsPage exports={{ jobs: [job(), job({ id: "e2", title: "Sale sticker", format: "gif", url: "/sale.gif", filename: "sale.gif" })], error: null, cancel: vi.fn(), retry: vi.fn() }} />
+    <Toaster />
+  </>);
+  await waitFor(() => expect(studio.calls.filter((call) => call.path === "/api/studio/host")).toHaveLength(1));
+
+  await user.click(screen.getByRole("button", { name: "Options for Weekend sale" }));
+  expect(screen.queryByRole("menuitem", { name: "Show in folder" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("menuitem", { name: "Copy file" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports/e1/copy")).toBe(true));
+  expect(await screen.findByText("Copied — paste it into an email or chat")).toBeInTheDocument();
+  expect(studio.calls.filter((call) => call.path === "/api/studio/host")).toHaveLength(1);
+});
+
+it("reports a failed copy as a toast", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  const problem = "Copying a file itself to the clipboard works on Windows and macOS only. Download the file instead.";
+  studio.reply = (call) => {
+    if (call.path === "/api/studio/host") return { status: 200, body: { reveal: false, copy_file: true } };
+    if (call.path === "/api/studio/exports/e1/copy") return { status: 501, body: { detail: problem } };
+    return null;
+  };
+  render(<><ul><ExportRow job={job()} /></ul><Toaster /></>);
+
+  await user.click(await screen.findByRole("button", { name: "Options for Weekend sale" }));
+  await user.click(await screen.findByRole("menuitem", { name: "Copy file" }));
+  expect(await screen.findByText(problem)).toBeInTheDocument();
+  expect(screen.queryByText("Copied — paste it into an email or chat")).not.toBeInTheDocument();
 });

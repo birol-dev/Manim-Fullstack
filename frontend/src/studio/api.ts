@@ -123,6 +123,37 @@ export const getExport = (id: string) => requestJson<ExportJob>(`/api/studio/exp
 export const cancelExport = (id: string) =>
   requestJson<ExportJob>(`/api/studio/exports/${encodeURIComponent(id)}`, { method: "DELETE" });
 
+export interface HostCapabilities {
+  reveal: boolean;
+  copy_file: boolean;
+}
+
+let hostCapabilitiesPromise: Promise<HostCapabilities> | null = null;
+
+/** What this computer can do with a finished file, fetched once per page load. */
+export function getHostCapabilities(): Promise<HostCapabilities> {
+  if (!hostCapabilitiesPromise) {
+    hostCapabilitiesPromise = requestJson<HostCapabilities>("/api/studio/host").catch((error) => {
+      hostCapabilitiesPromise = null;
+      throw error;
+    });
+  }
+  return hostCapabilitiesPromise;
+}
+
+/** Forget the cached capabilities (tests). */
+export function resetHostCapabilities() {
+  hostCapabilitiesPromise = null;
+}
+
+/** Show a finished export selected in the system's file manager. */
+export const revealExport = (id: string) =>
+  requestJson<null>(`/api/studio/exports/${encodeURIComponent(id)}/reveal`, { method: "POST" });
+
+/** Put the finished file itself on the clipboard. */
+export const copyExportFile = (id: string) =>
+  requestJson<null>(`/api/studio/exports/${encodeURIComponent(id)}/copy`, { method: "POST" });
+
 export const listProjects = () => requestJson<ProjectSummary[]>("/api/studio/projects");
 export const getProject = (id: string) => requestJson<Project>(`/api/studio/projects/${encodeURIComponent(id)}`);
 export const deleteProject = (id: string) =>

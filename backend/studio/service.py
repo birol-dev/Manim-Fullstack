@@ -40,7 +40,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import peeks, registry
+from . import host, peeks, registry
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import EXPORT_FORMATS, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -601,6 +601,21 @@ class StudioService:
     async def remove_export(self, export_id: str) -> dict:
         """Forget a finished export and delete its file."""
         return await asyncio.to_thread(self._export_manager().remove, export_id)
+
+    # -- the finished file on this computer ------------------------------------------------
+    def host_capabilities(self) -> dict:
+        """Which finished-file actions this platform supports."""
+        return host.capabilities()
+
+    async def reveal_export(self, export_id: str) -> None:
+        """Show a finished export selected in the system's file manager."""
+        path = await asyncio.to_thread(self._export_manager().export_file_path, export_id)
+        await asyncio.to_thread(host.reveal, path)
+
+    async def copy_export_file(self, export_id: str) -> None:
+        """Put a finished export's file itself on the clipboard."""
+        path = await asyncio.to_thread(self._export_manager().export_file_path, export_id)
+        await asyncio.to_thread(host.copy_file, path)
 
     # -- projects --------------------------------------------------------------------------
     def _project_path(self, project_id) -> str:

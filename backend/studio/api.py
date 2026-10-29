@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import functools
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import service as service_module
@@ -132,6 +132,29 @@ async def delete_export(export_id: str, remove: bool = False):
     if remove:
         return await svc.remove_export(export_id)
     return await svc.cancel_export(export_id)
+
+
+@router.get("/host")
+@_errors
+async def get_host():
+    """Which finished-file actions this computer supports."""
+    return get_service().host_capabilities()
+
+
+@router.post("/exports/{export_id}/reveal", status_code=204)
+@_errors
+async def post_export_reveal(export_id: str):
+    """Show the finished file selected in the system's file manager."""
+    await get_service().reveal_export(export_id)
+    return Response(status_code=204)
+
+
+@router.post("/exports/{export_id}/copy", status_code=204)
+@_errors
+async def post_export_copy(export_id: str):
+    """Put the finished file itself on the clipboard."""
+    await get_service().copy_export_file(export_id)
+    return Response(status_code=204)
 
 
 @router.get("/projects")

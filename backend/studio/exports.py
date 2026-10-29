@@ -376,6 +376,23 @@ class ExportManager:
         with self._lock:
             return public(self._get_locked(export_id))
 
+    def export_file_path(self, export_id: str) -> str:
+        """The absolute path of a finished export's file, checked to be inside the exports folder."""
+        self._ensure_loaded()
+        with self._lock:
+            record = self._get_locked(export_id)
+            filename = record.get("filename")
+            finished = record.get("status") == "done"
+        root = os.path.realpath(self.exports_dir)
+        path = os.path.realpath(os.path.join(root, filename)) if isinstance(filename, str) and filename else ""
+        try:
+            inside = bool(path) and path != root and os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        if not finished or not inside or not os.path.isfile(path):
+            raise NotFoundError(f"No finished file for export {export_id!r}.")
+        return path
+
     def list(self) -> list:
         self._ensure_loaded()
         with self._lock:

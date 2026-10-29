@@ -1,7 +1,7 @@
 /** Export dialog (make a file from the video) and the list of recent exports. */
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowRight, Check, Download, FileImage, FileVideo, Film, FolderDown, Image as ImageIcon, ImagePlay, Layers, RotateCw, Trash2, XCircle } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, RotateCw, Trash2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,7 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { apiUrl, requestJson } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-import { cancelExport, friendlyError, getExport, previewProblem, startExport, type ExportRequest } from "./api";
+import { cancelExport, copyExportFile, friendlyError, getExport, getHostCapabilities, previewProblem, revealExport, startExport, type ExportRequest, type HostCapabilities } from "./api";
 import { Spinner } from "./components";
 import { ActionMenu } from "./ProjectMenu";
 import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
@@ -52,6 +52,36 @@ function DownloadLink({ job, size = "md", className, secondary = false, iconOnly
       </a>
     </Button>
   );
+}
+
+/** What this computer can do with a finished file; null until the server answers. */
+function useHostCapabilities(): HostCapabilities | null {
+  const [capabilities, setCapabilities] = useState<HostCapabilities | null>(null);
+  useEffect(() => {
+    let live = true;
+    getHostCapabilities()
+      .then((next) => { if (live) setCapabilities(next); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return capabilities;
+}
+
+async function showInFolder(id: string) {
+  try {
+    await revealExport(id);
+  } catch (error) {
+    toast.error(friendlyError(error, "Couldn't show this file in its folder."));
+  }
+}
+
+async function copyFileToClipboard(id: string) {
+  try {
+    await copyExportFile(id);
+    toast.success("Copied — paste it into an email or chat");
+  } catch (error) {
+    toast.error(friendlyError(error, "Couldn't copy this file. Download it instead."));
+  }
 }
 
 function Result({ job, posterUrl }: { job: ExportJob; posterUrl?: string }) {
@@ -153,6 +183,7 @@ interface ExportDialogProps {
 
 export function ExportDialog({ open, onOpenChange, request, transparentBackground, onFieldErrors, onActivity, posterUrl, onStart, onSeen }: ExportDialogProps) {
   const { catalog } = useCatalog();
+  const capabilities = useHostCapabilities();
   const templateId = request().template;
   // Long timers set META.export_fps: every quality is rendered at that rate, so the dialog must not promise 60.
   const exportFps = catalog?.templates.find((item) => item.id === templateId)?.export_fps ?? null;
@@ -380,6 +411,16 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
                   </>
                 )}
               </Button>
+              {job.status === "done" && capabilities?.reveal && (
+                <Button variant="secondary" size="md" onClick={() => showInFolder(job.id)}>
+                  <FolderOpen /> Show in folder
+                </Button>
+              )}
+              {job.status === "done" && capabilities?.copy_file && (
+                <Button variant="secondary" size="md" onClick={() => copyFileToClipboard(job.id)}>
+                  <Copy /> Copy file
+                </Button>
+              )}
               {job.status === "done" && <DownloadLink job={job} />}
             </>
           )}
@@ -501,6 +542,7 @@ interface ExportRowProps {
 
 export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact = false }: ExportRowProps) {
   const active = ACTIVE_EXPORT.has(job.status);
+  const capabilities = useHostCapabilities();
   const progress = useExportProgress(job);
   const finished = job.status === "done" || job.status === "failed" || job.status === "cancelled";
   const canDeleteFile = job.status === "done";
@@ -580,6 +622,8 @@ export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact
         title={title}
         items={[
           ...(job.status === "done" && job.url ? [{ label: "Download", icon: <Download aria-hidden />, href: apiUrl(job.url), download: job.filename ?? true }] : []),
+          ...(job.status === "done" && capabilities?.reveal ? [{ label: "Show in folder", icon: <FolderOpen aria-hidden />, onSelect: () => showInFolder(job.id) }] : []),
+          ...(job.status === "done" && capabilities?.copy_file ? [{ label: "Copy file", icon: <Copy aria-hidden />, onSelect: () => copyFileToClipboard(job.id) }] : []),
           ...(job.status === "done" && request ? [{ label: "Make again", icon: <RotateCw aria-hidden />, onSelect: retry }] : []),
           canDeleteFile
             ? { label: "Delete file", icon: <Trash2 aria-hidden />, danger: true, onSelect: () => setConfirming(true) }
