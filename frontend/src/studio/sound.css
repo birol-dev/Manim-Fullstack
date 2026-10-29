@@ -1,16 +1,29 @@
 .studio-sound h2 { display: flex; align-items: center; gap: .5rem; }
 .studio-sound-tracks { display: flex; flex-direction: column; gap: .4rem; margin-top: .75rem; }
-.studio-sound-tracks legend { font-size: 13px; font-weight: 600; margin-bottom: .6rem; }
-.studio-sound-tracks label { display: flex; align-items: center; gap: .65rem; min-height: 2.4rem; font-size: 13px; cursor: pointer; }
-.studio-sound-tracks input { accent-color: var(--color-accent); }
-.studio-sound-track { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
-.studio-sound-track label { flex: 1; }
-.studio-sound-track small { display: block; color: var(--color-fg-subtle); margin-top: .1rem; font-size: 11px; }
+.studio-sound-tracks h3 { font-size: 13px; font-weight: 600; margin-bottom: .3rem; }
+.studio-sound-option { display: flex; align-items: center; gap: .25rem; padding-right: .35rem; border: 1px solid var(--color-line); border-radius: 12px; background: var(--color-surface); transition: border-color 120ms, background 120ms; }
+.studio-sound-option:hover { background: var(--color-raised); }
+.studio-sound-option.studio-sound-selected { border-color: var(--color-accent); box-shadow: 0 0 0 1px var(--color-accent); }
+.studio-sound-option [role="radio"] { display: flex; align-items: center; gap: .65rem; flex: 1; min-width: 0; min-height: 60px; padding: .65rem .75rem; border-radius: 12px; text-align: left; font-size: 13px; cursor: pointer; }
+.studio-sound-option [role="radio"] > span:last-child { min-width: 0; }
+.studio-sound-option button:disabled { cursor: default; opacity: .5; }
+.studio-sound-option button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.studio-sound-option > button:last-child:not([role="radio"]) { min-width: 44px; min-height: 44px; }
+.studio-sound-check { display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex-shrink: 0; border: 1px solid var(--color-line-strong); border-radius: 50%; }
+.studio-sound-selected .studio-sound-check { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-accent-fg); }
+.studio-sound-check svg { width: 13px; height: 13px; }
+.studio-sound-option small { display: block; color: var(--color-fg-subtle); margin-top: .15rem; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .studio-sound-volume { display: grid; grid-template-columns: 1fr auto; gap: .65rem; font-size: 12px; margin: .75rem 0; }
 .studio-sound-volume label { grid-column: 1 / -1; font-weight: 500; }
-.studio-sound-volume output { min-width: 3ch; color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.studio-sound-volume output { min-width: 4ch; align-self: center; color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.studio-sound-range { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 44px; padding: 0; background: transparent; cursor: pointer; border-radius: 6px; }
+.studio-sound-range:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.studio-sound-range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--color-accent) var(--sound-fill), var(--color-line) var(--sound-fill)); }
+.studio-sound-range::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; border: 2px solid var(--color-accent); background: var(--color-surface); box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
+.studio-sound-range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--color-line); }
+.studio-sound-range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--color-accent); }
+.studio-sound-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--color-accent); background: var(--color-surface); }
 .studio-sound-upload { border: 1px dashed var(--color-line-strong); border-radius: .6rem; padding: .75rem; margin-top: .5rem; }
 .studio-sound-upload p { font-size: 11px; color: var(--color-fg-subtle); line-height: 1.5; margin-top: .5rem; }
 .studio-sound-upload [role="status"] { display: flex; flex-direction: column; gap: .5rem; font-size: 12px; }
-.studio-sound-upload progress, .studio-sound audio { width: 100%; }
-.studio-sound audio { height: 2.25rem; margin-top: .75rem; }
+.studio-sound-upload progress { width: 100%; }

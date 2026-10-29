@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 
 import { cancelMotion, getMotion, startMotion } from "./api";
 import { PreviewPanel, type PreviewFeed } from "./PreviewPanel";
+import { DEFAULT_SOUND, volumeGain } from "./sound";
 import type { MotionPreview, PreviewRequest } from "./types";
 
 vi.mock("./api", async (original) => ({ ...await original<typeof import("./api")>(), startMotion: vi.fn(), getMotion: vi.fn(), cancelMotion: vi.fn() }));
@@ -13,6 +14,7 @@ const props = { view: "poster" as const, onViewChange: vi.fn(), poster: feed, st
 const done: MotionPreview = { id: "m1", status: "done", url: "/motion.mp4", duration: 20, truncated: true };
 
 beforeEach(() => {
+  sessionStorage.clear();
   vi.mocked(startMotion).mockReset().mockResolvedValue(done);
   vi.mocked(getMotion).mockReset().mockResolvedValue(done);
   vi.mocked(cancelMotion).mockReset().mockResolvedValue({ id: "m1", status: "cancelled" });
@@ -175,7 +177,33 @@ it("requires an explicit gesture to unmute and offers playback volume", async ()
   fireEvent.click(screen.getByRole("button", { name: "Unmute preview" }));
   expect(video.muted).toBe(false);
   fireEvent.change(screen.getByRole("slider", { name: "Preview volume" }), { target: { value: ".3" } });
-  expect(video.volume).toBe(.3);
+  expect(video.volume).toBe(volumeGain(.3));
   fireEvent.click(screen.getByRole("button", { name: "Mute preview" }));
   expect(video.muted).toBe(true);
+});
+
+it("keeps Sound off/on visible below the clip and remembers it across previews in the session", async () => {
+  const view = render(<PreviewPanel {...props} />);
+  const off = screen.getByRole("button", { name: "Sound off" });
+  expect(off.closest(".studio-preview-caption-row")).not.toBeNull();
+  expect(off.closest(".studio-motion-controls")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
+  const video = await screen.findByLabelText("Your animation") as HTMLVideoElement;
+  fireEvent.click(off);
+  expect(video.muted).toBe(false);
+  expect(screen.getByRole("button", { name: "Sound on" })).toHaveAttribute("aria-pressed", "true");
+  expect(sessionStorage.getItem("studio-preview-sound")).toBe("on");
+  view.unmount();
+  render(<PreviewPanel {...props} />);
+  const on = screen.getByRole("button", { name: "Sound on" });
+  on.focus(); expect(on).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
+  expect((await screen.findByLabelText("Your animation") as HTMLVideoElement).muted).toBe(false);
+  fireEvent.click(on);
+  expect(screen.getByRole("button", { name: "Sound off" })).toHaveAttribute("aria-pressed", "false");
+});
+
+it("omits the sound toggle for a silent project", () => {
+  render(<PreviewPanel {...props} motionRequest={{ ...request, settings: { sound: { ...DEFAULT_SOUND, effects: false } } }} />);
+  expect(screen.queryByRole("button", { name: "Sound off" })).not.toBeInTheDocument();
 });

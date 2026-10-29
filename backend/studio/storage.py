@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import ast
 import json
 import math
 import os
@@ -181,22 +182,55 @@ TEMP_MARK = ".~"
 
 
 def visual_source(data: bytes) -> bytes:
-    """Remove explicitly marked audio-only additions, preserving legacy bake hashes.
+    """Project out the narrow sound API while preserving legacy visual source.
 
-    These markers may contain imports, cue calls and sound setup only. Visual
-    layout/timing changes MUST remain unmarked. Runtime reloads hash full source.
+    Only known sound imports/fields, the cue helper, and statement trees made
+    entirely of cues or writer installation are omitted. A wait, animation or
+    any other statement keeps its enclosing branch in the visual fingerprint.
+    Runtime reloads always hash the complete source.
     """
-    result, audio = [], False
-    for line in data.replace(b"\r\n", b"\n").splitlines(keepends=True):
-        if line.strip() == b"# studio-audio-begin":
-            audio = True
-        elif line.strip() == b"# studio-audio-end":
-            audio = False
-        elif not audio and not line.rstrip().endswith(b"# studio-audio"):
-            result.append(line)
-    if audio:
-        raise ValueError("Unclosed studio-audio source block")
-    return b"".join(result)
+    source = data.replace(b"\r\n", b"\n")
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, UnicodeDecodeError):
+        return source
+
+    def pure_expression(node):
+        return all(not isinstance(child, ast.Call) or (
+            isinstance(child.func, ast.Name) and child.func.id in {"range", "min", "max", "int", "float", "round", "T"}
+        ) for child in ast.walk(node))
+
+    def audio_only(node):
+        if isinstance(node, ast.ImportFrom):
+            return (node.module == "sound" and [a.name for a in node.names] == ["SoundSettings"]) or (
+                node.module == "audio_render" and all(a.name in {"install_sound", "record_cue"} for a in node.names))
+        if isinstance(node, ast.AnnAssign):
+            return isinstance(node.target, ast.Name) and node.target.id == "sound" and isinstance(node.annotation, ast.Name) and node.annotation.id == "SoundSettings"
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            fn = node.value.func
+            sound_call = (isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "self" and fn.attr == "cue") or (
+                isinstance(fn, ast.Name) and fn.id in {"install_sound", "record_cue"})
+            return sound_call and all(pure_expression(arg) for arg in [*node.value.args, *[kw.value for kw in node.value.keywords]])
+        if isinstance(node, ast.Assign):
+            return all(isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self" and t.attr == "_sound_cues" for t in node.targets)
+        if isinstance(node, (ast.For, ast.If)):
+            return pure_expression(node.iter if isinstance(node, ast.For) else node.test) and all(audio_only(child) for child in [*node.body, *node.orelse])
+        if isinstance(node, ast.FunctionDef):
+            return node.name == "cue" and all(
+                (isinstance(child, ast.Expr) and isinstance(child.value, ast.Constant) and isinstance(child.value.value, str))
+                or audio_only(child)
+                for child in node.body)
+        return False
+
+    lines = source.splitlines(keepends=True)
+    removed = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt) and audio_only(node):
+            start = node.lineno - 1
+            if isinstance(node, ast.FunctionDef) and start and not lines[start - 1].strip():
+                start -= 1
+            removed.update(range(start, node.end_lineno))
+    return b"".join(line for i, line in enumerate(lines) if i not in removed)
 
 
 def _stat_into(digest, path: str, visual_only=False) -> None:

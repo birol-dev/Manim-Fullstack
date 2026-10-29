@@ -16,6 +16,8 @@ import { formatDuration } from "./schemaForm";
 import { fitStoryboard, spokenDuration } from "./storyboard";
 import type { Aspect, PreviewRequest, PreviewResponse } from "./types";
 import { useMotionPreview } from "./useMotionPreview";
+import { soundSettings, volumeGain } from "./sound";
+import "./sound.css";
 
 export type PreviewView = "poster" | "storyboard";
 
@@ -120,12 +122,11 @@ function StoryboardStage({ count, ratio, caption, children, pending }: { count: 
 
 const CONTROLS_HIDE_MS = 2000;
 
-function MotionVideo({ url, posterUrl, initialDuration, onError }: { url: string; posterUrl?: string; initialDuration: number; onError: () => void }) {
+function MotionVideo({ url, posterUrl, initialDuration, onError, muted, onMutedChange }: { url: string; posterUrl?: string; initialDuration: number; onError: () => void; muted: boolean; onMutedChange: (muted: boolean) => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [paused, setPaused] = useState(false);
-  const [muted, setMuted] = useState(true);
-  const [volume, setVolume] = useState(.75);
-  useEffect(() => { if (ref.current) ref.current.volume = volume; }, [volume]);
+  const [volume, setVolume] = useState(1);
+  useEffect(() => { if (ref.current) ref.current.volume = volumeGain(volume); }, [volume]);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(initialDuration);
   const [controlsShown, setControlsShown] = useState(true);
@@ -183,8 +184,8 @@ function MotionVideo({ url, posterUrl, initialDuration, onError }: { url: string
       onTimeUpdate={() => setPosition(ref.current?.currentTime || 0)} aria-label="Your animation" />
     <div className={cn("studio-motion-controls", !controlsVisible && "studio-motion-controls-hidden")} data-controls={controlsVisible ? "shown" : "hidden"}>
       <button type="button" onClick={toggle} aria-label={paused ? "Play animation" : "Pause animation"}>{paused ? <Play /> : <Pause />}</button>
-      <button type="button" aria-label={muted ? "Unmute preview" : "Mute preview"} aria-pressed={!muted} onClick={() => { setMuted(!muted); if (ref.current) { ref.current.muted = !muted; void ref.current.play().catch(() => setPaused(true)); } }}>{muted ? <VolumeX /> : <Volume2 />}</button>
-      {!muted && <input type="range" aria-label="Preview volume" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} style={{ maxWidth: 64 }} />}
+      <button type="button" aria-label={muted ? "Unmute preview" : "Mute preview"} aria-pressed={!muted} onClick={() => { onMutedChange(!muted); if (ref.current) { ref.current.muted = !muted; void ref.current.play().catch(() => setPaused(true)); } }}>{muted ? <VolumeX /> : <Volume2 />}</button>
+      {!muted && <input className="studio-sound-range" type="range" aria-label="Preview volume" aria-valuetext={`${Math.round(volume * 100)} percent`} min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} style={{ maxWidth: 64, "--sound-fill": `${volume * 100}%` } as CSSProperties} />}
       <input type="range" aria-label="Preview position" min={0} max={duration || 1} step={0.05} value={position} onChange={(event) => {
         const time = Number(event.target.value);
         if (ref.current) ref.current.currentTime = time;
@@ -222,6 +223,15 @@ export function PreviewPanel({ view, onViewChange, poster, storyboard, aspect, t
   const motionUrl = motion.response?.url;
   const motionFailed = !!motionUrl && failedUrl === motionUrl;
   const videoUrl = motionFailed ? undefined : motionUrl;
+  const [muted, setMuted] = useState(() => {
+    try { return sessionStorage.getItem("studio-preview-sound") !== "on"; } catch { return true; }
+  });
+  const changeMuted = (next: boolean) => {
+    setMuted(next);
+    try { sessionStorage.setItem("studio-preview-sound", next ? "off" : "on"); } catch { /* Storage is optional. */ }
+  };
+  const sound = soundSettings(motionRequest?.settings?.sound);
+  const hasSound = (sound.effects && sound.effects_volume > 0) || (sound.music.volume > 0 && !!(sound.music.track || sound.music.asset));
   return (
     <section aria-label="Preview" className="studio-preview-panel">
       <div className="studio-preview-toolbar">
@@ -240,7 +250,7 @@ export function PreviewPanel({ view, onViewChange, poster, storyboard, aspect, t
       {view === "poster" ? (
         <>
           <Stage feed={poster} ratio={format.w / format.h} transparent={transparent} label="Preview of your video">
-            {videoUrl && <MotionVideo key={videoUrl} url={videoUrl} posterUrl={poster.response?.url} initialDuration={motion.response?.duration ?? 0} onError={() => setFailedUrl(videoUrl)} />}
+            {videoUrl && <MotionVideo key={videoUrl} url={videoUrl} posterUrl={poster.response?.url} initialDuration={motion.response?.duration ?? 0} onError={() => setFailedUrl(videoUrl)} muted={muted || !hasSound} onMutedChange={changeMuted} />}
             {videoUrl && motion.response?.truncated && <span className="studio-motion-cap">First 20 seconds</span>}
             {!!motionRequest && motion.pending && <span className="studio-motion-dim" aria-hidden />}
           </Stage>
@@ -253,6 +263,7 @@ export function PreviewPanel({ view, onViewChange, poster, storyboard, aspect, t
                 onRetry={() => { setFailedUrl(null); void motion.start(); }}
               />
             )}
+            {motionRequest && hasSound && <button type="button" className="studio-preview-sound" aria-label={muted ? "Sound off" : "Sound on"} aria-pressed={!muted} onClick={() => changeMuted(!muted)}>{muted ? <VolumeX aria-hidden /> : <Volume2 aria-hidden />}<span>Sound {muted ? "off" : "on"}</span></button>}
             <p className="studio-preview-caption">{caption}</p>
           </div>
         </>

@@ -107,7 +107,8 @@ class Template(StudioScene):
             self.play(left.animate(rate_func=lambda t: t).set_value(seconds * 0.62), run_time=seconds * 0.38)
             self.poster()
 
-        for n in range(min(3 if p.style == "big" else 5, int(seconds)), 0, -1): self.cue("tick_final", offset=seconds - n)  # studio-audio
+        for n in range(min(3 if p.style == "big" else 5, int(seconds)), 0, -1):
+            self.cue("tick_final", offset=seconds - n)
         self.play(left.animate(rate_func=lambda t: t).set_value(warn_at), run_time=seconds - warn_at)
         if warn_at:
             digits.clear_updaters()
@@ -129,7 +130,7 @@ class Template(StudioScene):
                            max_lines=2, font=theme.font, weight=theme.display_weight, color=accent)
         message.move_to(box.center)
         self.play(*[FadeOut(o, run_time=m.exit) for o in outgoing])
-        self.cue("finish")  # studio-audio
+        self.cue("finish")
         anims = [m.appear(message, "pop", run_time=m.t(0.7))]
         if p.confetti:
             confetti = shapes.Confetti(self.layout.frame_width, self.layout.frame_height, theme.accents)
@@ -150,7 +151,8 @@ class Template(StudioScene):
         count = int(math.ceil(seconds))
         current = None
         for n in range(count, 0, -1):
-            if n <= 3: self.cue("tick_final")  # studio-audio
+            if n <= 3:
+                self.cue("tick_final")
             number = Counter(n, size=size, font=theme.font, weight=theme.display_weight,
                              color=accent if n > 3 else theme.accent(3), formatter=lambda v: str(int(v)),
                              sample_values=(n,)).move_to(box.center)

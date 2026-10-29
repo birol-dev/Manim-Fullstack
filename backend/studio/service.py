@@ -731,7 +731,7 @@ class StudioService:
 
     # -- sound: normalized audio is private workspace content, shared by UI/MCP -------------------
     def audio_path(self, name):
-        if not isinstance(name, str) or not re.fullmatch(r"audio-[a-f0-9]{32}\.wav", name):
+        if not isinstance(name, str) or not re.fullmatch(r"audio-[a-f0-9]{32}\.(?:wav|flac)", name):
             raise _field_error("settings.sound.music.asset", "Choose music uploaded to this workspace.")
         root = os.path.realpath(self.assets_dir)
         path = os.path.realpath(os.path.join(root, name))
@@ -758,7 +758,7 @@ class StudioService:
             normalized = normalize_upload(bytes(data))
         except ValueError as exc:
             raise _field_error("data", str(exc)) from None
-        name = f"audio-{hashlib.sha256(normalized).hexdigest()[:32]}.wav"
+        name = f"audio-{hashlib.sha256(normalized).hexdigest()[:32]}.flac"
         os.makedirs(self.assets_dir, exist_ok=True)
         path = os.path.join(self.assets_dir, name)
         if not os.path.isfile(path):

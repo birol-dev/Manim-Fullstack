@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import { uploadAudio } from "./api";
 import { SoundPanel } from "./SoundPanel";
-import { DEFAULT_SOUND } from "./sound";
+import { DEFAULT_SOUND, volumeGain } from "./sound";
 import { visualPreviewKey, stableKey } from "./preview";
 import type { SoundSettings } from "./types";
 
@@ -35,7 +35,7 @@ it("offers effects, music, fade, repeat and keyboard volume controls without los
   expect(current().music).toMatchObject({ track: null, asset: null, volume: .6 });
 });
 
-it("auditions only after a click, at a restrained volume", async () => {
+it("auditions only after a click, at the mastered level, and stops from the same row", async () => {
   const play = vi.spyOn(HTMLMediaElement.prototype, "play");
   const user = userEvent.setup();
   render(<Panel />);
@@ -44,8 +44,53 @@ it("auditions only after a click, at a restrained volume", async () => {
   expect(play).toHaveBeenCalledTimes(1);
   const player = screen.getByLabelText("Quiet morning sample") as HTMLAudioElement;
   expect(player.src).toContain("/api/studio/sounds/music/calm.wav");
-  expect(player.volume).toBeCloseTo(.08);
+  expect(player.volume).toBe(1);
   expect(current().music.track).toBeNull();
+  const stop = screen.getByRole("button", { name: "Stop Quiet morning" });
+  expect(stop).toHaveAttribute("aria-pressed", "true");
+  await user.click(stop);
+  expect(screen.getByRole("button", { name: "Listen to Quiet morning" })).toHaveAttribute("aria-pressed", "false");
+});
+
+it("uses option cards with radio semantics, arrow navigation and a separate audition button", async () => {
+  const user = userEvent.setup();
+  const { container } = render(<Panel />);
+  const none = screen.getByRole("radio", { name: "None" });
+  expect(none).toHaveAttribute("tabindex", "0");
+  expect(container.querySelector('input[type="radio"]')).toBeNull();
+  expect(screen.getByRole("radiogroup", { name: "Music" })).toContainElement(none);
+  none.focus();
+  await user.keyboard("{ArrowDown}");
+  const calm = screen.getByRole("radio", { name: "Quiet morning" });
+  expect(calm).toHaveFocus();
+  expect(calm).toHaveAttribute("aria-checked", "true");
+  expect(calm).toHaveAccessibleDescription("Warm notes");
+  expect(calm.closest(".studio-sound-option")).toHaveClass("studio-sound-selected");
+  expect(calm.closest(".studio-sound-option")).toContainElement(screen.getByRole("button", { name: "Listen to Quiet morning" }));
+  await user.keyboard("{End}");
+  expect(screen.getByRole("radio", { name: "Your music" })).toHaveFocus();
+  expect(current().music.track).toBeNull();
+  await user.keyboard("{Home}");
+  expect(none).toHaveAttribute("aria-checked", "true");
+});
+
+it("labels styled sliders with percentages and uses the same dB curve for auditions", async () => {
+  const user = userEvent.setup();
+  render(<Panel />);
+  await user.click(screen.getByRole("radio", { name: "Quiet morning" }));
+  const slider = screen.getByRole("slider", { name: "Music volume" });
+  expect(slider).toHaveClass("studio-sound-range");
+  expect(slider).toHaveAttribute("aria-valuetext", "100 percent");
+  fireEvent.change(slider, { target: { value: "75" } });
+  expect(slider).toHaveAttribute("aria-valuetext", "75 percent");
+  expect(slider).toHaveStyle({ "--sound-fill": "75%" });
+  slider.focus(); expect(slider).toHaveFocus();
+  await user.click(screen.getByRole("button", { name: "Listen to Quiet morning" }));
+  expect((screen.getByLabelText("Quiet morning sample") as HTMLAudioElement).volume).toBeCloseTo(10 ** (-2.5 / 20));
+  expect(volumeGain(0)).toBe(0);
+  expect(volumeGain(.25)).toBeCloseTo(10 ** (-22.5 / 20));
+  expect(volumeGain(.5)).toBeCloseTo(10 ** (-10 / 20));
+  expect(volumeGain(1)).toBe(1);
 });
 
 it("shows upload progress and keeps edits made while the upload is preparing", async () => {

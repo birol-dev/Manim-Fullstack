@@ -16,7 +16,108 @@ from studio.audio import mixed_chunks, pcm_bytes, read_pcm, synthesize
 from studio.schema import RenderSettings
 from studio.sound import EFFECTS, SAMPLE_RATE, SoundSettings, TRACKS
 from studio.storage import visual_source, tree_fingerprint
+from studio.loudness import integrated_loudness, limit_peak, volume_gain, PEAK_CEILING
 from tests.studio_fakes import make_service
+
+
+@pytest.mark.parametrize("percent,db", [(0, None), (25, -22.5), (50, -10), (75, -2.5), (100, 0)])
+def test_fader_is_a_db_curve(percent, db):
+    gain = volume_gain(percent / 100)
+    assert gain == 0 if db is None else 20 * np.log10(gain) == pytest.approx(db)
+
+
+@pytest.mark.parametrize("track", [t["id"] for t in TRACKS])
+@pytest.mark.parametrize("duration", [10, 65])
+def test_default_render_mix_loudness_and_effect_headroom(track, duration):
+    music = synthesize(track, music=True)
+    cues = [("tick_final", duration - n) for n in range(6, 1, -1)] + [("finish", duration - 1)]
+    result = np.concatenate(list(mixed_chunks(duration, SoundSettings(music={"track": track}), cues, music)))
+    assert integrated_loudness(result) == pytest.approx(-16, abs=.8)
+    assert np.max(np.abs(result)) <= PEAK_CEILING + 1e-6
+    effects = np.concatenate(list(mixed_chunks(duration, SoundSettings(), cues)))
+    assert -6 <= 20 * np.log10(np.max(np.abs(effects))) <= -3
+    # During the effect body, music is ducked by at least 8 dB.
+    without = np.concatenate(list(mixed_chunks(duration, SoundSettings(music={"track": track}), [], music)))
+    at = round((duration - 1 + .1) * SAMPLE_RATE)
+    assert np.max(np.abs(result[at] - effects[at])) < np.max(np.abs(without[at])) * .4
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="Independent BS.1770 reference uses existing FFmpeg")
+def test_numpy_bs1770_meter_matches_reference_with_stereo_and_gating():
+    import re
+    music = synthesize("playful", music=True)
+    samples = np.concatenate([np.zeros((SAMPLE_RATE, 2)), music, music * .003])
+    reply = subprocess.run(["ffmpeg", "-hide_banner", "-i", "pipe:0", "-af", "ebur128", "-f", "null", "-"],
+                           input=pcm_bytes(samples), capture_output=True, check=True, timeout=30)
+    reference = float(re.findall(r"I:\s+(-?\d+\.\d+) LUFS", reply.stderr.decode())[-1])
+    assert integrated_loudness(samples) == pytest.approx(reference, abs=.11)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="Codec fixtures use existing FFmpeg")
+def test_quiet_and_loud_uploads_match_without_losing_stereo_or_treble():
+    from studio.audio import normalize_upload
+    t = np.arange(2 * SAMPLE_RATE) / SAMPLE_RATE
+    original = np.column_stack([np.sin(2*np.pi*16000*t), np.sin(2*np.pi*17000*t)]).astype(np.float32)
+    quiet = read_pcm(normalize_upload(pcm_bytes(original * .01)))
+    loud = read_pcm(normalize_upload(pcm_bytes(original * .6)))
+    assert quiet.shape == loud.shape == (2 * SAMPLE_RATE, 2)
+    assert integrated_loudness(quiet) == pytest.approx(-16, abs=.15)
+    assert integrated_loudness(loud) == pytest.approx(-16, abs=.15)
+    assert np.sqrt(np.mean((quiet - loud) ** 2)) < .002
+    spectrum = np.abs(np.fft.rfft(quiet, axis=0))
+    assert np.argmax(spectrum[:, 0]) == 32000
+    assert np.argmax(spectrum[:, 1]) == 34000
+    assert spectrum[32000, 0] > 100 * spectrum[32000, 1]
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="Upload codec needs existing FFmpeg")
+def test_mono_44100_upload_is_normalized_and_upmixed_at_48000():
+    import io
+    import wave
+    from studio.audio import normalize_upload
+    raw = io.BytesIO()
+    with wave.open(raw, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(44100)
+        out.writeframes((np.sin(np.arange(88200) * 2*np.pi*1000/44100) * 500).astype("<i2").tobytes())
+    samples = read_pcm(normalize_upload(raw.getvalue()))
+    assert samples.shape == (96000, 2)
+    assert samples[:, 0] == pytest.approx(samples[:, 1], abs=1e-6)
+    assert integrated_loudness(samples) == pytest.approx(-16, abs=.2)
+
+
+def test_pre_stereo_saved_wav_assets_remain_playable():
+    import io
+    import wave
+    raw = io.BytesIO()
+    with wave.open(raw, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(24000)
+        out.writeframes((np.sin(np.arange(24000) * 2*np.pi*440/24000) * 1000).astype("<i2").tobytes())
+    samples = read_pcm(raw.getvalue())
+    assert samples.shape == (48000, 2)
+    assert np.array_equal(samples[:, 0], samples[:, 1])
+    assert integrated_loudness(samples) == pytest.approx(-16, abs=.2)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="Upload codec needs existing FFmpeg")
+def test_decoded_storage_has_a_separate_cap(tmp_path, monkeypatch):
+    import studio.audio as module
+    monkeypatch.setattr(module, "MAX_STORED_AUDIO_BYTES", 4)
+    with pytest.raises(ValueError, match="64 MB"):
+        module.normalize_upload(pcm_bytes(synthesize("finish")))
+
+
+def test_peak_limiter_preserves_stereo_balance_and_silence():
+    t = np.arange(SAMPLE_RATE) / SAMPLE_RATE
+    left = np.sin(2*np.pi*997*t).astype(np.float32)
+    left[10000:11000] *= 12
+    result = limit_peak(np.column_stack([left, left * .4]))
+    assert np.max(np.abs(result)) <= PEAK_CEILING + 1e-6
+    assert result[:, 1] == pytest.approx(result[:, 0] * .4, abs=1e-7)
+    assert integrated_loudness(np.zeros((SAMPLE_RATE, 2))) == -np.inf
 
 
 @pytest.mark.parametrize("name", EFFECTS)
@@ -25,8 +126,8 @@ def test_effects_deterministic_click_free_and_below_peak_ceiling(name):
     synthesize.cache_clear()
     second = synthesize(name)
     assert pcm_bytes(first) == pcm_bytes(second)
-    assert np.isfinite(first).all() and 0 < np.max(np.abs(first)) <= 10 ** (-16 / 20) + 1e-6
-    assert abs(first[0]) < 1e-5 and abs(first[-1]) < 1e-5
+    assert np.isfinite(first).all() and 0 < np.max(np.abs(first)) <= 10 ** (-3 / 20) + 1e-6
+    assert np.max(np.abs(first[0])) < 1e-5 and np.max(np.abs(first[-1])) < 1e-5
     assert len(read_pcm(pcm_bytes(first))) == len(first)
 
 
@@ -36,8 +137,10 @@ def test_original_loops_are_deterministic_and_have_quiet_boundaries(track):
     synthesize.cache_clear()
     assert first == pcm_bytes(synthesize(track, music=True))
     samples = read_pcm(first)
-    assert np.max(np.abs(samples)) <= .551
-    assert abs(samples[0]) < 1e-5 and abs(samples[-1]) < 1e-5
+    assert np.max(np.abs(samples)) <= PEAK_CEILING + 1e-6
+    assert samples.shape[1] == 2 and np.max(np.abs(samples[:, 0] - samples[:, 1])) > .01
+    assert np.max(np.abs(samples[0])) < 1e-5 and np.max(np.abs(samples[-1])) < 1e-5
+    assert integrated_loudness(samples) == pytest.approx(-16, abs=.1)
 
 
 def test_mix_loops_trims_fades_ducks_and_never_clips():
@@ -45,16 +148,16 @@ def test_mix_loops_trims_fades_ducks_and_never_clips():
     sound = SoundSettings(music={"track": "calm", "volume": 1, "fade_out": True})
     result = np.concatenate(list(mixed_chunks(3.25, sound, [], music)))
     assert len(result) == round(3.25 * SAMPLE_RATE)
-    assert result[-1] == 0 and result[SAMPLE_RATE + 100] > 0
+    assert np.all(result[-1] == 0) and np.all(result[SAMPLE_RATE + 100] > 0)
     sound.music.loop = False
     stopped = np.concatenate(list(mixed_chunks(3.25, sound, [], music)))
     assert np.all(stopped[SAMPLE_RATE:] == 0)
     sound.music.loop = True
     sound.music.fade_out = False
     ducked = np.concatenate(list(mixed_chunks(2, sound, [("finish", .5)], music)))
-    assert abs(ducked[round(.49 * SAMPLE_RATE)]) < .16  # duck attack before effect
+    assert np.max(np.abs(ducked[round(.49 * SAMPLE_RATE)])) < .41  # duck attack before effect
     crowded = np.concatenate(list(mixed_chunks(2, sound, [("finish", .5)] * 30, music)))
-    assert np.isfinite(crowded).all() and np.max(np.abs(crowded)) <= .89001
+    assert np.isfinite(crowded).all() and np.max(np.abs(crowded)) <= PEAK_CEILING + 1e-6
 
 
 @pytest.mark.parametrize("sound", [
@@ -112,20 +215,20 @@ def test_http_and_mcp_allow_the_same_bounded_base64_audio_request():
         assert Limits.limit_for(path)[0] <= 70 * 1024 * 1024
 
 
-def test_sound_source_markers_preserve_visual_hash_but_runtime_tracks_them(tmp_path):
+def test_sound_syntax_preserves_visual_hash_but_runtime_tracks_it(tmp_path):
     path = tmp_path / "scene.py"
-    baseline = b"before\nafter\n"
-    path.write_bytes(b"before\n    self.cue('finish')  # studio-audio\n# studio-audio-begin\nanything\n# studio-audio-end\nafter\n")
+    baseline = b"def build(self):\n    self.wait(1)\n    self.poster()\n"
+    path.write_bytes(b"def build(self):\n    self.wait(1)\n    for n in range(3):\n        self.cue('finish', offset=n)\n    self.poster()\n")
     assert visual_source(path.read_bytes()) == baseline
     visual = tree_fingerprint(str(path), visual_only=True)
     runtime = tree_fingerprint(str(path))
     path.write_bytes(path.read_bytes().replace(b"finish", b"correct"))
     assert tree_fingerprint(str(path), visual_only=True) == visual
     assert tree_fingerprint(str(path)) != runtime
-    path.write_bytes(path.read_bytes().replace(b"before", b"visual change"))
+    path.write_bytes(path.read_bytes().replace(b"self.cue('correct', offset=n)", b"self.cue('correct', offset=n)\n        self.wait(1)"))
     assert tree_fingerprint(str(path), visual_only=True) != visual
-    with pytest.raises(ValueError):
-        visual_source(b"# studio-audio-begin\n")
+    for extra in (b"self.wait(1)", b"self.cue('tick', offset=self.wait(1))", b"if self.wait(1):\n        self.cue('tick')"):
+        assert b"self.wait(1)" in visual_source(b"def build(self):\n    " + extra + b"\n")
 
 
 def capture_cues(template, params, tmp_path, settings=None):
@@ -194,7 +297,9 @@ def test_upload_decodes_each_supported_format(extension, codec, tmp_path):
     result = asyncio.run(service.upload_audio(source.read_bytes(), source.name))
     normalized = read_pcm(Path(service.audio_path(result["name"])).read_bytes())
     assert .7 < result["duration"] < 1.1
-    assert np.max(np.abs(normalized)) <= .701
+    assert normalized.shape[1] == 2
+    assert integrated_loudness(normalized) == pytest.approx(-16, abs=.2)
+    assert result["name"].endswith(".flac")
 
 
 def test_upload_size_cap_and_missing_music_are_actionable(tmp_path, monkeypatch):
@@ -220,11 +325,11 @@ def test_tiny_real_writer_outputs_audio_in_each_video_container(format, codec, t
         pass
     class Tiny(StudioScene):
         Params = Empty
-        META = SimpleNamespace(default_length=.6)
+        META = SimpleNamespace(default_length=12 if format == "mp4" else .6)
         def build(self):
             square = Square(side_length=1, fill_opacity=1)
             self.add(square)
-            self.cue("finish")
+            self.cue("finish", offset=5 if format == "mp4" else 0)
             self.play(square.animate.scale(.8), run_time=.2)
     runtime.set_job({"mode": "video", "settings": {"sound": {"music": {"track": "calm"}}}})
     try:
@@ -242,11 +347,15 @@ def test_tiny_real_writer_outputs_audio_in_each_video_container(format, codec, t
         audio = [s for s in json.loads(probe.stdout)["streams"] if s["codec_type"] == "audio"]
         assert (audio[0]["codec_name"] if audio else None) == codec
         if audio:
-            assert abs(float(audio[0].get("duration", .6)) - .6) < .1
-            decoded = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-f", "f32le", "-ac", "1", "pipe:1"],
+            assert audio[0]["sample_rate"] == "48000" and audio[0]["channels"] == 2
+            expected_duration = 12 if format == "mp4" else .6
+            assert abs(float(audio[0].get("duration", expected_duration)) - expected_duration) < .1
+            decoded = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-vn", "-f", "f32le", "-ac", "2", "pipe:1"],
                                      check=True, capture_output=True, timeout=20)
-            samples = np.frombuffer(decoded.stdout, dtype="<f4")
+            samples = np.frombuffer(decoded.stdout, dtype="<f4").reshape(-1, 2)
             assert .001 < np.max(np.abs(samples)) < 1
+            if format == "mp4":
+                assert integrated_loudness(samples) == pytest.approx(-16, abs=.8)
     finally:
         runtime.set_job(None)
 
@@ -270,7 +379,7 @@ def test_http_mcp_upload_and_settings_parity(tmp_path):
             uploaded = client.post("/api/studio/audio", files={"file": ("my music.wav", data, "audio/wav")})
             assert uploaded.status_code == 201, uploaded.text
             result = uploaded.json()
-            assert client.get(result["url"]).content.startswith(b"RIFF")
+            assert client.get(result["url"]).content.startswith(b"fLaC")
             assert client.post("/api/studio/audio", json={"data": "invalid"}).status_code == 422
             assert client.get("/api/studio/sounds/music/calm.wav").content.startswith(b"RIFF")
             assert client.get("/api/studio/sounds/music/unknown.wav").status_code == 404

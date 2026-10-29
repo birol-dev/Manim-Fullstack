@@ -1,6 +1,6 @@
 /** The editor: a form on the left, the live preview on the right, export on top. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -19,6 +19,7 @@ import { isTextEditor } from "./editorHistory";
 import { useEditorHistory } from "./useEditorHistory";
 import "./editor.css";
 import { LookPanel } from "./LookPanel";
+import { SoundPanel } from "./SoundPanel";
 import { ASPECTS, initialSettings, isPortrait } from "./options";
 import { stableKey } from "./preview";
 import { PreviewPanel, type PreviewView } from "./PreviewPanel";
@@ -391,7 +392,8 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     [fieldErrors, fields, params],
   );
   const contentBroken = hasErrorsUnder(matched.byPath, "params");
-  const lookBroken = hasErrorsUnder(matched.byPath, "settings");
+  const soundBroken = hasErrorsUnder(matched.byPath, "settings.sound");
+  const lookBroken = Object.keys(matched.byPath).some((path) => path.startsWith("settings") && !path.startsWith("settings.sound"));
   const formContext = useMemo(
     () => ({ locale: settings.locale, theme, errors: matched.byPath }),
     [settings.locale, theme, matched.byPath],
@@ -466,6 +468,10 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
                 <Palette className="size-3.5" /> Look
                 {lookBroken && <span className="size-1.5 rounded-full bg-danger" aria-label="has problems" />}
               </TabsTrigger>
+              <TabsTrigger value="sound" className="text-[13px]">
+                <Volume2 className="size-3.5" /> Sound
+                {soundBroken && <span className="size-1.5 rounded-full bg-danger" aria-label="has problems" />}
+              </TabsTrigger>
             </TabsList>
             <FormContext.Provider value={formContext}>
               <TabsContent value="content" className="studio-editor-panel">
@@ -486,7 +492,10 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
                 )}
               </TabsContent>
               <TabsContent value="look" className="studio-editor-panel">
-                <LookPanel key={formVersion} settings={settings} onChange={patchSettings} template={template} themes={themes} musicTracks={catalog.music_tracks} errors={matched.byPath} />
+                <LookPanel key={formVersion} settings={settings} onChange={patchSettings} template={template} themes={themes} errors={matched.byPath} />
+              </TabsContent>
+              <TabsContent value="sound" className="studio-editor-panel">
+                <SoundPanel key={formVersion} value={settings.sound} onChange={(sound) => patchSettings({ sound })} tracks={catalog.music_tracks} errors={matched.byPath} />
               </TabsContent>
             </FormContext.Provider>
           </Tabs>

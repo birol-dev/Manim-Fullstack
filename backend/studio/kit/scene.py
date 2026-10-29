@@ -84,14 +84,11 @@ class StudioScene(Scene):
         self._frames = []
         self._poster_done = False
         self._particle_clearances = []
-        # studio-audio-begin
-        # Dry timing/still/GIF passes never synthesize or mux audio.
         from ..audio_render import install_sound
         if not config.dry_run and config.write_to_movie and config.format != "gif":
             install_sound(self)
         else:
             self._sound_cues = []
-        # studio-audio-end
         fonts.register_bundled()
         self.bg = self._background()
         if self.bg is not None:
@@ -112,12 +109,11 @@ class StudioScene(Scene):
     def asset(self, name):
         """Path of an uploaded asset named in the params, or None."""
         return media.resolve_asset(self.assets_dir, name)
-    # studio-audio-begin
+
     def cue(self, name, *, offset=0.0):
         """Schedule one restrained sound at this scene event, without changing time."""
         from ..audio_render import record_cue
         record_cue(self, name, offset)
-    # studio-audio-end
 
     def keep_particles_clear(self, particles, foreground, *, padding=0.10):
         """Reserve readable space for lines/marks in every render mode."""

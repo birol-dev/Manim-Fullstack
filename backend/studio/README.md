@@ -75,7 +75,8 @@ A separate warm `PreviewWorker` renders MP4s with the project's sound mix at 720
 limited to the **first 20 seconds of the real timeline**; it does not speed up a long
 countdown. The response includes `duration` and `truncated` for the UI caption.
 Only an explicit Play click starts rendering. Edits cancel the pending job and return
-to the still. Playback starts muted; Unmute is an explicit user gesture. Gallery peeks
+to the still. Playback starts muted initially; the visible Sound off/on control below
+the artwork remembers the choice for the browser session. Gallery peeks
 and still/storyboard previews remain silent. Finished videos share the bounded preview cache, with keys covering
 template/kit/icons, content, settings, uploaded asset stamps and preview limits.
 
@@ -221,7 +222,8 @@ Tools: `search_templates`, `get_template`, `create_project`, `list_projects`,
 `get_template` also returns `settings_schema` (themes, formats, background, brand, timing).
 `add_image` takes base64 and returns the name to put in an image field.
 `upload_audio` accepts base64 audio (50 MB/10 minutes) and returns a normalized
-asset name for `settings.sound.music.asset`. `list_music_tracks` returns the three
+48 kHz stereo FLAC asset name for `settings.sound.music.asset` (64 MB prepared cap).
+`list_music_tracks` returns the three
 original bundled tracks for `settings.sound.music.track`. The same settings schema
 and validation apply to UI and MCP. `/api/studio/audio` also accepts multipart files;
 `/api/studio/music-tracks` lists tracks and `/api/studio/sounds/{kind}/{name}.wav`

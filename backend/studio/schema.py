@@ -14,7 +14,7 @@ import re
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
-from .sound import SoundSettings  # studio-audio
+from .sound import SoundSettings
 
 Aspect = Literal["16:9", "9:16", "1:1", "4:5"]
 ASPECTS: tuple = ("16:9", "9:16", "1:1", "4:5")
@@ -207,7 +207,7 @@ class RenderSettings(BaseModel):
     """Controls every template shares; templates read them through the kit."""
 
     model_config = ConfigDict(extra="forbid")
-    sound: SoundSettings = Field(default_factory=SoundSettings)  # studio-audio
+    sound: SoundSettings = Field(default_factory=SoundSettings)
 
     aspect: Aspect = "16:9"
     length: Optional[float] = Field(None, ge=1, le=3600, description="Seconds; None uses the template default.")

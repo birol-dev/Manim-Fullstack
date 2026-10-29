@@ -58,6 +58,9 @@ def main():
             assert width > 0 and height > 0 and frames >= 50
         with av.open(io.BytesIO(movie)) as container:
             import numpy as np
+            audio_stream = container.streams.audio[0]
+            assert audio_stream.codec_context.sample_rate == 48000
+            assert len(audio_stream.codec_context.layout.channels) == 2
             audio_frames = list(container.decode(audio=0))
             audio_samples = sum(frame.samples for frame in audio_frames)
             peak = max(float(np.max(np.abs(frame.to_ndarray()))) for frame in audio_frames)
@@ -66,7 +69,8 @@ def main():
                   "manim": __import__("importlib.metadata", fromlist=["version"]).version("manim"),
                   "template": "countdown", "preview": {"width": poster_size[0], "height": poster_size[1]},
                   "mp4": {"width": width, "height": height, "frames": frames, "duration": duration, "bytes": len(movie),
-                          "audio_codec": "aac", "audio_samples": audio_samples, "audio_peak": peak},
+                          "audio_codec": "aac", "audio_rate": 48000, "audio_channels": 2,
+                          "audio_samples": audio_samples, "audio_peak": peak},
                   "elapsed_seconds": round(time.monotonic() - started, 2)}
         if args.audio_formats:
             report["sound_formats"] = {}
@@ -82,6 +86,8 @@ def main():
                     actual = container.streams.audio[0].codec_context.name if container.streams.audio else None
                     assert actual == expected, (fmt, actual)
                     if actual:
+                        assert container.streams.audio[0].codec_context.sample_rate == 48000
+                        assert len(container.streams.audio[0].codec_context.layout.channels) == 2
                         assert sum(frame.samples for frame in container.decode(audio=0)) > 0
                     report["sound_formats"][fmt] = actual
         (args.data_dir / "render-smoke.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

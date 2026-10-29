@@ -211,7 +211,7 @@ async def post_audio(request: Request):
 @router.get("/audio/{name}")
 @_errors
 async def get_audio(name: str):
-    return FileResponse(get_service().audio_path(name), media_type="audio/wav",
+    return FileResponse(get_service().audio_path(name), media_type="audio/flac" if name.endswith(".flac") else "audio/wav",
                         headers={"X-Content-Type-Options": "nosniff"})
 
 

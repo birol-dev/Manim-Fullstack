@@ -82,7 +82,7 @@ def mux_sound(path, sound, cues, music=None, energy="normal"):
                                             "-show_entries", "stream=duration:format=duration", "-of", "json", path]).stdout)
             duration = float(metadata["streams"][0].get("duration") or metadata["format"]["duration"])
             with wave.open(audio_path, "wb") as audio:
-                audio.setnchannels(1)
+                audio.setnchannels(2)
                 audio.setsampwidth(2)
                 audio.setframerate(SAMPLE_RATE)
                 for chunk in mixed_chunks(duration, sound, cues, music, energy):
@@ -90,6 +90,8 @@ def mux_sound(path, sound, cues, music=None, energy="normal"):
             codec = "libopus" if target.suffix == ".webm" else "pcm_s16le" if target.suffix == ".mov" else "aac"
             args = ["ffmpeg", "-v", "error", "-y", "-i", path, "-i", audio_path, "-map", "0:v:0", "-map", "1:a:0",
                     "-c:v", "copy", "-c:a", codec, "-t", str(duration)]
+            if codec != "pcm_s16le":
+                args += ["-b:a", "128k" if codec == "libopus" else "192k"]
             if target.suffix == ".mp4":
                 args += ["-movflags", "+faststart"]
             _command([*args, temporary])
@@ -115,17 +117,19 @@ def _mux_av(av, source_path, output_path, sound, cues, music, energy):
         copied.metadata.update(video.metadata)
         target.metadata.update(source.metadata)
         audio = target.add_stream(codec, rate=SAMPLE_RATE)
-        audio.layout = "mono"
+        audio.layout = "stereo"
         fmt = "s16" if codec == "pcm_s16le" else "flt" if codec == "libopus" else "fltp"
         audio.format = fmt
-        audio.bit_rate = 96000
+        if codec != "pcm_s16le":
+            audio.bit_rate = 128000 if codec == "libopus" else 192000
 
         def audio_packets():
             position = 0
             size = 960 if codec == "libopus" else 1024
             for chunk in mixed_chunks(duration, sound, cues, music, energy, chunk_size=size):
                 values = (chunk * 32767).round().astype(np.int16) if fmt == "s16" else chunk.astype(np.float32)
-                frame = av.AudioFrame.from_ndarray(values.reshape(1, -1), format=fmt, layout="mono")
+                values = values.T.copy() if fmt.endswith("p") else values.reshape(1, -1)
+                frame = av.AudioFrame.from_ndarray(values, format=fmt, layout="stereo")
                 frame.sample_rate = SAMPLE_RATE
                 frame.time_base = Fraction(1, SAMPLE_RATE)
                 frame.pts = position

@@ -11,15 +11,16 @@ TRACKS = (
 EFFECTS = ("tick", "tick_final", "finish", "reveal", "correct", "pop", "whoosh", "sparkle")
 MAX_AUDIO_BYTES = 50 * 1024 * 1024
 MAX_AUDIO_SECONDS = 600
-SAMPLE_RATE = 24000
-AUDIO_VERSION = 1
+SAMPLE_RATE = 48000
+AUDIO_VERSION = 2
+MAX_STORED_AUDIO_BYTES = 64 * 1024 * 1024
 
 
 class MusicSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    asset: str | None = Field(None, pattern=r"^audio-[a-f0-9]{32}\.wav$")
+    asset: str | None = Field(None, pattern=r"^audio-[a-f0-9]{32}\.(?:wav|flac)$")
     track: Literal["calm", "upbeat", "playful"] | None = None
-    volume: float = Field(0.25, ge=0, le=1)
+    volume: float = Field(1.0, ge=0, le=1)
     fade_out: bool = True
     loop: bool = True
 

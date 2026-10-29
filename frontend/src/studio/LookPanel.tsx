@@ -8,10 +8,9 @@ import { cn } from "@/lib/utils";
 
 import { inputClass, Segments } from "./components";
 import { ColorControl } from "./ColorControl";
-import { SoundPanel } from "./SoundPanel";
 import { changeBackgroundKind, visibleBackgroundSlots, type BackgroundSlot } from "./background";
 import { BACKGROUNDS, ENDINGS, ENERGIES, formatSeconds, isPortrait, LOCALES } from "./options";
-import type { Background, MusicTrack, RenderSettings, TemplateInfo, Theme } from "./types";
+import type { Background, RenderSettings, TemplateInfo, Theme } from "./types";
 
 interface LookPanelProps {
   settings: RenderSettings;
@@ -19,7 +18,6 @@ interface LookPanelProps {
   template: TemplateInfo;
   themes: Theme[];
   errors: Record<string, string[]>;
-  musicTracks?: MusicTrack[];
 }
 
 function Row({ label, labelId, htmlFor, hint, errors, children }: { label: string; labelId?: string; htmlFor?: string; hint?: ReactNode; errors?: string[]; children: ReactNode }) {
@@ -97,7 +95,7 @@ function ColorInput({ label, value, fallback, onChange, theme }: { label: string
   );
 }
 
-export function LookPanel({ settings, onChange, template, themes, errors, musicTracks }: LookPanelProps) {
+export function LookPanel({ settings, onChange, template, themes, errors }: LookPanelProps) {
   const ids = { theme: useId(), energy: useId(), ending: useId(), background: useId(), length: useId(), locale: useId(), safe: useId() };
   const theme = themes.find((item) => item.id === settings.theme);
   const background = settings.background ?? { kind: "theme" };
@@ -188,7 +186,6 @@ export function LookPanel({ settings, onChange, template, themes, errors, musicT
         )}
 
       </section>
-      <SoundPanel value={settings.sound} onChange={(sound) => onChange({ sound })} tracks={musicTracks} errors={errors} />
       <section className="studio-look-section" aria-label="Details">
         <h2>Details</h2>
         {isPortrait(settings.aspect) && (

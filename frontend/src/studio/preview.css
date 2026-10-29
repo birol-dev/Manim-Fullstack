@@ -43,3 +43,8 @@
 @media (prefers-reduced-motion: reduce) {
   .studio-motion-video .studio-motion-controls { transition: none; }
 }
+.studio-preview-sound { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-height: 44px; padding: 6px 10px; border: 1px solid var(--color-line); border-radius: 999px; color: var(--color-fg-muted); background: var(--color-surface); font-size: 12px; cursor: pointer; }
+.studio-preview-sound svg { width: 15px; height: 15px; }
+.studio-preview-sound[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
+.studio-preview-sound:hover { background: var(--color-raised); }
+.studio-preview-sound:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }

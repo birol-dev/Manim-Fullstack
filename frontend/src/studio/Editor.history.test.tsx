@@ -101,3 +101,20 @@ it("records an AI update as one undoable step without resaving it until undo", a
   expect(studio.projects[0].settings.theme).toBe("clean");
   expect(screen.queryByText("Updated by your AI")).not.toBeInTheDocument();
 });
+
+it("offers Content, Look and Sound with the existing tab keyboard behaviour, retaining Sound during edits", async () => {
+  const user = userEvent.setup(); open();
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Content", "Look", "Sound"]);
+  screen.getByRole("tab", { name: "Content" }).focus();
+  await user.keyboard("{ArrowRight}");
+  expect(screen.getByRole("tab", { name: "Look" })).toHaveFocus();
+  expect(screen.queryByRole("switch", { name: "Sound effects" })).not.toBeInTheDocument();
+  await user.keyboard("{ArrowRight}");
+  expect(screen.getByRole("tab", { name: "Sound" })).toHaveAttribute("aria-selected", "true");
+  await user.click(screen.getByRole("switch", { name: "Sound effects" }));
+  await screen.findByText("Saved");
+  expect(screen.getByRole("tab", { name: "Sound" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("switch", { name: "Sound effects" })).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Undo" }));
+  expect(screen.getByRole("switch", { name: "Sound effects" })).toBeChecked();
+});

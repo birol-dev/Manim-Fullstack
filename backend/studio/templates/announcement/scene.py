@@ -86,7 +86,7 @@ class Template(StudioScene):
             self.remove(*teaser["pieces"])
             self.add(teaser["group"])
             self.play(teaser["out"], run_time=teaser["out"].run_time * f)
-        self.cue("whoosh")  # studio-audio
+        self.cue("whoosh")
         for beat in beats:
             under = getattr(beat, "under", None)
             if under:  # decoration goes right above the background, under everything else

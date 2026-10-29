@@ -269,7 +269,7 @@
 :root[data-surface="studio"] .studio-editor-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 :root[data-surface="studio"] .studio-editor-sidebar { width: 420px; min-width: 0; flex-shrink: 0; background: var(--color-surface); border-right: 1px solid var(--color-line); overflow-y: auto; }
 :root[data-surface="studio"] .studio-editor-tabs { position: sticky; top: 0; z-index: 10; height: 60px; flex-shrink: 0; gap: 4px; border: 12px solid var(--color-surface); border-inline-width: 24px; border-radius: 999px; padding: 4px; background: var(--color-raised); }
-:root[data-surface="studio"] .studio-editor-tabs [role="tab"] { flex: 1; justify-content: center; border-radius: 999px; font-size: 13px; }
+:root[data-surface="studio"] .studio-editor-tabs [role="tab"] { flex: 1; min-width: 0; padding-inline: 8px; gap: 5px; justify-content: center; border-radius: 999px; font-size: 13px; }
 :root[data-surface="studio"] .studio-editor-tabs [role="tab"]::after { display: none; }
 :root[data-surface="studio"] .studio-editor-tabs [data-state="active"] { background: var(--color-surface); color: var(--color-fg); box-shadow: 0 1px 3px rgb(0 0 0 / .08); }
 :root[data-surface="studio"] .studio-editor-panel { padding: 8px 24px 32px; }
