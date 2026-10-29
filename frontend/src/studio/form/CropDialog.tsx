@@ -35,6 +35,9 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
   const ratio = freeRatio ?? cropRatio(shape, dimensions ? dimensions.width / dimensions.height : 1);
   const rect = dimensions ? cropGeometry(dimensions.width, dimensions.height, ratio, position) : null;
   const ready = !!dimensions && !loadFailed;
+  // The stage always fits the whole photo; the mask is the crop window over it.
+  const frameRatio = dimensions ? dimensions.width / dimensions.height : ratio;
+  const frameWidth = Math.round(300 * frameRatio * 100) / 100;
   const reset = () => { setPosition(RESET_CROP); setFreeRatio(null); };
   const close = () => { if (!busy) { live.current = false; onClose(); } };
 
@@ -92,24 +95,29 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
         <DialogDescription>Drag to position your photo. Use the arrow keys for small adjustments.</DialogDescription>
       </DialogHeader>
       <div className="studio-crop-stage">
-        <div className="studio-crop-mask" data-circle={shape === "circle" || undefined}
-          style={{ aspectRatio: String(ratio), maxWidth: Math.min(340, 300 * ratio) }}
-          role="group" tabIndex={0} aria-label="Photo position" aria-describedby={helpId} aria-disabled={busy || !ready}
-          onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}
-          onLostPointerCapture={() => { drag.current = null; }} onKeyDown={moveWithKeys}>
+        <div className="studio-crop-frame" style={{ width: `min(100%, ${frameWidth}px)`, aspectRatio: String(frameRatio) }}>
           <img key={loadVersion} ref={image} crossOrigin="anonymous" src={assetUrl(name)} alt="Photo to crop" draggable={false}
+            className="studio-crop-photo"
             onLoad={(event) => {
               const img = event.currentTarget;
               if (!img.naturalWidth || !img.naturalHeight) { setLoadFailed(true); return; }
               setDimensions({ width: img.naturalWidth, height: img.naturalHeight });
               setLoadFailed(false);
             }} onError={() => setLoadFailed(true)}
-            style={dimensions && rect ? {
-              width: `${dimensions.width / rect.width * 100}%`, height: `${dimensions.height / rect.height * 100}%`,
-              left: `${-rect.x / rect.width * 100}%`, top: `${-rect.y / rect.height * 100}%`,
-            } : { visibility: "hidden" }} />
-          {!dimensions && !loadFailed && <span className="studio-crop-loading" role="status"><Spinner /> Loading photo…</span>}
+            style={dimensions ? undefined : { visibility: "hidden" }} />
+          {dimensions && rect && (
+            <div className="studio-crop-mask" data-circle={shape === "circle" || undefined}
+              style={{
+                left: `${rect.x / dimensions.width * 100}%`, top: `${rect.y / dimensions.height * 100}%`,
+                width: `${rect.width / dimensions.width * 100}%`, height: `${rect.height / dimensions.height * 100}%`,
+                aspectRatio: String(ratio),
+              }}
+              role="group" tabIndex={0} aria-label="Photo position" aria-describedby={helpId} aria-disabled={busy || !ready}
+              onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={stopDrag} onPointerCancel={stopDrag}
+              onLostPointerCapture={() => { drag.current = null; }} onKeyDown={moveWithKeys} />
+          )}
         </div>
+        {!dimensions && !loadFailed && <span className="studio-crop-loading" role="status"><Spinner /> Loading photo…</span>}
       </div>
       <p id={helpId} className="studio-crop-help">
         {shape === "circle" ? "The circle shows what will appear in your video." : "The frame shows what will appear in your video."} Shift + arrow moves farther.

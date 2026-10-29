@@ -26,13 +26,34 @@ it("supports free crop width, zoom and Reset before exporting the chosen rectang
   const canvas = mockCanvas();
   fireEvent.change(screen.getByRole("slider", { name: "Crop width" }), { target: { value: "1" } });
   fireEvent.change(screen.getByRole("slider", { name: "Zoom" }), { target: { value: "3" } });
-  expect(image).toHaveStyle({ width: "450%" });
+  const mask = screen.getByRole("group", { name: "Photo position" });
+  expect(parseFloat(mask.style.width)).toBeCloseTo(22.22, 1);
+  expect(parseFloat(mask.style.height)).toBeCloseTo(33.33, 1);
   await user.click(screen.getByRole("button", { name: "Reset" }));
   expect(screen.getByRole("slider", { name: "Crop width" })).toHaveValue("1.5");
   expect(screen.getByRole("slider", { name: "Zoom" })).toHaveValue("1");
+  expect(parseFloat(mask.style.width)).toBeCloseTo(100, 5);
   await user.click(screen.getByRole("button", { name: "Use photo" }));
   expect(canvas.drawImage).toHaveBeenCalledWith(image, 0, 0, 1200, 800, 0, 0, 1200, 800);
   expect(confirm.mock.calls[0][0]).toMatchObject({ name: "portrait-crop.png", type: "image/png" });
+});
+
+it("shows the whole photo in the stage with the mask as a hole over it", () => {
+  render(<CropDialog name="portrait.jpg" shape="circle" onClose={() => {}} onConfirm={vi.fn()} />);
+  const photo = loadPhoto();
+  const mask = screen.getByRole("group", { name: "Photo position" });
+  const frame = photo.parentElement!;
+  expect(frame).toHaveClass("studio-crop-frame");
+  expect(frame).toContainElement(photo);
+  expect(frame).toContainElement(mask);
+  expect(mask).not.toContainElement(photo);
+  expect(photo).toHaveClass("studio-crop-photo");
+  expect(mask).toHaveClass("studio-crop-mask");
+  expect(mask).toHaveAttribute("data-circle", "true");
+  expect(frame).toHaveStyle({ aspectRatio: "1.5" });
+  expect(parseFloat(mask.style.left)).toBeCloseTo(16.67, 1);
+  expect(parseFloat(mask.style.width)).toBeCloseTo(66.67, 1);
+  expect(parseFloat(mask.style.height)).toBeCloseTo(100, 5);
 });
 
 it("keeps drag coordinates after pointerup and clamps the photo to the mask", async () => {
