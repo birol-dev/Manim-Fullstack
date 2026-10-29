@@ -174,6 +174,69 @@ def test_cancel_running_export(tmp_path, monkeypatch):
         svc.shutdown_sync()
 
 
+def test_retry_a_finished_export(api, studio):
+    export = api.post("/api/studio/exports", json={"template": "countdown", "params": LAUNCH, "quality": "draft",
+                                                   "title": "Again"}).json()
+    done = wait_until(lambda: (lambda e: e if e["status"] == "done" else None)(
+        api.get(f"/api/studio/exports/{export['id']}").json()))
+    res = api.post(f"/api/studio/exports/{export['id']}/retry")
+    assert res.status_code == 202, res.text
+    again = res.json()
+    assert again["id"] != export["id"] and again["status"] == "queued"
+    assert again["template"] == "countdown" and again["quality"] == "draft" and again["title"] == "Again"
+    assert again["request"] == done["request"]
+    assert api.post("/api/studio/exports/000000000000/retry").status_code == 404
+    assert api.post("/api/studio/exports/nope/retry").status_code == 404
+
+
+def test_retry_without_a_stored_request_answers_409(api, studio):
+    manager = studio._export_manager()
+    manager._ensure_loaded()
+    with manager._lock:
+        manager._records["abcdef000001"] = {"id": "abcdef000001", "status": "failed", "created": "1"}
+    res = api.post("/api/studio/exports/abcdef000001/retry")
+    assert res.status_code == 409 and "no stored request" in res.json()["detail"]
+
+
+def test_forget_keeps_the_file_and_remove_deletes_it(api, studio):
+    import os
+
+    def finished(title):
+        export = api.post("/api/studio/exports", json={"template": "countdown", "quality": "draft",
+                                                       "title": title}).json()
+        return wait_until(lambda: (lambda e: e if e["status"] == "done" else None)(
+            api.get(f"/api/studio/exports/{export['id']}").json()))
+
+    kept = finished("Keep")
+    kept_path = os.path.join(studio.exports_dir, kept["filename"])
+    res = api.post(f"/api/studio/exports/{kept['id']}/forget")
+    assert res.status_code == 200 and res.json()["id"] == kept["id"]
+    assert os.path.isfile(kept_path)
+    assert api.get(f"/api/studio/exports/{kept['id']}").status_code == 404
+
+    gone = finished("Gone")
+    gone_path = os.path.join(studio.exports_dir, gone["filename"])
+    assert api.delete(f"/api/studio/exports/{gone['id']}?remove=true").status_code == 200
+    assert not os.path.exists(gone_path)
+    assert api.post("/api/studio/exports/000000000000/forget").status_code == 404
+
+
+def test_remove_a_running_export_conflicts(tmp_path, monkeypatch):
+    blocker = FakeRunner("block")
+    svc, _ = make_service(tmp_path, runners=RunnerFactory(blocker))
+    monkeypatch.setattr(service_module, "service", svc)
+    api = LocalClient(main.app, base_url="http://localhost")
+    try:
+        export = api.post("/api/studio/exports", json={"template": "countdown", "quality": "draft"}).json()
+        assert blocker.started.wait(5)
+        for res in (api.post(f"/api/studio/exports/{export['id']}/forget"),
+                    api.delete(f"/api/studio/exports/{export['id']}?remove=true")):
+            assert res.status_code == 409 and "cancel it first" in res.json()["detail"]
+        assert api.delete(f"/api/studio/exports/{export['id']}").json()["status"] == "cancelled"
+    finally:
+        svc.shutdown_sync()
+
+
 def test_projects_crud(api):
     assert api.get("/api/studio/projects").json() == []
     res = api.post("/api/studio/projects", json={"template": "countdown", "params": {"seconds": 1},
@@ -192,6 +255,25 @@ def test_projects_crud(api):
     assert api.get(f"/api/studio/projects/{pid}").status_code == 404
     assert api.get("/api/studio/projects/..%2F..%2Fsecret").status_code == 404
     assert api.post("/api/studio/projects", json={"template": "nope"}).status_code == 422
+
+
+def test_duplicate_a_project(api):
+    project = api.post("/api/studio/projects", json={"template": "countdown", "params": {"seconds": 3},
+                                                     "title": "Mine"}).json()
+    res = api.post(f"/api/studio/projects/{project['id']}/duplicate", json={})
+    assert res.status_code == 201, res.text
+    copy = res.json()
+    assert copy["id"] != project["id"] and copy["title"] == "Mine copy"
+    assert copy["template"] == "countdown" and copy["params"] == {"seconds": 3}
+    named = api.post(f"/api/studio/projects/{project['id']}/duplicate", json={"title": "Another"}).json()
+    assert named["title"] == "Another" and named["id"] not in (project["id"], copy["id"])
+    # A copy of a copy gets its own "<title> copy".
+    twice = api.post(f"/api/studio/projects/{copy['id']}/duplicate", json={}).json()
+    assert twice["title"] == "Mine copy copy"
+    assert api.post("/api/studio/projects/0000000000000000/duplicate", json={}).status_code == 404
+    assert api.post(f"/api/studio/projects/{project['id']}/duplicate",
+                    json={"template": "countdown"}).status_code == 422
+    assert len(api.get("/api/studio/projects").json()) == 4
 
 
 def test_images_from_agents(api, studio):

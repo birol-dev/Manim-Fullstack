@@ -44,11 +44,16 @@ def capabilities(system: Optional[str] = None) -> dict:
     return {"reveal": name in ("Windows", "Darwin", "Linux"), "copy_file": name in ("Windows", "Darwin")}
 
 
-def reveal_args(path: str, system: Optional[str] = None) -> list:
-    """The argv that shows *path* selected in its folder."""
+def reveal_args(path: str, system: Optional[str] = None):
+    """The argv that shows *path* selected in its folder; Windows needs one command line string."""
     name = platform_name(system)
     if name == "Windows":
-        return ["explorer", f"/select,{path}"]
+        # subprocess quotes a list argument that contains spaces ("/select,C:\Jane Doe\a.mp4"),
+        # and Explorer then opens the default folder. The switch and the path are one argument
+        # to Explorer, so the command line is built here with only the path quoted.
+        if '"' in path:
+            raise HostError("That file name can't be shown in its folder. Download the file instead.")
+        return f'explorer /select,"{path}"'
     if name == "Darwin":
         return ["open", "-R", path]
     return ["xdg-open", os.path.dirname(path) or "."]
@@ -68,7 +73,7 @@ def copy_args(path: str, system: Optional[str] = None) -> list:
                           "Download the file instead.")
 
 
-def _execute(args: list, env: Optional[dict] = None):
+def _execute(args, env: Optional[dict] = None):
     options = {"capture_output": True, "text": True, "timeout": TIMEOUT_SECONDS}
     if env is not None:
         options["env"] = {**os.environ, **env}

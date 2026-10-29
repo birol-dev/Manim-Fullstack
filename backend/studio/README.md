@@ -217,8 +217,16 @@ for Studio projects, previews, exports and MCP tools; it does not open the Autho
 in desktop mode. The server's Host/Origin checks also apply to MCP.
 
 Tools: `search_templates`, `get_template`, `create_project`, `list_projects`,
-`get_project`, `update_project`, `preview`, `export_project`, `get_export`,
-`cancel_export`, `add_image`, `list_icons`. A preview returns an image for the agent to inspect.
+`get_project`, `update_project`, `duplicate_project`, `delete_project`, `preview`,
+`get_motion`, `cancel_motion`, `export_project`, `list_exports`, `get_export`,
+`cancel_export`, `retry_export`, `remove_export`, `add_image`, `list_icons`,
+`upload_audio`, `list_music_tracks`. A preview returns an image for the agent to inspect.
+`list_exports` returns the Exports page's records, newest first, each finished file with
+its absolute `download_url`. `remove_export` deletes a finished export from the history
+and, unless `delete_file=false`, its file; a running export must be cancelled first.
+`retry_export` starts a new export from the request saved on an old record.
+`duplicate_project` copies a project under a new id (the title defaults to
+`"<title> copy"`), like Duplicate in the app; `delete_project` removes one.
 `get_template` also returns `settings_schema` (themes, formats, background, brand, timing).
 `add_image` takes base64 and returns the name to put in an image field.
 `upload_audio` accepts base64 audio (50 MB/10 minutes) and returns a normalized

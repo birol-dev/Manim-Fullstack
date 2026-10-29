@@ -42,7 +42,7 @@ from xml.etree import ElementTree
 
 from . import host, peeks, registry
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
-from .exports import EXPORT_FORMATS, ExportManager, ManimVideoRunner
+from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
 from .registry import TemplateError
 from .motion import MotionPreviews, LONG_SIDE, FPS, MAX_DURATION
@@ -598,9 +598,35 @@ class StudioService:
             record = manager.get(export_id)
         return record
 
-    async def remove_export(self, export_id: str) -> dict:
-        """Forget a finished export and delete its file."""
-        return await asyncio.to_thread(self._export_manager().remove, export_id)
+    async def remove_export(self, export_id: str, delete_file: bool = True) -> dict:
+        """Forget a finished export; with *delete_file* (the default) its file is deleted too."""
+        manager = self._export_manager()
+        if delete_file:
+            return await asyncio.to_thread(manager.remove, export_id)
+        return await asyncio.to_thread(self._forget_export_record, export_id)
+
+    def _forget_export_record(self, export_id: str) -> dict:
+        """Take a finished export out of the history and leave its file in the exports folder."""
+        manager = self._export_manager()
+        record = manager.get(export_id)
+        with manager._lock:
+            stored = manager._get_locked(export_id)
+            if stored.get("status") in ACTIVE:
+                raise ConflictError("This export is still running; cancel it first.")
+            stored["filename"] = None  # the manager unlinks only the file a record names
+        manager.remove(export_id)
+        return record
+
+    async def retry_export(self, export_id: str) -> dict:
+        """Queue a new export from the request saved on a finished record."""
+        record = await asyncio.to_thread(self._export_manager().get, export_id)
+        request = record.get("request")
+        if not isinstance(request, dict) or not isinstance(request.get("template"), str) or not request["template"]:
+            raise ConflictError("This export has no stored request to make again. Start a new export instead.")
+        return await self.start_export(request["template"], request.get("params"), request.get("settings"),
+                                       format=request.get("format") or "mp4",
+                                       quality=request.get("quality") or "1080p",
+                                       title=request.get("title"))
 
     # -- the finished file on this computer ------------------------------------------------
     def host_capabilities(self) -> dict:
@@ -743,6 +769,18 @@ class StudioService:
 
     async def delete_project(self, project_id: str) -> dict:
         return await asyncio.to_thread(self.delete_project_sync, project_id)
+
+    def duplicate_project_sync(self, project_id, title=None) -> dict:
+        project = self._read_project(self._project_path(project_id))
+        title = self._title(title)
+        if title is None:
+            title = (project.get("title") or "Untitled video")[:MAX_TITLE - len(" copy")] + " copy"
+        return self.create_project_sync(project.get("template"), project.get("params"), project.get("settings"),
+                                        title)
+
+    async def duplicate_project(self, project_id: str, title: Optional[str] = None) -> dict:
+        """Copy a project under a new id; the title defaults to ``"<title> copy"``."""
+        return await asyncio.to_thread(self.duplicate_project_sync, project_id, title)
 
     # -- sound: normalized audio is private workspace content, shared by UI/MCP -------------------
     def audio_path(self, name):

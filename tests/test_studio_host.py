@@ -44,9 +44,17 @@ def test_capabilities_per_platform():
 
 
 def test_reveal_argv_per_platform():
-    assert host_module.reveal_args(PATH, "Windows") == ["explorer", "/select,/exports/clip.mp4"]
+    assert host_module.reveal_args(PATH, "Windows") == 'explorer /select,"/exports/clip.mp4"'
     assert host_module.reveal_args(PATH, "Darwin") == ["open", "-R", PATH]
     assert host_module.reveal_args(PATH, "Linux") == ["xdg-open", "/exports"]
+
+
+def test_windows_reveal_quotes_only_the_path_in_one_command_line():
+    spaced = r"C:\Users\Jane Doe\a.mp4"
+    assert host_module.reveal_args(spaced, "Windows") == r'explorer /select,"C:\Users\Jane Doe\a.mp4"'
+    assert host_module.reveal_args(PATH, "Windows") == 'explorer /select,"/exports/clip.mp4"'
+    with pytest.raises(HostError):
+        host_module.reveal_args('/exports/say "hi".mp4', "Windows")
 
 
 def test_copy_argv_per_platform():
@@ -76,18 +84,31 @@ def run(monkeypatch):
     return seen
 
 
-def test_reveal_runs_a_list_with_a_timeout_and_no_shell(run):
+def test_reveal_runs_the_platform_command_with_a_timeout_and_no_shell(run):
     host_module.reveal(PATH, "Windows")
+    spaced = r"C:\Users\Jane Doe\a.mp4"
+    host_module.reveal(spaced, "Windows")
     host_module.reveal(PATH, "Darwin")
     host_module.reveal(PATH, "Linux")
     assert [entry[0] for entry in run] == [
-        ["explorer", "/select,/exports/clip.mp4"],
+        'explorer /select,"/exports/clip.mp4"',
+        r'explorer /select,"C:\Users\Jane Doe\a.mp4"',
         ["open", "-R", PATH],
         ["xdg-open", "/exports"],
     ]
     for _, kwargs in run:
         assert "shell" not in kwargs
         assert kwargs["timeout"] == host_module.TIMEOUT_SECONDS
+
+
+def test_windows_reveal_refuses_a_path_with_a_quote(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("nothing should run")
+
+    monkeypatch.setattr(host_module.subprocess, "run", explode)
+    with pytest.raises(HostError) as info:
+        host_module.reveal('/exports/say "hi".mp4', "Windows")
+    assert "folder" in str(info.value)
 
 
 def test_windows_reveal_ignores_explorers_exit_code(monkeypatch):

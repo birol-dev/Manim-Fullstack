@@ -122,6 +122,19 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
         fields = {k: v for k, v in {"params": params, "settings": settings, "title": title}.items() if v is not None}
         return await service.update_project(project_id, **fields)
 
+    @server.tool()
+    @_tool_errors
+    async def duplicate_project(project_id: str, title: str | None = None) -> dict:
+        """Copy a saved project under a new id, like Duplicate in the app. The title defaults to
+        "<title> copy". Returns the new project; edit the copy, not the original."""
+        return await service.duplicate_project(project_id, title)
+
+    @server.tool()
+    @_tool_errors
+    async def delete_project(project_id: str) -> dict:
+        """Delete a saved project; exports already made from it stay. Returns the deleted project."""
+        return await service.delete_project(project_id)
+
     @server.tool(structured_output=False)
     @_tool_errors
     async def preview(project_id: str, mode: Literal["poster", "storyboard", "motion"] = "storyboard") -> list:
@@ -169,9 +182,35 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
 
     @server.tool()
     @_tool_errors
+    async def list_exports(ctx: Context) -> list[dict]:
+        """List past exports, newest first, like the app's Exports page. Each finished record includes
+        a download_url for its file."""
+        base = origin(ctx)
+        records = await service.list_exports()
+        for record in records:
+            if record.get("url"):
+                record["download_url"] = base + record["url"]
+        return records
+
+    @server.tool()
+    @_tool_errors
     async def cancel_export(export_id: str) -> dict:
         """Cancel a queued or running export."""
         return await service.cancel_export(export_id)
+
+    @server.tool()
+    @_tool_errors
+    async def retry_export(export_id: str) -> dict:
+        """Make a finished, failed or cancelled export again from its saved request. Returns the new
+        job; poll get_export."""
+        return await service.retry_export(export_id)
+
+    @server.tool()
+    @_tool_errors
+    async def remove_export(export_id: str, delete_file: bool = True) -> dict:
+        """Delete a finished, failed or cancelled export from the history. delete_file (the default)
+        also deletes its file; false keeps the file. Cancel a running export before removing it."""
+        return await service.remove_export(export_id, delete_file=delete_file)
 
     @server.tool()
     @_tool_errors
@@ -237,6 +276,13 @@ class RestBridge:
     async def update_project(self, project_id, **fields):
         return await self.request("PUT", "/projects/" + quote(project_id, safe=""), json=fields)
 
+    async def duplicate_project(self, project_id, title=None):
+        return await self.request("POST", "/projects/" + quote(project_id, safe="") + "/duplicate",
+                                  json={"title": title})
+
+    async def delete_project(self, project_id):
+        return await self.request("DELETE", "/projects/" + quote(project_id, safe=""))
+
     async def preview(self, template, params, settings, mode):
         return await self.request("POST", "/preview", json={"template": template, "params": params, "settings": settings, "mode": mode})
 
@@ -261,11 +307,23 @@ class RestBridge:
     async def start_export(self, template, params, settings, **fields):
         return await self.request("POST", "/exports", json={"template": template, "params": params, "settings": settings, **fields})
 
+    async def list_exports(self):
+        return await self.request("GET", "/exports")
+
     async def get_export(self, export_id):
         return await self.request("GET", "/exports/" + quote(export_id, safe=""))
 
     async def cancel_export(self, export_id):
         return await self.request("DELETE", "/exports/" + quote(export_id, safe=""))
+
+    async def retry_export(self, export_id):
+        return await self.request("POST", "/exports/" + quote(export_id, safe="") + "/retry")
+
+    async def remove_export(self, export_id, delete_file=True):
+        path = "/exports/" + quote(export_id, safe="")
+        if delete_file:
+            return await self.request("DELETE", path, params={"remove": True})
+        return await self.request("POST", path + "/forget")
 
     async def add_image(self, data):
         return await self.request("POST", "/images", json={"data": data})

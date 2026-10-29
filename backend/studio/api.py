@@ -134,6 +134,20 @@ async def delete_export(export_id: str, remove: bool = False):
     return await svc.cancel_export(export_id)
 
 
+@router.post("/exports/{export_id}/retry", status_code=202)
+@_errors
+async def post_export_retry(export_id: str):
+    """Queue a new export from the request saved on a finished record."""
+    return await get_service().retry_export(export_id)
+
+
+@router.post("/exports/{export_id}/forget")
+@_errors
+async def post_export_forget(export_id: str):
+    """Forget an export from the history and keep its file."""
+    return await get_service().remove_export(export_id, delete_file=False)
+
+
 @router.get("/host")
 @_errors
 async def get_host():
@@ -188,6 +202,13 @@ async def put_project(project_id: str, request: Request):
 @_errors
 async def delete_project(project_id: str):
     return await get_service().delete_project(project_id)
+
+
+@router.post("/projects/{project_id}/duplicate", status_code=201)
+@_errors
+async def post_project_duplicate(project_id: str, request: Request):
+    body = await _body(request, ("title",))
+    return await get_service().duplicate_project(project_id, body.get("title"))
 
 
 @router.post("/images", status_code=201)
