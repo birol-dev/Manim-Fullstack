@@ -110,7 +110,7 @@ it("shows a muted video or image thumbnail for finished files and keeps the icon
 
   const video = container.querySelector("video")!;
   expect(video).toBeInTheDocument();
-  expect(video).toHaveAttribute("src", "/media/studio/exports/weekend-sale-a900e4.mp4#t=0.5");
+  expect(video).toHaveAttribute("src", "/media/studio/exports/weekend-sale-a900e4.mp4#t=5.4");
   expect(video).toHaveAttribute("preload", "metadata");
   expect(video).toHaveAttribute("playsinline");
   expect((video as HTMLVideoElement).muted).toBe(true);
@@ -133,6 +133,35 @@ it("shows a muted video or image thumbnail for finished files and keeps the icon
   const fallbackRow = screen.getByText("Weekend sale").closest("li")!;
   expect(fallbackRow.querySelector("video")).toBeNull();
   expect(fallbackRow.querySelector(".studio-export-icon")).toBeInTheDocument();
+});
+
+it("seeks video thumbnails past the intro and clamps short or unknown lengths", () => {
+  const { container } = renderPage([
+    job({ id: "a", title: "Long sale", duration: 20, url: "/long.mp4" }),
+    job({ id: "b", title: "Short sale", duration: 0.6, url: "/short.mp4" }),
+    job({ id: "c", title: "Unknown length", duration: null, url: "/unknown.mp4" }),
+    job({ id: "d", title: "Barely there", duration: 0.2, url: "/tiny.mp4" }),
+  ]);
+  const sources = [...container.querySelectorAll("video")].map((video) => video.getAttribute("src"));
+  expect(sources).toEqual(["/long.mp4#t=12", "/short.mp4#t=0.5", "/unknown.mp4#t=1", "/tiny.mp4#t=0.5"]);
+});
+
+it("applies the representative frame once the video's metadata arrives", () => {
+  const { container } = renderPage([job()]);
+  const video = container.querySelector("video")!;
+  let currentTime = 0;
+  Object.defineProperty(video, "currentTime", { configurable: true, get: () => currentTime, set: (value: number) => { currentTime = value; } });
+  fireEvent.loadedMetadata(video);
+  expect(currentTime).toBe(5.4);
+});
+
+it("keeps Download labelled when a narrow row hides its text, and lets the meta wrap", () => {
+  renderPage([job()]);
+  const link = screen.getByRole("link", { name: "Download" });
+  expect(link).toHaveAttribute("aria-label", "Download");
+  expect(link).toHaveAttribute("title", "Download");
+  expect(link.querySelector(".studio-download-label")).toHaveTextContent("Download");
+  expect(document.querySelector(".studio-export-meta")).not.toHaveClass("truncate");
 });
 
 it("opens a finished file in a viewer sized to its shape and returns focus when it closes", async () => {

@@ -35,9 +35,9 @@ function DownloadLink({ job, size = "md", className, secondary = false }: { job:
   if (!job.url) return null;
   return (
     <Button asChild variant={secondary ? "secondary" : "primary"} size={size} className={className}>
-      <a href={apiUrl(job.url)} download={job.filename ?? true}>
+      <a href={apiUrl(job.url)} download={job.filename ?? true} aria-label="Download" title="Download">
         <Download />
-        Download
+        <span className="studio-download-label">Download</span>
       </a>
     </Button>
   );
@@ -378,6 +378,13 @@ function removeExportFile(id: string) {
 const VIDEO_THUMB_FORMATS = new Set<string>(["mp4", "webm"]);
 const IMAGE_THUMB_FORMATS = new Set<string>(["gif", "png"]);
 
+/** A frame past the intro: 60% through, kept clear of both ends. */
+function thumbTime(duration?: number | null): number {
+  if (duration == null || !Number.isFinite(duration) || duration <= 0) return 1;
+  const latest = Math.max(0.5, duration - 0.3);
+  return Math.round(Math.min(Math.max(duration * 0.6, 0.5), latest) * 100) / 100;
+}
+
 /** A small still of a finished file; anything the browser cannot show keeps the file icon. */
 function ExportThumb({ job, onOpen }: { job: ExportJob; onOpen?: (job: ExportJob) => void }) {
   const [failed, setFailed] = useState(false);
@@ -386,10 +393,23 @@ function ExportThumb({ job, onOpen }: { job: ExportJob; onOpen?: (job: ExportJob
   const video = preview && VIDEO_THUMB_FORMATS.has(job.format);
   const image = preview && IMAGE_THUMB_FORMATS.has(job.format);
   if (!video && !image) return <JobIcon job={job} />;
+  const seek = thumbTime(job.duration);
   return (
     <button type="button" className="studio-export-thumb" aria-label={`Open ${title}`} onClick={() => onOpen?.(job)} disabled={!onOpen}>
       {video
-        ? <video src={`${apiUrl(job.url!)}#t=0.5`} preload="metadata" playsInline muted aria-hidden tabIndex={-1} onError={() => setFailed(true)} />
+        ? <video
+            src={`${apiUrl(job.url!)}#t=${seek}`}
+            preload="metadata"
+            playsInline
+            muted
+            aria-hidden
+            tabIndex={-1}
+            onLoadedMetadata={(event) => {
+              const player = event.currentTarget;
+              if (Math.abs(player.currentTime - seek) > 0.05) player.currentTime = seek;
+            }}
+            onError={() => setFailed(true)}
+          />
         : <img src={apiUrl(job.url!)} alt="" aria-hidden loading="lazy" onError={() => setFailed(true)} />}
     </button>
   );
@@ -466,7 +486,7 @@ export function ExportRow({ job, onCancel, onView, onDeleted }: ExportRowProps) 
         {job.status === "done" && onView
           ? <button type="button" className="studio-export-title studio-export-title-button" onClick={() => onView(job)}>{title}</button>
           : <span className="studio-export-title truncate text-fg">{title}</span>}
-        <span className="studio-export-meta truncate">
+        <span className="studio-export-meta">
           {[formatLabel(job.format), qualityLabel(job.quality), job.status === "done" ? formatBytes(job.size) : exportStatusLabel(job), timeAgo(job.created)]
             .filter(Boolean)
             .join(" · ")}

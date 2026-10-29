@@ -120,7 +120,7 @@ function ProjectTiles({ projects, library, home = false }: { projects: ProjectSu
   </>;
 }
 
-const WELCOME_STEPS = ["Pick a template", "Change the words, colours and format", "Export a video"];
+const WELCOME_STEPS = ["Pick a template", "Change the words, colors and format", "Export a video"];
 
 /** A quiet three-step nudge for a library with nothing in it yet. */
 function WelcomeSteps() {
@@ -185,6 +185,7 @@ export function Gallery({ catalog, route, library, exports }: { catalog: Catalog
         <ProjectTiles projects={videos} library={library} />
       </section>}
       {cards.length > 0 && <section className="studio-gallery-section" aria-label="Templates">
+        {videos.length > 0 && <SectionHeading>Templates</SectionHeading>}
         <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
       </section>}
     </div>}

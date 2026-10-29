@@ -157,7 +157,7 @@ describe("gallery", () => {
     const steps = await screen.findByRole("list", { name: "How making a video works" });
     expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
     expect(within(steps).getByText("Pick a template")).toBeInTheDocument();
-    expect(within(steps).getByText("Change the words, colours and format")).toBeInTheDocument();
+    expect(within(steps).getByText("Change the words, colors and format")).toBeInTheDocument();
     expect(within(steps).getByText("Export a video")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Continue editing" })).not.toBeInTheDocument();
     view.unmount();
@@ -393,9 +393,12 @@ describe("gallery", () => {
     expect(card.querySelector(".studio-shimmer")).not.toBeInTheDocument();
 
     const search = screen.getByRole("searchbox", { name: "Search designs" });
+    expect(search).toHaveAttribute("placeholder", "Search");
+    expect(search).toHaveAttribute("title", "Search videos and templates");
     await user.type(search, "revenue");
     expect(screen.getByRole("link", { name: /Sales chart/ })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Classroom timer/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Templates" })).queryByRole("heading", { name: "Templates" })).not.toBeInTheDocument();
     await user.clear(search);
     await user.type(search, "classroom");
     // Template tags count too: both countdown cards match.
@@ -427,6 +430,9 @@ describe("gallery", () => {
     const templates = screen.getByRole("region", { name: "Templates" });
     expect(within(templates).getByRole("link", { name: /Sales chart/ })).toBeInTheDocument();
     expect(videos.compareDocumentPosition(templates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const videosHeading = within(videos).getByRole("heading", { level: 2, name: "Your videos" });
+    const templatesHeading = within(templates).getByRole("heading", { level: 2, name: "Templates" });
+    expect(videosHeading.closest("section")?.parentElement).toBe(templatesHeading.closest("section")?.parentElement);
 
     await user.clear(search);
     await user.type(search, "weekend");
