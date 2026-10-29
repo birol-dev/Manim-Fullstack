@@ -408,6 +408,14 @@ def test_quick_video_starts_from_a_preset_with_overrides(tmp_path):
 
         with pytest.raises(ToolError, match="classroom-timer"):
             run(server.call_tool("quick_video", {"template": "countdown", "preset": "nope"}))
+
+        # Projects may hold input a preview refuses: the error names the saved project.
+        before = {project["id"] for project in run(service.list_projects())}
+        with pytest.raises(ToolError, match=r"Saved project \w+ but its storyboard failed") as failed:
+            run(server.call_tool("quick_video", {"template": "countdown", "params": {"title": "x" * 200}}))
+        saved = {project["id"] for project in run(service.list_projects())} - before
+        assert len(saved) == 1 and next(iter(saved)) in str(failed.value)
+        assert "params.title" in str(failed.value)
     finally:
         service.shutdown_sync()
 

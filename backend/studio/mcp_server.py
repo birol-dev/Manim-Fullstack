@@ -137,8 +137,15 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
         merged_settings = {**(card.get("settings") or {}), **(settings or {})}
         project = await service.create_project(template, merged_params, merged_settings,
                                                title or card.get("title") or None)
-        storyboard = await service.preview(project["template"], project["params"], project["settings"],
-                                           "storyboard")
+        try:
+            storyboard = await service.preview(project["template"], project["params"], project["settings"],
+                                               "storyboard")
+        except (StudioError, TemplateError, ToolError) as exc:
+            # The project is saved: name it, so the next step fixes it instead of making a duplicate.
+            detail = json.dumps({"detail": str(exc), "errors": exc.errors}) if isinstance(exc, TemplateError) else str(exc)
+            raise ToolError(f"Saved project {project['id']} but its storyboard failed: {detail}. "
+                            f"Fix it with get_project + update_project (do not call quick_video again), "
+                            f"then preview it.") from None
         path = storyboard.pop("path", None)
         image = Image(path=path) if path else Image(data=await service.image_bytes(storyboard["url"]),
                                                     format="png")
