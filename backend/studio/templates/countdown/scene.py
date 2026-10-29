@@ -91,6 +91,7 @@ class Template(StudioScene):
                          sample_values=sample).move_to(center)
         warn_digits = Counter(min(seconds, warn_at), size=size, font=theme.font, weight="BOLD", color=warn,
                               formatter=clock, sample_values=sample).move_to(center) if warn_at else None
+        self.keep_particles_clear(meter, [*self._confetti_foreground, digits, warn_digits])
 
         self.add(track)
         intro += [m.appear(track, "fade"), FadeIn(arc, run_time=m.enter), m.appear(digits, "pop")]

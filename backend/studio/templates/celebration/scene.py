@@ -18,6 +18,7 @@ from manim import (
     DashedVMobject,
     FadeIn,
     LaggedStart,
+    Rectangle,
     Star,
     Succession,
     ValueTracker,
@@ -28,6 +29,7 @@ from manim import (
 )
 
 from studio.kit import Counter, StudioScene, ease_out, fit_text, fonts, measure, media, overshoot, shapes, size_for_height
+from studio.kit.layout import Region
 
 from . import fx
 from .schema import META, OCCASIONS, Params
@@ -313,20 +315,44 @@ class Template(StudioScene):
         group.add(blob_a, blob_b)
         for radius, opacity in ((hero.D * 0.92, 0.16), (hero.D * 1.3, 0.1)):
             ring = Circle(radius=radius).set_fill(opacity=0).set_stroke(self.accent, width=2.5, opacity=opacity)
-            group.add(ring.move_to(hero.center))
+            ring.move_to(hero.center)
+            self.keep_particles_clear(ring, self._particle_foreground)
+            group.add(ring)
         group.set_z_index(-8)
         return group
 
     def _sparkles(self, hero, t_birth, step):
-        lay = self.layout
+        box = self._decoration_box
         D, c = hero.D, hero.center
         spots = [(-0.98, 0.12, 0.085, 1), (0.95, -0.05, 0.07, 2), (0.78, 0.66, 0.05, 4), (-0.74, -0.58, 0.055, 3),
                  (-0.52, 0.8, 0.04, 0)]
         placed = []
         for i, (dx, dy, rad, ci) in enumerate(spots):
-            x = min(max(c[0] + dx * D, lay.left + 0.3), lay.right - 0.3)
-            y = min(max(c[1] + dy * D, lay.bottom + 0.3), lay.top - 0.3)
-            placed.append((np.array([x, y, 0.0]), max(D * rad, 0.14), self.accents[ci % len(self.accents)],
+            radius = max(D * rad, 0.14)
+            # Reserve the maximum entrance overshoot, not just the settled star.
+            extent = radius * 1.2 + 0.10
+            desired = c + np.array([dx * D, dy * D, 0])
+            candidates = [desired] + [c + np.array([math.cos(a), math.sin(a), 0]) * D * distance
+                                      for distance in (0.72, 0.86, 1.02)
+                                      for a in np.linspace(0, math.tau, 32, endpoint=False)]
+            candidates = [np.array([np.clip(pos[0], box.left + extent, box.right - extent),
+                                     np.clip(pos[1], box.bottom + extent, box.top - extent), 0])
+                          for pos in candidates]
+            candidates.sort(key=lambda pos: np.linalg.norm(pos - desired))
+
+            def available(pos):
+                for target in self._particle_foreground:
+                    low, high = target.get_corner(DOWN + LEFT)[:2], target.get_corner(UP - LEFT)[:2]
+                    if isinstance(target, Circle):
+                        delta = np.maximum(np.abs(pos[:2] - target.get_center()[:2]) - extent, 0)
+                        if np.sum((delta / np.maximum((high - low) / 2, 1e-6)) ** 2) <= 1:
+                            return False
+                    elif np.all(pos[:2] + extent >= low) and np.all(pos[:2] - extent <= high):
+                        return False
+                return all(np.linalg.norm(pos - other[0]) > extent + other[1] * 1.2 + 0.1 for other in placed)
+
+            pos = next((pos for pos in candidates if available(pos)), candidates[0])
+            placed.append((pos, radius, self.accents[ci % len(self.accents)],
                            t_birth + i * step, i * 1.7))
 
         def factory(t):
@@ -342,7 +368,7 @@ class Template(StudioScene):
 
         live = fx.Live(self.clock, factory)
         live.set_z_index(3)
-        return live
+        return self.keep_particles_clear(live, self._particle_foreground)
 
     def _ripples(self, hero, t0, until):
         D, c = hero.D, hero.center
@@ -365,7 +391,7 @@ class Template(StudioScene):
 
         live = fx.Live(self.clock, factory)
         live.set_z_index(-6)
-        return live
+        return self.keep_particles_clear(live, self._particle_foreground)
 
     # ------------------------------------------------------------------ animation
     @staticmethod
@@ -414,6 +440,20 @@ class Template(StudioScene):
                                      for line in group.lines]
         self._particle_foreground += [mob for mob in (t.counter, hero.icon, hero.badge,
                                                        getattr(t, "wave", None)) if mob is not None]
+        # The hero's circular disc/border encloses the icon/photo. Using its
+        # curved outline keeps surrounding rings intact, including at corners.
+        self._particle_foreground += hero.core[:1]
+        top = max(row.mob.get_top()[1] for row in parts.rows)
+        bottom = min(row.mob.get_bottom()[1] for row in parts.rows)
+        text_block = Rectangle(width=parts.text_box.width, height=top - bottom).move_to(
+            [parts.text_box.center[0], (top + bottom) / 2, 0])
+        self._decoration_box = (parts.hero_box if parts.land else
+                                Region(lay.left, lay.right, lay.top, top + 0.20))
+        if hasattr(t, "wave"):
+            self.keep_particles_clear(t.wave, self._particle_foreground, padding=0.02)
+        self._particle_foreground.append(text_block)
+        for decoration in (hero.halo, hero.ring, hero.orbit):
+            self.keep_particles_clear(decoration, self._particle_foreground)
         has_message = t.message is not None or t.signoff is not None
 
         # Time scale: fit the whole entrance into ~72% of the requested length.

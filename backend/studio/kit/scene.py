@@ -28,6 +28,7 @@ from ..themes import theme_tokens
 from . import fonts, media, runtime, shapes
 from .layout import Layout
 from .motion import Motion
+from .fx import ClearanceCamera
 
 MAX_STORYBOARD_FRAMES = 12
 
@@ -62,6 +63,9 @@ class Theme:
 class StudioScene(Scene):
     Params = None  # the template's Params model; set by each template's scene.py
     META = None  # the template's TemplateMeta
+
+    def __init__(self, renderer=None, camera_class=ClearanceCamera, **kwargs):
+        super().__init__(renderer=renderer, camera_class=camera_class, **kwargs)
 
     # -- setup -----------------------------------------------------------------
     def setup(self):
@@ -173,6 +177,10 @@ class StudioScene(Scene):
         # of content that should cover it. This applies to previews AND exports.
         moving, _ = super().get_moving_and_static_mobjects(animations)
         moving_ids = {id(m) for m in moving}
+        # A static decoration's cutout still changes when foreground animates.
+        # Keep these roots live and include children rebuilt by Live factories.
+        moving_ids.update(id(m) for clearance in self._particle_clearances
+                          for m in clearance.particles.get_family())
         roots = list_update(self.mobjects, self.foreground_mobjects)
         families = [{id(m) for m in root.get_family()} for root in roots]
         active = {i for i, family in enumerate(families) if family & moving_ids}
