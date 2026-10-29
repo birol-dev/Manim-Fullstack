@@ -70,8 +70,15 @@
    (a 1366x768 laptop at 125% is about 1093x614), so the split has to hold from 900px; below
    that the stacked phone layout stays. These rules win on specificity, not import order. */
 @media (min-width: 900px) {
+  /* The split owns the window: neither the editor nor its body may grow the page. The editor is
+     positioned so any absolutely positioned descendant it clips is contained by it, not #root. */
+  :root[data-surface="studio"] .studio-editor { position: relative; overflow: hidden; }
   :root[data-surface="studio"] .studio-editor .studio-editor-body { overflow: hidden; flex-direction: row; }
-  /* The preview fills the height left under the header; the form column scrolls on its own. */
+  /* The form column scrolls on its own at every split width, so it is the containing block for
+     the form's absolutely positioned sr-only inputs. Without this they resolve against #root,
+     below the scroll area, and push the page taller than the window. */
+  :root[data-surface="studio"] .studio-editor .studio-editor-sidebar { position: relative; overflow-y: auto; }
+  /* The preview fills the height left under the header. */
   :root[data-surface="studio"] .studio-editor .studio-editor-preview { order: 0; flex: 1 1 0; height: auto; min-width: 0; min-height: 0; }
   :root[data-surface="studio"] .studio-editor .studio-preview-panel { min-height: 0; }
 }
@@ -81,12 +88,12 @@
    full name stays in the tooltip and in the (visually hidden) label, so its accessible name
    is unchanged. */
 @media (min-width: 900px) and (max-width: 1199px) {
-  :root[data-surface="studio"] .studio-editor { overflow: hidden; }
   :root[data-surface="studio"] .studio-editor .studio-editor-header { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; padding: 8px 14px; }
   :root[data-surface="studio"] .studio-editor .studio-editor-identity { grid-column: auto; gap: 8px; }
   :root[data-surface="studio"] .studio-editor .studio-title-group { flex-wrap: nowrap; gap: 0 8px; }
-  :root[data-surface="studio"] .studio-editor .studio-video-title { max-width: 152px; }
-  :root[data-surface="studio"] .studio-editor .studio-editor-sidebar { width: 348px; overflow-y: auto; border-top: 0; border-right: 1px solid var(--color-line); }
+  /* The cap cuts long titles; the ellipsis marks the cut and the full title stays in the tooltip. */
+  :root[data-surface="studio"] .studio-editor .studio-video-title { max-width: 152px; overflow: hidden; text-overflow: ellipsis; }
+  :root[data-surface="studio"] .studio-editor .studio-editor-sidebar { width: 348px; border-top: 0; border-right: 1px solid var(--color-line); }
   :root[data-surface="studio"] .studio-editor .studio-editor-panel { padding-inline: 20px; }
   :root[data-surface="studio"] .studio-editor .studio-editor-preview { padding: 14px 18px 18px; }
   :root[data-surface="studio"] .studio-editor .studio-preview-panel { gap: 14px; }

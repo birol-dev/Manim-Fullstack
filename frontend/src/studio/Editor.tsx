@@ -408,6 +408,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
               maxLength={80}
               aria-label="Video title"
               placeholder="Untitled video"
+              title={title || undefined}
               onChange={(event) => { if (change({ title: event.target.value })) markTouched(); }}
               className="studio-video-title"
               style={{ width: `${Math.max(8, Math.min(24, [...title].length + 1))}ch` }}

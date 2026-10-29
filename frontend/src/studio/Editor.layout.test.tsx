@@ -70,19 +70,27 @@ it("fits the header on one row and keeps every format's full name available", ()
 
 it("splits from 900px with a narrow form column, leaving the height to the preview", () => {
   const desktop = mediaBlock(editorCss, "(min-width: 900px)");
+  // Nothing scrolls the page: the editor clips and only the form column scrolls. The editor is
+  // positioned so absolutely positioned content is contained by the clip instead of #root.
+  expect(desktop).toMatch(/\.studio-editor\s*\{[^}]*position:\s*relative/);
+  expect(desktop).toMatch(/\.studio-editor\s*\{[^}]*overflow:\s*hidden/);
   expect(desktop).toMatch(/\.studio-editor-body\s*\{[^}]*flex-direction:\s*row/);
   expect(desktop).toMatch(/\.studio-editor-body\s*\{[^}]*overflow:\s*hidden/);
+  // The scrolling form column is the containing block for the form's absolutely positioned
+  // sr-only inputs; otherwise they anchor to #root and grow the page past the window.
+  expect(desktop).toMatch(/\.studio-editor-sidebar\s*\{[^}]*position:\s*relative/);
+  expect(desktop).toMatch(/\.studio-editor-sidebar\s*\{[^}]*overflow-y:\s*auto/);
   expect(desktop).toMatch(/\.studio-editor-preview\s*\{[^}]*flex:\s*1 1 0/);
   expect(desktop).toMatch(/\.studio-editor-preview\s*\{[^}]*height:\s*auto/);
   expect(desktop).toMatch(/\.studio-editor-preview\s*\{[^}]*min-height:\s*0/);
 
   const laptop = mediaBlock(editorCss, "(min-width: 900px) and (max-width: 1199px)");
-  // Nothing scrolls the page: the editor clips and only the form column scrolls.
-  expect(laptop).toMatch(/\.studio-editor\s*\{[^}]*overflow:\s*hidden/);
   const width = Number(/\.studio-editor-sidebar\s*\{[^}]*width:\s*(\d+)px/.exec(laptop)?.[1]);
   expect(width).toBeGreaterThanOrEqual(340);
   expect(width).toBeLessThanOrEqual(360);
-  expect(laptop).toMatch(/\.studio-editor-sidebar\s*\{[^}]*overflow-y:\s*auto/);
+  // A capped title ends in an ellipsis instead of a cut glyph.
+  expect(laptop).toMatch(/\.studio-video-title\s*\{[^}]*max-width:\s*152px/);
+  expect(laptop).toMatch(/\.studio-video-title\s*\{[^}]*text-overflow:\s*ellipsis/);
   expect(laptop).toMatch(/\.studio-editor-header\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto auto/);
   expect(laptop).toMatch(/\.studio-editor-identity\s*\{[^}]*grid-column:\s*auto/);
   expect(laptop).toMatch(/\.studio-title-group\s*\{[^}]*flex-wrap:\s*nowrap/);
@@ -91,4 +99,11 @@ it("splits from 900px with a narrow form column, leaving the height to the previ
 
   // The phone layout below 900 stays the one in studio.css: this file never stacks the editor.
   expect(editorCss).not.toMatch(/\.studio-editor-body\s*\{[^}]*flex-direction:\s*column/);
+});
+
+it("keeps the full video title in the input's tooltip when the column cuts it", () => {
+  open();
+  const title = screen.getByRole("textbox", { name: "Video title" });
+  expect(title).toHaveValue("Countdown timer");
+  expect(title).toHaveAttribute("title", "Countdown timer");
 });
