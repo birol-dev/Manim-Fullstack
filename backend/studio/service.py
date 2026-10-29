@@ -47,7 +47,7 @@ from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
 from .registry import TemplateError
 from .motion import MotionPreviews, LONG_SIDE, FPS, MAX_DURATION
 from .schema import CATEGORY_TITLES
-from .storage import (ICONS_DIR, KIT_ROOTS, STUDIO_DIR, TEMP_MARK, png_size, prune_previews, slugify,
+from .storage import (ICONS_DIR, KIT_ROOTS, STUDIO_DIR, TEMP_MARK, ImageCropStore, png_size, prune_previews, slugify,
                       template_dir, tree_fingerprint, utc_now)
 from .themes import THEMES, public_themes
 from .worker import PreviewWorker, WorkerCrashed, WorkerReplyError, WorkerStartError, WorkerTimeout
@@ -757,6 +757,35 @@ class StudioService:
 
     async def add_image(self, data) -> dict:
         return await asyncio.to_thread(self.add_image_sync, data)
+
+    def image_info_sync(self, name: str) -> dict:
+        try:
+            crops = ImageCropStore(self.workspace_dir, self.assets_dir)
+            path = crops.image_path(name)
+        except ValueError as exc:
+            raise _field_error("name", str(exc)) from None
+        if not os.path.isfile(path):
+            raise NotFoundError("Image not found.")
+        return {"name": name, "crop": crops.read(name)}
+
+    async def image_info(self, name: str) -> dict:
+        return await asyncio.to_thread(self.image_info_sync, name)
+
+    def save_image_crop_sync(self, name: str, crop: dict) -> dict:
+        try:
+            recipe = ImageCropStore(self.workspace_dir, self.assets_dir).write(name, crop)
+        except FileNotFoundError:
+            raise NotFoundError("The crop or its original image is missing.") from None
+        except FileExistsError as exc:
+            conflict = StudioError(str(exc))
+            conflict.status = 409
+            raise conflict from None
+        except ValueError as exc:
+            raise _field_error("crop", str(exc)) from None
+        return {"name": name, "crop": recipe}
+
+    async def save_image_crop(self, name: str, crop: dict) -> dict:
+        return await asyncio.to_thread(self.save_image_crop_sync, name, crop)
 
     # -- icons ---------------------------------------------------------------------------------
     def icon_names_sync(self) -> list:

@@ -9,12 +9,153 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import os
 import re
 import time
 import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
+
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp")
+
+
+class ImageCropStore:
+    """Immutable per-image crop recipes, outside the public assets folder.
+
+    Content hashes discard stale recipes after an asset is replaced. Missing or
+    damaged metadata is optional: the image itself remains usable. No crop recipe
+    changes a template parameter or an MCP image response.
+    """
+
+    def __init__(self, workspace: str, assets: str):
+        from workspace_paths import safe_join
+        self.assets = assets
+        self.directory = safe_join(workspace, "studio", "image-crops")
+
+    def image_path(self, name: str) -> str:
+        from workspace_paths import safe_basename, safe_join
+        if not isinstance(name, str):
+            raise ValueError("Use an image file name from this workspace.")
+        name = safe_basename(name)
+        if not name.lower().endswith(IMAGE_SUFFIXES) or name.startswith("."):
+            raise ValueError("Use an image file name from this workspace.")
+        return safe_join(self.assets, name)
+
+    def record_path(self, name: str) -> str:
+        from workspace_paths import fold_filename, safe_join
+        self.image_path(name)
+        key = hashlib.sha256(fold_filename(name).encode("utf-8")).hexdigest()
+        return safe_join(self.directory, key + ".json")
+
+    @staticmethod
+    def recipe(data: dict) -> dict:
+        if not isinstance(data, dict) or set(data) != {"source", "position", "ratio", "shape"}:
+            raise ValueError("A crop needs a source image, position, ratio and shape.")
+        position = data.get("position")
+        if not isinstance(position, dict) or set(position) != {"x", "y", "zoom"}:
+            raise ValueError("Use a photo position with x, y and zoom.")
+        for value, low, high in [(position["x"], -1, 1), (position["y"], -1, 1),
+                                 (position["zoom"], 1, 4), (data["ratio"], .0001, 10000)]:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+                raise ValueError("Use a valid crop position, 1 to 4 times zoom and a positive ratio.")
+        shape = data["shape"]
+        if not isinstance(shape, str) or (shape not in ("circle", "free") and not re.fullmatch(r"[1-9][0-9]{0,3}:[1-9][0-9]{0,3}", shape)):
+            raise ValueError("Use a circle, free crop, or a positive aspect ratio.")
+        fixed = 1 if shape == "circle" else float(shape.split(":")[0]) / float(shape.split(":")[1]) if ":" in shape else None
+        if fixed is not None and not math.isclose(data["ratio"], fixed, rel_tol=1e-9):
+            raise ValueError("The crop ratio must match the photo slot.")
+        return {"source": data["source"], "position": dict(position), "ratio": data["ratio"], "shape": shape}
+
+    @staticmethod
+    def _digest(path: str) -> str:
+        with open(path, "rb") as image:
+            return hashlib.file_digest(image, "sha256").hexdigest()
+
+    def read(self, name: str) -> Optional[dict]:
+        """Return a current recipe, or None if its record/source is missing or unusable.
+
+        The derived image is independent: explicit deletion of its original must
+        leave it usable, with Adjust starting afresh from that derived image.
+        """
+        from workspace_paths import fold_filename
+        try:
+            path = self.record_path(name)
+            if os.path.islink(path):
+                return None
+            with open(path, "r", encoding="utf-8") as record:
+                data = json.loads(record.read(16385))
+            if not isinstance(data, dict) or set(data) != {"version", "name", "crop", "source_hash", "image_hash"}:
+                return None
+            if type(data["version"]) is not int or data["version"] != 1 or not isinstance(data["name"], str) or fold_filename(data["name"]) != fold_filename(name):
+                return None
+            crop = self.recipe(data["crop"])
+            source = self.image_path(crop["source"])
+            if fold_filename(crop["source"]) == fold_filename(name):
+                return None
+            if self._digest(source) != data["source_hash"] or self._digest(self.image_path(name)) != data["image_hash"]:
+                return None
+            return crop
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            return None
+
+    def write(self, name: str, data: dict) -> dict:
+        import file_ops
+        from workspace_paths import fold_filename
+        crop = self.recipe(data)
+        path, source = self.image_path(name), self.image_path(crop["source"])
+        if fold_filename(name) == fold_filename(crop["source"]):
+            raise ValueError("A crop must be stored as a new image.")
+        record = self.record_path(name)
+        # Shared with asset deletion/overwrite: a recipe cannot be committed
+        # after its source disappears, and a delete cannot race this write.
+        with file_ops.locked(path, source):
+            if not os.path.isfile(path) or not os.path.isfile(source):
+                raise FileNotFoundError("The crop or its original image is missing.")
+            if self.read(crop["source"]) is not None:
+                raise ValueError("Adjust the original image rather than a previous crop.")
+            if self.referring_crops(name):
+                raise ValueError("This image is an original used by another crop. Upload a new crop first.")
+            existing = self.read(name)
+            if existing is not None:
+                if existing == crop:
+                    return existing
+                raise FileExistsError("This image already has a different crop recipe. Upload a new crop first.")
+            data = {"version": 1, "name": name, "crop": crop,
+                    "source_hash": self._digest(source), "image_hash": self._digest(path)}
+            os.makedirs(self.directory, exist_ok=True)
+            file_ops.atomic_write(record, json.dumps(data, allow_nan=False).encode("utf-8"))
+        return crop
+
+    def referring_crops(self, source_name: str) -> list[str]:
+        """Live crops that need this original. Bad records cannot pin arbitrary paths."""
+        from workspace_paths import fold_filename, safe_join
+        self.image_path(source_name)
+        try:
+            records = list(os.scandir(self.directory))
+        except FileNotFoundError:
+            return []
+        found = []
+        for entry in records:
+            if not re.fullmatch(r"[0-9a-f]{64}\.json", entry.name) or entry.is_symlink():
+                continue
+            try:
+                with open(safe_join(self.directory, entry.name), "r", encoding="utf-8") as record:
+                    data = json.loads(record.read(16385))
+                name = data.get("name") if isinstance(data, dict) else None
+                if not isinstance(name, str) or self.record_path(name) != entry.path:
+                    continue
+                raw_crop = data.get("crop")
+                raw_source = raw_crop.get("source") if isinstance(raw_crop, dict) else None
+                if not isinstance(raw_source, str) or fold_filename(raw_source) != fold_filename(source_name):
+                    continue
+                crop = self.read(name)
+                if crop and fold_filename(crop["source"]) == fold_filename(source_name):
+                    found.append(name)
+            except (OSError, ValueError, TypeError, RecursionError):
+                continue
+        return found
 
 STUDIO_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(STUDIO_DIR, "templates")

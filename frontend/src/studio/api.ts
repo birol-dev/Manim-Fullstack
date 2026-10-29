@@ -3,6 +3,8 @@ import type { AssetFile } from "@/lib/types";
 
 import type {
   Catalog,
+  ImageCropRecipe,
+  ImageInfo,
   MotionPreview,
   ExportFormat,
   ExportJob,
@@ -134,6 +136,15 @@ export function listIcons(): Promise<string[]> {
 
 export const iconUrl = (name: string) => apiUrl(`/api/studio/icons/${encodeURIComponent(name)}.svg`);
 export const assetUrl = (name: string) => apiUrl(`/assets/${encodeURIComponent(name)}`);
+
+/** Crop recipes live with the workspace, so they survive reloads and project changes. */
+export function getImageInfo(name: string): Promise<ImageInfo> {
+  return requestJson(`/api/studio/images/${encodeURIComponent(name)}`, { cache: "no-store" });
+}
+
+export function saveImageCrop(name: string, crop: ImageCropRecipe): Promise<ImageInfo> {
+  return postJson(`/api/studio/images/${encodeURIComponent(name)}/crop`, crop);
+}
 
 export const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"];
 export const MAX_IMAGE_BYTES = 50 * 1024 * 1024;

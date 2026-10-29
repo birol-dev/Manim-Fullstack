@@ -174,6 +174,20 @@ async def get_icons():
     return await get_service().icon_names()
 
 
+@router.get("/images/{name}")
+@_errors
+async def get_image(name: str):
+    """Optional crop provenance; image field values remain ordinary asset names."""
+    return await get_service().image_info(name)
+
+
+@router.post("/images/{name}/crop")
+@_errors
+async def post_image_crop(name: str, request: Request):
+    body = await _body(request, ("source", "position", "ratio", "shape"))
+    return await get_service().save_image_crop(name, body)
+
+
 @router.get("/icons/{name}.svg")
 @_errors
 async def get_icon(name: str):

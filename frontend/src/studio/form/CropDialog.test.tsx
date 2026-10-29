@@ -50,10 +50,26 @@ it("shows the whole photo in the stage with the mask as a hole over it", () => {
   expect(photo).toHaveClass("studio-crop-photo");
   expect(mask).toHaveClass("studio-crop-mask");
   expect(mask).toHaveAttribute("data-circle", "true");
+  expect(mask).toHaveFocus();
   expect(frame).toHaveStyle({ aspectRatio: "1.5" });
   expect(parseFloat(mask.style.left)).toBeCloseTo(16.67, 1);
   expect(parseFloat(mask.style.width)).toBeCloseTo(66.67, 1);
   expect(parseFloat(mask.style.height)).toBeCloseTo(100, 5);
+});
+
+it("focuses the stage after loading so arrow keys work immediately and Escape closes", async () => {
+  const user = userEvent.setup();
+  const close = vi.fn();
+  const confirm = vi.fn().mockResolvedValue(undefined);
+  render(<CropDialog name="original.jpg" shape="circle" onClose={close} onConfirm={confirm} />);
+  loadPhoto();
+  mockCanvas();
+  expect(screen.getByRole("group", { name: "Photo position" })).toHaveFocus();
+  await user.keyboard("{ArrowRight}{Shift>}{ArrowUp}{/Shift}");
+  await user.click(screen.getByRole("button", { name: "Use photo" }));
+  expect(confirm.mock.calls[0][1].position).toEqual({ x: -.02, y: .1, zoom: 1 });
+  await user.keyboard("{Escape}");
+  expect(close).toHaveBeenCalledOnce();
 });
 
 it("keeps drag coordinates after pointerup and clamps the photo to the mask", async () => {

@@ -6,21 +6,25 @@ import { assetUrl, friendlyError } from "../api";
 import { Spinner } from "../components";
 import { clamp } from "../color";
 import { cropGeometry, cropPhoto, cropRatio, RESET_CROP } from "./crop";
+import type { ImageCropRecipe } from "../types";
 import "../editor.css";
 
 interface CropDialogProps {
   name: string;
   shape?: string;
+  initialCrop?: ImageCropRecipe;
   onClose: () => void;
-  onConfirm: (file: File) => Promise<void>;
+  onConfirm: (file: File, crop: ImageCropRecipe) => Promise<void>;
 }
 
-export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps) {
+export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: CropDialogProps) {
   const image = useRef<HTMLImageElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const initialFocus = useRef(false);
   const helpId = useId();
   const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
-  const [position, setPosition] = useState(RESET_CROP);
-  const [freeRatio, setFreeRatio] = useState<number | null>(null);
+  const [position, setPosition] = useState(() => initialCrop?.position ?? RESET_CROP);
+  const [freeRatio, setFreeRatio] = useState<number | null>(() => !shape || shape === "free" ? initialCrop?.ratio ?? null : null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -76,7 +80,7 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
     setProblem(null);
     try {
       const file = await cropPhoto(image.current, shape, ratio, position, name);
-      if (live.current) await onConfirm(file);
+      if (live.current) await onConfirm(file, { source: name, position: { ...position }, ratio, shape: shape ?? "free" });
     } catch (error) {
       if (live.current) setProblem(error instanceof DOMException && error.name === "SecurityError"
         ? "This picture couldn't be cropped. Try downloading and uploading it again."
@@ -88,6 +92,10 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
 
   return <Dialog open onOpenChange={(open) => { if (!open) close(); }}>
     <DialogContent className="studio-crop-dialog" hideClose={busy}
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        stage.current?.focus();
+      }}
       onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }}
       onPointerDownOutside={(event) => { if (busy) event.preventDefault(); }}>
       <DialogHeader>
@@ -106,7 +114,10 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
             }} onError={() => setLoadFailed(true)}
             style={dimensions ? undefined : { visibility: "hidden" }} />
           {dimensions && rect && (
-            <div className="studio-crop-mask" data-circle={shape === "circle" || undefined}
+            <div ref={(node) => {
+              stage.current = node;
+              if (node && !initialFocus.current) { initialFocus.current = true; node.focus(); }
+            }} className="studio-crop-mask" data-circle={shape === "circle" || undefined}
               style={{
                 left: `${rect.x / dimensions.width * 100}%`, top: `${rect.y / dimensions.height * 100}%`,
                 width: `${rect.width / dimensions.width * 100}%`, height: `${rect.height / dimensions.height * 100}%`,
@@ -133,7 +144,7 @@ export function CropDialog({ name, shape, onClose, onConfirm }: CropDialogProps)
           onChange={(event) => setPosition((previous) => ({ ...previous, zoom: Number(event.target.value) }))} />
       </label>
       {loadFailed && <p role="alert" className="studio-crop-error">Couldn't open this picture. <button type="button" onClick={() => {
-        setDimensions(null); setLoadFailed(false); setLoadVersion((version) => version + 1);
+        initialFocus.current = false; setDimensions(null); setLoadFailed(false); setLoadVersion((version) => version + 1);
       }}>Try again</button></p>}
       {problem && <p role="alert" className="studio-crop-error">{problem}</p>}
       <DialogFooter>

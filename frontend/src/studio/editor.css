@@ -46,7 +46,7 @@
 .studio-crop-mask:active { cursor: grabbing; }
 .studio-crop-mask[aria-disabled="true"] { cursor: default; }
 .studio-crop-mask[data-circle] { border-radius: 50%; }
-.studio-crop-mask:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+.studio-crop-mask:focus { outline: 2px solid var(--color-accent); outline-offset: 3px; }
 :root[data-surface="studio"][data-theme="dark"] .studio-crop-mask { --studio-crop-scrim: rgb(0 0 0 / .65); }
 @media (prefers-color-scheme: dark) {
   :root[data-surface="studio"]:not([data-theme]) .studio-crop-mask { --studio-crop-scrim: rgb(0 0 0 / .65); }

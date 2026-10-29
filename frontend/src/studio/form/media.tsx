@@ -7,9 +7,10 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import type { AssetFile } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { assetUrl, friendlyError, listIcons, listImages, uploadImage, validateImage } from "../api";
+import { assetUrl, friendlyError, getImageInfo, listIcons, listImages, saveImageCrop, uploadImage, validateImage } from "../api";
 import { inputClass, Spinner, StudioIcon } from "../components";
 import { iconLabel } from "../options";
+import type { ImageCropRecipe } from "../types";
 import { CropDialog } from "./CropDialog";
 import "../editor.css";
 import type { WidgetProps } from "./fields";
@@ -44,7 +45,10 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
   const name = typeof value === "string" && value ? value : null;
   const [busy, setBusy] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [cropName, setCropName] = useState<string | null>(null);
+  const [crop, setCrop] = useState<{ name: string; initial?: ImageCropRecipe } | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [retryCrop, setRetryCrop] = useState<string | null>(null);
+  const working = busy || opening;
   const [retryFile, setRetryFile] = useState<File | null>(null);
   const operation = useRef(0);
   useEffect(() => () => { operation.current += 1; }, []);
@@ -54,7 +58,8 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
   const fileInput = useRef<HTMLInputElement>(null);
 
   const upload = async (file: File | undefined) => {
-    if (!file || busy) return;
+    if (!file || working) return;
+    setRetryCrop(null);
     setProblem(null);
     setFileName(file.name);
     const validation = validateImage(file);
@@ -65,7 +70,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
     try {
       const uploaded = await uploadImage(file);
       if (operation.current !== current) return;
-      setCropName(uploaded);
+      setCrop({ name: uploaded });
       setRetryFile(null);
     } catch (error) {
       if (operation.current === current) setProblem(friendlyError(error, "Couldn't upload that picture."));
@@ -74,20 +79,35 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
     }
   };
 
+  const adjust = async (imageName: string) => {
+    if (working) return;
+    const current = ++operation.current;
+    setOpening(true); setProblem(null); setRetryFile(null); setRetryCrop(null); setFileName(imageName);
+    try {
+      const info = await getImageInfo(imageName);
+      if (operation.current === current) setCrop({ name: info.crop?.source ?? imageName, initial: info.crop ?? undefined });
+    } catch (error) {
+      if (operation.current === current) {
+        setProblem(friendlyError(error, "Couldn't open photo adjustments."));
+        setRetryCrop(imageName);
+      }
+    } finally { if (operation.current === current) setOpening(false); }
+  };
+
   const onDrop = (event: DragEvent) => {
     event.preventDefault();
     setDragging(false);
-    if (!busy) void upload(event.dataTransfer.files?.[0]);
+    if (!working) void upload(event.dataTransfer.files?.[0]);
   };
 
   return (
     <div className="flex flex-col gap-1.5">
       <div
-        aria-busy={busy}
+        aria-busy={working}
         data-dragging={dragging || undefined}
         onDragOver={(event) => {
           event.preventDefault();
-          if (!busy) setDragging(true);
+          if (!working) setDragging(true);
         }}
         onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
         onDrop={onDrop}
@@ -100,21 +120,21 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
         <Thumb name={name} shape={field.shape} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <p aria-live="polite" aria-atomic="true" className="truncate text-xs text-fg-muted" title={busy || problem ? fileName ?? name ?? undefined : name ?? undefined}>
-            {busy ? `Uploading ${fileName ?? "photo"}…` : dragging ? "Drop to upload your picture" : problem && fileName ? fileName : name ?? "Drop a picture here, or:"}
+            {opening ? "Opening photo adjustments..." : busy ? `Uploading ${fileName ?? "photo"}…` : dragging ? "Drop to upload your picture" : problem && fileName ? fileName : name ?? "Drop a picture here, or:"}
           </p>
           {busy && <div className="studio-upload-progress" role="status" aria-label={`Uploading ${fileName ?? "photo"}`}><span /></div>}
           <div className="flex flex-wrap gap-1.5">
-            {name && <Button size="sm" disabled={busy} onClick={() => setCropName(name)}><Crop /> Adjust</Button>}
-            <Button id={id} size="sm" onClick={() => fileInput.current?.click()} disabled={busy}>
+            {name && <Button size="sm" disabled={working} onClick={() => void adjust(name)}>{opening ? <Spinner /> : <Crop />} Adjust</Button>}
+            <Button id={id} size="sm" onClick={() => fileInput.current?.click()} disabled={working}>
               {busy ? <Spinner className="size-3.5" /> : <Upload />}
               {name ? "Replace" : "Upload"}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={busy}>
+            <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={working}>
               <ImagePlus />
               Your pictures
             </Button>
             {name && field.nullable !== false && (
-              <Button size="sm" variant="danger-ghost" disabled={busy} onClick={() => { onChange(null); setProblem(null); setRetryFile(null); setFileName(null); }} aria-label={`Remove ${field.title.toLowerCase()}`}>
+              <Button size="sm" variant="danger-ghost" disabled={working} onClick={() => { onChange(null); setProblem(null); setRetryFile(null); setFileName(null); }} aria-label={`Remove ${field.title.toLowerCase()}`}>
                 <Trash2 />
                 Remove
               </Button>
@@ -135,16 +155,18 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
         />
       </div>
       {problem && (
-        <div role="alert" className="studio-upload-error"><span>{problem}</span>{retryFile && <Button size="sm" disabled={busy} onClick={() => void upload(retryFile ?? undefined)}>Try again</Button>}</div>
+        <div role="alert" className="studio-upload-error"><span>{problem}</span>{(retryFile || retryCrop) && <Button size="sm" disabled={working} onClick={() => { if (retryCrop) void adjust(retryCrop); else void upload(retryFile ?? undefined); }}>Try again</Button>}</div>
       )}
-      {cropName && <CropDialog key={cropName} name={cropName} shape={field.crop ?? "free"} onClose={() => setCropName(null)} onConfirm={async (file) => {
+      {crop && <CropDialog key={crop.name} name={crop.name} initialCrop={crop.initial} shape={field.crop ?? "free"} onClose={() => setCrop(null)} onConfirm={async (file, recipe) => {
         const current = ++operation.current;
         setBusy(true); setFileName(file.name); setProblem(null); setRetryFile(null);
         try {
           const uploaded = await uploadImage(file);
           if (operation.current !== current) return;
+          await saveImageCrop(uploaded, recipe);
+          if (operation.current !== current) return;
           onChange(uploaded);
-          setCropName(null);
+          setCrop(null);
         } finally { if (operation.current === current) setBusy(false); }
       }} />}
       <ImagePicker
@@ -154,7 +176,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
         onPick={(picked) => {
           setPickerOpen(false);
           setProblem(null);
-          setCropName(picked);
+          void adjust(picked);
         }}
       />
     </div>

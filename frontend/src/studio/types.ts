@@ -8,6 +8,18 @@ export type ExportFormat = "mp4" | "gif" | "webm" | "mov" | "png";
 export type ExportQuality = "draft" | "720p" | "1080p" | "1080p60" | "4k";
 export type PreviewMode = "poster" | "storyboard";
 
+export interface ImageCropRecipe {
+  source: string;
+  position: { x: number; y: number; zoom: number };
+  ratio: number;
+  shape: string;
+}
+
+export interface ImageInfo {
+  name: string;
+  crop: ImageCropRecipe | null;
+}
+
 /** A JSON Schema node as produced by Pydantic, plus the studio's x-* hints. */
 export interface JsonSchema {
   type?: string | string[];
