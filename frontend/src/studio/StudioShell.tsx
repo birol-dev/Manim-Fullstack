@@ -4,7 +4,7 @@ import { BarChart3, ChevronDown, ChevronRight, Code2, FolderDown, GraduationCap,
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 
-import { CATEGORIES_KEY, readCategoriesOpen, readCollapsed, SIDEBAR_KEY, storePreference, type Appearance } from "./appearance";
+import { readCategoriesOpen, readCollapsed, setCategoriesOpen, setCollapsed as storeCollapsed, type Appearance } from "./appearance";
 import { Segments } from "./components";
 import { ConnectionDialog } from "./ConnectionDialog";
 import { useExportActivity, useExports } from "./hooks";
@@ -81,7 +81,7 @@ function Sidebar({ route, catalog, appearance, onAppearance, collapsed, collapsi
   const toggleCategories = () => {
     const next = !categoriesOpen;
     setCategoriesChoice(next);
-    storePreference(CATEGORIES_KEY, String(next));
+    setCategoriesOpen(next);
   };
   const fade = navFade.top && navFade.bottom ? "both" : navFade.top ? "top" : navFade.bottom ? "bottom" : undefined;
   const query = route.kind === "templates" ? route.query ?? "" : "";
@@ -173,7 +173,7 @@ export function StudioShell({ route, catalog, appearance, onAppearance, push, re
     }
     else {
       setCollapsed(false);
-      storePreference(SIDEBAR_KEY, "false");
+      storeCollapsed(false);
       cancelAnimationFrame(focusFrame.current);
       focusFrame.current = requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
     }
@@ -202,7 +202,7 @@ export function StudioShell({ route, catalog, appearance, onAppearance, push, re
   const category = route.kind === "templates" && route.category ? catalog?.sections.find((section) => section.id === route.category) : undefined;
   const title = route.kind === "gallery" ? "Home" : route.kind === "videos" ? "Your videos" : route.kind === "exports" ? "Exports" : category?.title ?? "Templates";
   useEffect(() => { document.title = `${title} · Manim Studio`; }, [title]);
-  const toggleSidebar = () => { setCollapsed((value) => !value); storePreference(SIDEBAR_KEY, String(!collapsed)); };
+  const toggleSidebar = () => { setCollapsed((value) => !value); storeCollapsed(!collapsed); };
   const sidebarProps = {
     route, catalog, appearance, onAppearance,
     collapsed: !mobile && collapsed,

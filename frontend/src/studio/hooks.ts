@@ -5,6 +5,7 @@ import { ApiError } from "@/lib/api";
 
 import { cancelExport, friendlyError, getCatalog, listExports, requestPreview } from "./api";
 import { ACTIVE_EXPORT } from "./options";
+import { readPreference, SEEN_EXPORTS_KEY, writePreference } from "./preferences";
 import { LatestPreview, PosterQueue, visualPreviewKey, type PreviewState } from "./preview";
 import type { Catalog, ExportJob, PreviewRequest, PreviewResponse } from "./types";
 
@@ -173,19 +174,18 @@ export function useExports(enabled: boolean, refreshKey = 0, onLoaded?: (jobs: E
   return { ...state, cancel, retry: () => setTick((value) => value + 1) };
 }
 
-export const SEEN_EXPORTS_KEY = "studio:seen-exports";
+export { SEEN_EXPORTS_KEY };
+
+/** The workspace keeps at most this many ids; the newest are the ones worth remembering. */
+const MAX_SEEN_EXPORTS = 200;
 
 function storedSeenExports(): Set<string> | null {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(SEEN_EXPORTS_KEY) ?? "null");
-    return Array.isArray(value) && value.every((id) => typeof id === "string") ? new Set(value) : null;
-  } catch {
-    return null;
-  }
+  const value = readPreference("seen_exports");
+  return Array.isArray(value) && value.every((id) => typeof id === "string") ? new Set(value) : null;
 }
 
 function storeSeenExports(seen: Set<string>) {
-  try { localStorage.setItem(SEEN_EXPORTS_KEY, JSON.stringify([...seen])); } catch { /* Storage can be unavailable in private windows. */ }
+  writePreference("seen_exports", [...seen].slice(-MAX_SEEN_EXPORTS));
 }
 
 /** Seed the first successful listing, so pre-existing files never become new notifications. */

@@ -14,6 +14,7 @@ import functools
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
+from . import preferences as preferences_module
 from . import service as service_module
 from .errors import StudioError
 from .registry import TemplateError
@@ -64,6 +65,21 @@ async def get_catalog():
 @_errors
 async def get_template(template_id: str):
     return await get_service().template_info(template_id)
+
+
+@router.get("/preferences")
+@_errors
+async def get_preferences():
+    """Choices kept with the workspace, so they survive a restart of the desktop app."""
+    return await get_service().get_preferences()
+
+
+@router.patch("/preferences")
+@_errors
+async def patch_preferences(request: Request):
+    """Merge a partial preferences object; invalid values answer 422 with field errors."""
+    body = await _body(request, preferences_module.PREFERENCE_KEYS)
+    return await get_service().update_preferences(body)
 
 
 @router.get("/peeks/{key}.mp4")

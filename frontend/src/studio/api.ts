@@ -1,6 +1,7 @@
 import { ApiError, apiUrl, postJson, requestJson } from "@/lib/api";
 import type { AssetFile } from "@/lib/types";
 
+import type { Preferences } from "./preferences";
 import type {
   Catalog,
   ImageCropRecipe,
@@ -63,6 +64,16 @@ export function getCatalog(): Promise<Catalog> {
 export function resetCatalogCache() {
   catalogPromise = null;
 }
+
+/** Choices kept with the workspace, so the desktop app restores them at every launch. */
+export const getPreferences = () => requestJson<Preferences>("/api/studio/preferences", { cache: "no-store" });
+
+/** Merge a partial preferences object; the server answers the merged values. */
+export const updatePreferences = (patch: Partial<Preferences>) => requestJson<Preferences>("/api/studio/preferences", {
+  method: "PATCH",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(patch),
+});
 
 export function requestPreview(request: PreviewRequest, signal?: AbortSignal): Promise<PreviewResponse> {
   return requestJson<PreviewResponse>("/api/studio/preview", {

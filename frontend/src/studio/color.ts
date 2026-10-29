@@ -1,3 +1,7 @@
+import { readPreference, RECENT_COLORS_KEY, writePreference } from "./preferences";
+
+export { RECENT_COLORS_KEY };
+
 export function parseHex(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const hex = value.trim().replace(/^#/, "");
@@ -17,18 +21,17 @@ export function hsvToHex({ h, s, v }: HSV): string {
   const parts = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
   return `#${parts.map((p) => Math.round((p + m) * 255).toString(16).padStart(2, "0")).join("").toUpperCase()}`;
 }
-export const RECENT_COLORS_KEY = "studio.recent-colors";
 export function readRecentColors(): string[] {
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(RECENT_COLORS_KEY) ?? "[]");
-    return Array.isArray(stored) ? [...new Set(stored.map(parseHex).filter((c): c is string => c !== null))].slice(0, 8) : [];
-  } catch { return []; }
+  const stored = readPreference("recent_colors");
+  return Array.isArray(stored)
+    ? [...new Set(stored.map(parseHex).filter((c): c is string => c !== null))].slice(0, 8)
+    : [];
 }
 export function rememberColor(value: string): string[] {
   const color = parseHex(value);
   const recent = readRecentColors();
   if (!color) return recent;
   const next = [color, ...recent.filter((c) => c !== color)].slice(0, 8);
-  try { localStorage.setItem(RECENT_COLORS_KEY, JSON.stringify(next)); } catch { /* Private storage may be unavailable. */ }
+  writePreference("recent_colors", next);
   return next;
 }

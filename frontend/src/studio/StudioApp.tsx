@@ -9,7 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 
 import "./studio.css";
 import { friendlyError } from "./api";
-import { APPEARANCE_KEY, readAppearance, storePreference, type Appearance } from "./appearance";
+import { readAppearance, setAppearance as storeAppearance, type Appearance } from "./appearance";
 import { Spinner } from "./components";
 import { EditorPage } from "./Editor";
 import { Gallery, GalleryLoading } from "./Gallery";
@@ -74,7 +74,7 @@ export default function StudioApp() {
     }
     return () => { delete document.documentElement.dataset.surface; delete document.documentElement.dataset.theme; };
   }, [isStudio, appearance]);
-  const changeAppearance = (value: Appearance) => { setAppearance(value); storePreference(APPEARANCE_KEY, value); };
+  const changeAppearance = (value: Appearance) => { setAppearance(value); storeAppearance(value); };
   if (hashRoute.route.kind === "author") {
     return (
       <Suspense fallback={<Loading label="Opening author mode…" />}>

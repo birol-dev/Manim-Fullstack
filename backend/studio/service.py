@@ -40,7 +40,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import host, peeks, registry
+from . import host, peeks, preferences, registry
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -781,6 +781,24 @@ class StudioService:
     async def duplicate_project(self, project_id: str, title: Optional[str] = None) -> dict:
         """Copy a project under a new id; the title defaults to ``"<title> copy"``."""
         return await asyncio.to_thread(self.duplicate_project_sync, project_id, title)
+
+    # -- preferences: the few choices that must survive a restart of the desktop app ---------------
+    def _preference_store(self) -> preferences.PreferenceStore:
+        return preferences.PreferenceStore(self.workspace_dir)
+
+    def get_preferences_sync(self) -> dict:
+        return self._preference_store().read()
+
+    async def get_preferences(self) -> dict:
+        """The stored preferences (an empty object until someone changes one)."""
+        return await asyncio.to_thread(self.get_preferences_sync)
+
+    def update_preferences_sync(self, changes) -> dict:
+        return self._preference_store().update(changes)
+
+    async def update_preferences(self, changes) -> dict:
+        """Merge a partial preferences object and return the merged values."""
+        return await asyncio.to_thread(self.update_preferences_sync, changes)
 
     # -- sound: normalized audio is private workspace content, shared by UI/MCP -------------------
     def audio_path(self, name):
