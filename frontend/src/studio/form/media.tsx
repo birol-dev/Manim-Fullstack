@@ -17,6 +17,9 @@ import type { WidgetProps } from "./fields";
 
 const ACCEPT = "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.png,.jpg,.jpeg,.gif,.webp,.svg";
 
+/** SVGs are logos and icons: cropping would throw away their vector form. */
+const isSvg = (name: string) => /\.svg$/i.test(name);
+
 function Thumb({ name, shape, className }: { name: string | null; shape?: string; className?: string }) {
   const round = shape === "circle";
   return (
@@ -70,8 +73,13 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
     try {
       const uploaded = await uploadImage(file);
       if (operation.current !== current) return;
-      setCrop({ name: uploaded });
-      setRetryFile(null);
+      if (isSvg(uploaded)) {
+        setRetryFile(null);
+        onChange(uploaded);
+      } else {
+        setCrop({ name: uploaded });
+        setRetryFile(null);
+      }
     } catch (error) {
       if (operation.current === current) setProblem(friendlyError(error, "Couldn't upload that picture."));
     } finally {
@@ -81,6 +89,11 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
 
   const adjust = async (imageName: string) => {
     if (working) return;
+    if (isSvg(imageName)) {
+      setProblem(null); setRetryFile(null); setRetryCrop(null); setFileName(imageName);
+      onChange(imageName);
+      return;
+    }
     const current = ++operation.current;
     setOpening(true); setProblem(null); setRetryFile(null); setRetryCrop(null); setFileName(imageName);
     try {
@@ -124,7 +137,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
           </p>
           {busy && <div className="studio-upload-progress" role="status" aria-label={`Uploading ${fileName ?? "photo"}`}><span /></div>}
           <div className="flex flex-wrap gap-1.5">
-            {name && <Button size="sm" disabled={working} onClick={() => void adjust(name)}>{opening ? <Spinner /> : <Crop />} Adjust</Button>}
+            {name && !isSvg(name) && <Button size="sm" disabled={working} onClick={() => void adjust(name)}>{opening ? <Spinner /> : <Crop />} Adjust</Button>}
             <Button id={id} size="sm" onClick={() => fileInput.current?.click()} disabled={working}>
               {busy ? <Spinner className="size-3.5" /> : <Upload />}
               {name ? "Replace" : "Upload"}
@@ -157,18 +170,23 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
       {problem && (
         <div role="alert" className="studio-upload-error"><span>{problem}</span>{(retryFile || retryCrop) && <Button size="sm" disabled={working} onClick={() => { if (retryCrop) void adjust(retryCrop); else void upload(retryFile ?? undefined); }}>Try again</Button>}</div>
       )}
-      {crop && <CropDialog key={crop.name} name={crop.name} initialCrop={crop.initial} shape={field.crop ?? "free"} onClose={() => setCrop(null)} onConfirm={async (file, recipe) => {
-        const current = ++operation.current;
-        setBusy(true); setFileName(file.name); setProblem(null); setRetryFile(null);
-        try {
-          const uploaded = await uploadImage(file);
-          if (operation.current !== current) return;
-          await saveImageCrop(uploaded, recipe);
-          if (operation.current !== current) return;
-          onChange(uploaded);
-          setCrop(null);
-        } finally { if (operation.current === current) setBusy(false); }
-      }} />}
+      {crop && <CropDialog key={crop.name} name={crop.name} initialCrop={crop.initial} shape={field.crop ?? "free"} onClose={() => setCrop(null)}
+        onUseAsIs={() => {
+          onChange(crop.name);
+          setFileName(crop.name); setProblem(null); setRetryFile(null); setRetryCrop(null);
+        }}
+        onConfirm={async (file, recipe) => {
+          const current = ++operation.current;
+          setBusy(true); setFileName(file.name); setProblem(null); setRetryFile(null);
+          try {
+            const uploaded = await uploadImage(file);
+            if (operation.current !== current) return;
+            await saveImageCrop(uploaded, recipe);
+            if (operation.current !== current) return;
+            onChange(uploaded);
+            setCrop(null);
+          } finally { if (operation.current === current) setBusy(false); }
+        }} />}
       <ImagePicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}

@@ -306,9 +306,12 @@ class ExportManager:
     def _prunable(self, record: dict) -> bool:
         """Whether trimming may drop this record from the index.
 
+        Active records (queued, rendering) always stay: the person is watching them.
         A ``done`` record whose file still exists in the exports folder is kept for good:
         trimming history must never delete a file the person did not delete.
         """
+        if record.get("status") in ACTIVE:
+            return False
         if record.get("status") != "done":
             return True
         filename = record.get("filename")

@@ -13,7 +13,7 @@ import { cancelExport, friendlyError, getExport, previewProblem, startExport, ty
 import { Spinner } from "./components";
 import { ActionMenu } from "./ProjectMenu";
 import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
-import { useExports } from "./hooks";
+import { useCatalog, useExports } from "./hooks";
 import {
   ACTIVE_EXPORT,
   EXPORT_FORMATS,
@@ -81,15 +81,24 @@ function Choice<T extends string>({
   options,
   onChange,
   legend,
+  frameRate,
 }: {
   name: string;
   value: T;
   options: Array<{ value: T; label: string; hint: string }>;
   onChange: (value: T) => void;
   legend: string;
+  /** Templates that fix the export rate: show it on the qualities where smoothness matters. */
+  frameRate?: number | null;
 }) {
   const files = name === "export-format";
-  const qualityLabels: Record<string, [string, string]> = { draft: ["Draft", "480p"], "720p": ["HD", "720p"], "1080p": ["Full HD", "1080p"], "1080p60": ["Smooth", "1080p · 60 fps"], "4k": ["Ultra HD", "4K"] };
+  const qualityLabels: Record<string, [string, string]> = {
+    draft: ["Draft", "480p"],
+    "720p": ["HD", "720p"],
+    "1080p": ["Full HD", frameRate ? `1080p · ${frameRate} fps` : "1080p"],
+    "1080p60": ["Smooth", "1080p · 60 fps"],
+    "4k": ["Ultra HD", frameRate ? `4K · ${frameRate} fps` : "4K"],
+  };
   return (
     <fieldset className="studio-export-choices">
       <legend className="mb-1.5 text-[13px] font-medium text-fg">{legend}</legend>
@@ -143,6 +152,10 @@ interface ExportDialogProps {
 }
 
 export function ExportDialog({ open, onOpenChange, request, transparentBackground, onFieldErrors, onActivity, posterUrl, onStart, onSeen }: ExportDialogProps) {
+  const { catalog } = useCatalog();
+  const templateId = request().template;
+  // Long timers set META.export_fps: every quality is rendered at that rate, so the dialog must not promise 60.
+  const exportFps = catalog?.templates.find((item) => item.id === templateId)?.export_fps ?? null;
   const [format, setFormat] = useState<ExportFormat>("mp4");
   const [quality, setQuality] = useState<ExportQuality>("1080p");
   const [job, setJob] = useState<ExportJob | null>(null);
@@ -165,6 +178,9 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
   const jobStatus = job?.status;
   const active = !!job && ACTIVE_EXPORT.has(job.status);
   const progress = useExportProgress(job);
+  const frameRate = format === "png" ? null : exportFps;
+  // A stored 60 fps choice cannot be honored by a fixed-rate template.
+  const chosenQuality = frameRate && quality === "1080p60" ? "1080p" : quality;
   useEffect(() => {
     if (open && jobId && jobStatus === "done") seenRef.current?.(jobId);
   }, [open, jobId, jobStatus]);
@@ -211,7 +227,7 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
     try {
       setJobPoster(posterUrl);
       onStart?.();
-      const created = await startExport({ ...request(), format, quality });
+      const created = await startExport({ ...request(), format, quality: chosenQuality });
       setJob(created);
       onActivity?.();
     } catch (error) {
@@ -286,7 +302,10 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
                 Tip: set Background to <span className="font-medium text-fg-muted">None</span> under Look to make the background see-through.
               </p>
             )}
-            {format !== "png" && <Choice name="export-quality" legend="Quality" value={quality} options={QUALITIES} onChange={setQuality} />}
+            {format !== "png" && <Choice name="export-quality" legend="Quality" value={chosenQuality} options={frameRate ? QUALITIES.filter((item) => item.value !== "1080p60") : QUALITIES} onChange={setQuality} frameRate={frameRate} />}
+            {format !== "png" && frameRate && (
+              <p className="studio-quality-hint">Made at {frameRate} frames per second: smooth for this kind of video, and much quicker to make.</p>
+            )}
             {format === "png" && (
               <Choice name="export-quality" legend="Size" value={quality} options={QUALITIES.filter((item) => item.value !== "1080p60")} onChange={setQuality} />
             )}

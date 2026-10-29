@@ -15,9 +15,11 @@ interface CropDialogProps {
   initialCrop?: ImageCropRecipe;
   onClose: () => void;
   onConfirm: (file: File, crop: ImageCropRecipe) => Promise<void>;
+  /** Keep the original picture untouched: no crop, no new file. */
+  onUseAsIs?: () => void;
 }
 
-export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: CropDialogProps) {
+export function CropDialog({ name, shape, initialCrop, onClose, onConfirm, onUseAsIs }: CropDialogProps) {
   const image = useRef<HTMLImageElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const initialFocus = useRef(false);
@@ -44,6 +46,13 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
   const frameWidth = Math.round(300 * frameRatio * 100) / 100;
   const reset = () => { setPosition(RESET_CROP); setFreeRatio(null); };
   const close = () => { if (!busy) { live.current = false; onClose(); } };
+  // Nothing is cropped or saved: the field keeps the picture it already has.
+  const useAsIs = () => {
+    if (busy) return;
+    live.current = false;
+    onUseAsIs?.();
+    onClose();
+  };
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     if (busy || !ready || event.button !== 0) return;
@@ -151,6 +160,7 @@ export function CropDialog({ name, shape, initialCrop, onClose, onConfirm }: Cro
       {problem && <p role="alert" className="studio-crop-error">{problem}</p>}
       <DialogFooter>
         <Button variant="ghost" disabled={busy || !ready} onClick={reset} className="mr-auto"><RotateCcw /> Reset</Button>
+        <Button variant="secondary" disabled={busy} onClick={useAsIs}>Use as is</Button>
         <Button disabled={busy} onClick={close}>Cancel</Button>
         <Button variant="primary" disabled={busy || !ready} onClick={() => void confirm()}>
           {busy && <Spinner />}{busy ? "Saving photo…" : problem ? "Try again" : "Use photo"}

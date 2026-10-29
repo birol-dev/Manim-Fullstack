@@ -1,12 +1,16 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Toaster, toast } from "sonner";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { ExportDialog, ExportRow, ExportsPage, ExportsPanel } from "./exports";
-import type { ExportRequest } from "./api";
+import { resetCatalogCache, type ExportRequest } from "./api";
 import { installFakeStudio } from "./test/fakeStudio";
 import type { ExportJob } from "./types";
+
+beforeEach(() => {
+  resetCatalogCache();
+});
 
 const request = () => ({ template: "countdown", params: { seconds: 7 }, settings: {}, title: "Timer" });
 
@@ -138,6 +142,51 @@ it.each([
   expect(await within(dialog).findByRole("heading", { name: title })).toBeInTheDocument();
   expect(within(dialog).getByText("Starting")).toBeInTheDocument();
   expect(within(dialog).getByRole("button", { name: "Cancel export" })).toBeInTheDocument();
+});
+
+it("hides the 60 fps quality and states the real rate for a template that fixes it", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.catalog.templates.find((item) => item.id === "countdown")!.export_fps = 15;
+  resetCatalogCache();
+  render(<ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />);
+  await waitFor(() => expect(screen.queryByRole("radio", { name: "1080p, 60 fps" })).not.toBeInTheDocument());
+  expect(screen.getByRole("radio", { name: "1080p (Full HD)" })).toBeChecked();
+  expect(screen.getByText("1080p · 15 fps")).toBeInTheDocument();
+  expect(screen.getByText("4K · 15 fps")).toBeInTheDocument();
+  expect(screen.getByText("Made at 15 frames per second: smooth for this kind of video, and much quicker to make.")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Make video" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports")).toBe(true));
+  expect(studio.calls.find((call) => call.method === "POST" && call.path === "/api/studio/exports")?.body)
+    .toEqual(expect.objectContaining({ template: "countdown", format: "mp4", quality: "1080p" }));
+});
+
+it("falls back from 60 fps to 1080p once the template's fixed rate is known", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.catalog.templates.find((item) => item.id === "countdown")!.export_fps = 15;
+  let releaseCatalog!: () => void;
+  const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+  studio.reply = async (call) => call.path === "/api/studio/catalog"
+    ? (await catalogGate, { status: 200, body: studio.catalog })
+    : null;
+  resetCatalogCache();
+  render(<ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />);
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/catalog")).toBe(true));
+  await user.click(screen.getByRole("radio", { name: "1080p, 60 fps" }));
+  expect(screen.getByRole("radio", { name: "1080p, 60 fps" })).toBeChecked();
+  releaseCatalog();
+  await waitFor(() => expect(screen.queryByRole("radio", { name: "1080p, 60 fps" })).not.toBeInTheDocument());
+  expect(screen.getByRole("radio", { name: "1080p (Full HD)" })).toBeChecked();
+});
+
+it("keeps the 60 fps quality for templates that do not fix a rate", async () => {
+  const studio = installFakeStudio();
+  render(<ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />);
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/catalog")).toBe(true));
+  expect(screen.getByRole("radio", { name: "1080p, 60 fps" })).toBeInTheDocument();
+  expect(screen.getByText("1080p · 60 fps")).toBeInTheDocument();
+  expect(screen.queryByText(/frames per second/)).not.toBeInTheDocument();
 });
 
 it("keeps a completion unseen while closed, then marks it seen when the result is opened", async () => {

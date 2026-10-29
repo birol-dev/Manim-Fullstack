@@ -185,6 +185,23 @@ it("exports exactly the region the crop window shows", async () => {
   expect(confirm.mock.calls[0][1].ratio).toBeCloseTo(16 / 9);
 });
 
+it("offers Use as is without cropping or making a new file", async () => {
+  const user = userEvent.setup();
+  const confirm = vi.fn().mockResolvedValue(undefined);
+  const useAsIs = vi.fn();
+  const close = vi.fn();
+  render(<CropDialog name="portrait.jpg" initialCrop={{ source: "portrait.jpg", position: { x: .3, y: -.2, zoom: 2 }, ratio: 1, shape: "circle" }}
+    onClose={close} onConfirm={confirm} onUseAsIs={useAsIs} />);
+  loadPhoto();
+  const canvas = mockCanvas();
+  expect(screen.getByRole("button", { name: "Use as is" })).toBeEnabled();
+  await user.click(screen.getByRole("button", { name: "Use as is" }));
+  expect(useAsIs).toHaveBeenCalledOnce();
+  expect(close).toHaveBeenCalledOnce();
+  expect(confirm).not.toHaveBeenCalled();
+  expect(canvas.drawImage).not.toHaveBeenCalled();
+});
+
 it("uses the circle/frame wording and names where the window is", async () => {
   const user = userEvent.setup();
   const view = render(<CropDialog name="portrait.jpg" shape="circle" onClose={() => {}} onConfirm={vi.fn()} />);

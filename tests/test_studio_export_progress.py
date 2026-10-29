@@ -227,6 +227,26 @@ def test_history_trimming_drops_only_old_prunable_records(tmp_path):
     assert (exports / "kept.mp4").read_bytes() == b"video"
 
 
+def test_history_trimming_keeps_active_exports(tmp_path):
+    manager = _export_manager(tmp_path, max_records=2)
+    manager._ensure_loaded()
+    with manager._lock:
+        manager._records = {
+            "aaaaaaaaaaaa": {"id": "aaaaaaaaaaaa", "status": "rendering", "created": "1"},
+            "bbbbbbbbbbbb": {"id": "bbbbbbbbbbbb", "status": "queued", "created": "2"},
+            "cccccccccccc": {"id": "cccccccccccc", "status": "failed", "created": "3"},
+            "dddddddddddd": {"id": "dddddddddddd", "status": "cancelled", "created": "4"},
+            "eeeeeeeeeeee": {"id": "eeeeeeeeeeee", "status": "failed", "created": "5"},
+            "ffffffffffff": {"id": "ffffffffffff", "status": "failed", "created": "6"},
+        }
+        manager._save_locked()
+    # The two newest prunable records fill the cap; the running and waiting exports stay
+    # even though older history pushes them past it.
+    assert {record["id"] for record in manager.list()} == {
+        "aaaaaaaaaaaa", "bbbbbbbbbbbb", "eeeeeeeeeeee", "ffffffffffff",
+    }
+
+
 def test_export_request_is_saved_and_survives_a_reload(tmp_path):
     def still(job, width, height, out):
         Path(out).write_bytes(b"poster")

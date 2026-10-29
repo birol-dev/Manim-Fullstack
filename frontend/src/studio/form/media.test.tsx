@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { getImageInfo, saveImageCrop, uploadImage, validateImage, MAX_IMAGE_BYTES } from "../api";
@@ -120,6 +120,39 @@ it("does not select an uploaded crop until its workspace metadata is saved", asy
   expect(screen.getByText("original.jpg", { selector: "output" })).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Try again" }));
   expect(screen.getByRole("status")).toHaveTextContent("new-crop.png");
+});
+
+it("uses an uploaded SVG as is, without opening the crop dialog", async () => {
+  const upload = vi.mocked(uploadImage).mockReset().mockResolvedValue("logo.svg");
+  const { container } = render(<Photo />);
+  const zone = container.querySelector(".studio-image-upload")!;
+  fireEvent.drop(zone, { dataTransfer: { files: [new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })] } });
+  await waitFor(() => expect(screen.getByText("logo.svg", { selector: "output" })).toBeInTheDocument());
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(upload).toHaveBeenCalledOnce();
+  expect(saveImageCrop).not.toHaveBeenCalled();
+});
+
+it("offers no Adjust for an SVG, which is used as is", () => {
+  render(<Photo initial="logo.svg" />);
+  expect(screen.getByRole("status")).toHaveTextContent("logo.svg");
+  expect(screen.queryByRole("button", { name: "Adjust" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Replace" })).toBeInTheDocument();
+});
+
+it("keeps the original picture when Use as is is chosen", async () => {
+  const user = userEvent.setup();
+  const upload = vi.mocked(uploadImage).mockReset();
+  const recipe: ImageCropRecipe = { source: "test_photo.jpg", position: { x: .5, y: -.5, zoom: 2 }, ratio: 1, shape: "circle" };
+  vi.mocked(getImageInfo).mockResolvedValue({ name: "test_photo-crop.png", crop: recipe });
+  render(<Photo initial="test_photo-crop.png" />);
+  await user.click(screen.getByRole("button", { name: "Adjust" }));
+  await screen.findByRole("dialog", { name: "Adjust photo" });
+  await user.click(screen.getByRole("button", { name: "Use as is" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.getByText("test_photo.jpg", { selector: "output" })).toBeInTheDocument();
+  expect(upload).not.toHaveBeenCalled();
+  expect(saveImageCrop).not.toHaveBeenCalled();
 });
 
 it.each(["the original was deleted", "the metadata record is gone"])("adjusts the current crop without errors when %s", async () => {
