@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ColorPickerButton } from "./ColorPicker";
@@ -57,9 +57,40 @@ it("opens table color cells with Enter and keeps picker arrows inside the popove
   function Table() { const [values, setValues] = useState({ rows: [{ color: "#FF0000" }, { color: "#0000FF" }] }); return <SchemaForm fields={fields} values={values} onChange={(key, value) => setValues((v) => ({ ...v, [key]: value }))} />; }
   const user = userEvent.setup(); render(<Table />);
   const swatch = screen.getByRole("button", { name: "Color, row 1" });
-  swatch.focus(); await user.keyboard("{Enter}");
+  act(() => swatch.focus()); await user.keyboard("{Enter}");
   expect(screen.getByRole("dialog", { name: "Color picker" })).toBeInTheDocument();
   await user.keyboard("{ArrowDown}{Escape}");
   expect(swatch).toHaveFocus();
   expect(swatch).toHaveStyle({ background: "#FC0000" });
+});
+
+it("uses the optional eyedropper and normalizes its result", async () => {
+  const open = vi.fn().mockResolvedValue({ sRGBHex: "#fFaa22" });
+  vi.stubGlobal("EyeDropper", class { open = open; });
+  try {
+    const user = userEvent.setup();
+    render(<Picker />);
+    await user.click(screen.getByRole("button", { name: "Choose color" }));
+    await user.click(screen.getByRole("button", { name: "Pick color from screen" }));
+    expect(open).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status")).toHaveTextContent("#FFAA22");
+    await user.keyboard("{Escape}");
+    expect(readRecentColors()).toEqual(["#FFAA22"]);
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it("ignores an eyedropper result that arrives after the picker closes", async () => {
+  let finish!: (result: { sRGBHex: string }) => void;
+  const open = vi.fn(() => new Promise<{ sRGBHex: string }>((resolve) => { finish = resolve; }));
+  vi.stubGlobal("EyeDropper", class { open = open; });
+  try {
+    const user = userEvent.setup();
+    render(<Picker />);
+    await user.click(screen.getByRole("button", { name: "Choose color" }));
+    await user.click(screen.getByRole("button", { name: "Pick color from screen" }));
+    await user.keyboard("{Escape}");
+    await act(async () => finish({ sRGBHex: "#abcdef" }));
+    expect(screen.getByRole("status")).toHaveTextContent("#FF0000");
+    expect(readRecentColors()).toEqual([]);
+  } finally { vi.unstubAllGlobals(); }
 });

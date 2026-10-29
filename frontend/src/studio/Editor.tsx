@@ -304,12 +304,12 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
+      if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')) return;
       if (key === "e") { event.preventDefault(); setExportOpen(true); return; }
       if (key !== "z" && key !== "y") return;
       // Native undo stacks aren't exposed. After typing, keep shortcuts local
       // until blur; the header buttons always use editor history.
       if (isTextEditor(event.target) && nativeHistory.current.has(event.target)) return;
-      if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')) return;
       event.preventDefault();
       shortcutRef.current.restore(key === "y" || event.shiftKey ? "redo" : "undo");
     };

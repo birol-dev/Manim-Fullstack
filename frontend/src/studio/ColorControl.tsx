@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { ColorPickerButton } from "./ColorPicker";
-import { parseHex } from "./color";
+import { parseHex, rememberColor } from "./color";
 
 import { cn } from "@/lib/utils";
 
@@ -48,7 +48,11 @@ export function ColorControl({ id, label, value, onChange, theme, fallback, null
           const hex = parseHex(text);
           if (hex) onChange(hex);
           else if (!text && nullable) onChange(null);
-        }} onBlur={() => setDraft(null)} className={cn(inputClass, "studio-color-code")} />
+        }} onBlur={() => {
+          const hex = parseHex(draft ?? current);
+          if (hex && !swatches.includes(hex)) rememberColor(hex);
+          setDraft(null);
+        }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); } }} className={cn(inputClass, "studio-color-code")} />
       )}
     </div>
   );

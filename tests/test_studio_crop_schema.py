@@ -7,7 +7,7 @@ def test_crop_hint_accepts_shapes_and_positive_aspects(crop):
     field = schema.image(title="Photo", crop=crop)
     assert field.json_schema_extra["x-crop"] == crop
 
-@pytest.mark.parametrize("crop", ["", "square", "0:1", "1:0", "-1:1", "1.5:1", "1:2:3", "1/1", " 1:1 ", 1, True, [], "1:10000"])
+@pytest.mark.parametrize("crop", ["", "square", "0:1", "1:0", "-1:1", "1.5:1", "1:2:3", "1/1", " 1:1 ", 1, True, [], "1:10000", "1:1９"])
 def test_crop_hint_rejects_invalid_values(crop):
     with pytest.raises(ValueError, match="crop must"):
         schema.image(title="Photo", crop=crop)

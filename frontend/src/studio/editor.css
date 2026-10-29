@@ -42,10 +42,15 @@
 .studio-crop-stage { overflow: hidden; display: flex; align-items: center; justify-content: center; min-height: 170px; padding: 20px; border: 1px solid var(--color-line); border-radius: 10px; background: var(--color-canvas); }
 .studio-crop-mask { position: relative; width: 100%; overflow: hidden; border-radius: 4px; border: 1px solid var(--color-line-strong); box-shadow: 0 0 0 999px rgb(0 0 0 / .07); touch-action: none; cursor: grab; }
 .studio-crop-mask:active { cursor: grabbing; }
+.studio-crop-mask[aria-disabled="true"] { cursor: default; }
 .studio-crop-mask[data-circle] { border-radius: 50%; }
 .studio-crop-mask img { position: absolute; max-width: none; pointer-events: none; user-select: none; }
 .studio-crop-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: var(--color-fg-muted); }
 .studio-crop-help { font-size: 12px; line-height: 1.5; color: var(--color-fg-subtle); }
+.studio-crop-error { font-size: 12px; line-height: 1.5; color: var(--color-danger); }
+.studio-crop-error button { padding: 2px 4px; border-radius: 4px; text-decoration: underline; text-underline-offset: 2px; }
+.studio-crop-error button:hover { background: var(--color-danger-soft); }
+.studio-crop-error button:active { opacity: .7; }
 .studio-crop-slider { display: grid; grid-template-columns: 1fr auto; gap: 8px; font-size: 12px; color: var(--color-fg-muted); }
 .studio-crop-slider span { font-variant-numeric: tabular-nums; color: var(--color-fg-subtle); }
 .studio-crop-slider input { grid-column: 1 / -1; width: 100%; accent-color: var(--color-accent); cursor: pointer; }

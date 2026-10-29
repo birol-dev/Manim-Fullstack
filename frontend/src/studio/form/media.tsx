@@ -56,11 +56,11 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
   const upload = async (file: File | undefined) => {
     if (!file || busy) return;
     setProblem(null);
+    setFileName(file.name);
     const validation = validateImage(file);
     if (validation) { setRetryFile(null); setProblem(validation); return; }
     const current = ++operation.current;
     setRetryFile(file);
-    setFileName(file.name);
     setBusy(true);
     try {
       const uploaded = await uploadImage(file);
@@ -100,7 +100,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
         <Thumb name={name} shape={field.shape} />
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <p aria-live="polite" aria-atomic="true" className="truncate text-xs text-fg-muted" title={busy || problem ? fileName ?? name ?? undefined : name ?? undefined}>
-            {busy ? `Uploading ${fileName ?? "photo"}?` : dragging ? "Drop to upload your picture" : problem && fileName ? fileName : name ?? "Drop a picture here, or:"}
+            {busy ? `Uploading ${fileName ?? "photo"}…` : dragging ? "Drop to upload your picture" : problem && fileName ? fileName : name ?? "Drop a picture here, or:"}
           </p>
           {busy && <div className="studio-upload-progress" role="status" aria-label={`Uploading ${fileName ?? "photo"}`}><span /></div>}
           <div className="flex flex-wrap gap-1.5">
@@ -114,7 +114,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
               Your pictures
             </Button>
             {name && field.nullable !== false && (
-              <Button size="sm" variant="danger-ghost" disabled={busy} onClick={() => { onChange(null); setProblem(null); }} aria-label={`Remove ${field.title.toLowerCase()}`}>
+              <Button size="sm" variant="danger-ghost" disabled={busy} onClick={() => { onChange(null); setProblem(null); setRetryFile(null); setFileName(null); }} aria-label={`Remove ${field.title.toLowerCase()}`}>
                 <Trash2 />
                 Remove
               </Button>
@@ -139,7 +139,7 @@ export function ImageWidget({ field, value, onChange, id, describedBy, invalid }
       )}
       {cropName && <CropDialog key={cropName} name={cropName} shape={field.crop ?? "free"} onClose={() => setCropName(null)} onConfirm={async (file) => {
         const current = ++operation.current;
-        setBusy(true); setFileName(file.name); setProblem(null);
+        setBusy(true); setFileName(file.name); setProblem(null); setRetryFile(null);
         try {
           const uploaded = await uploadImage(file);
           if (operation.current !== current) return;

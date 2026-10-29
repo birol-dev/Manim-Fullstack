@@ -89,9 +89,9 @@ def color(default: Optional[str] = None, *, title: str, description: Optional[st
 
 def image(*, title: str, description: Optional[str] = None, shape: Literal["any", "circle", "logo"] = "any",
           help: Optional[str] = None, crop: Optional[str] = None) -> Any:
-    """An uploaded asset's file name (workspace/assets), or None."""
+    """An uploaded asset's file name, or None. ``crop`` only controls the editor's crop mask."""
     if crop is not None and (not isinstance(crop, str) or
-                             (crop not in ("circle", "free") and not re.fullmatch(r"[1-9]\d{0,3}:[1-9]\d{0,3}", crop))):
+                             (crop not in ("circle", "free") and not re.fullmatch(r"[1-9][0-9]{0,3}:[1-9][0-9]{0,3}", crop))):
         raise ValueError("crop must be 'circle', 'free', or a positive aspect ratio such as '16:9'")
     return Field(None, title=title, description=description or "Optional picture.",
                  json_schema_extra=_extra("image", shape=shape, help=help, crop=crop))

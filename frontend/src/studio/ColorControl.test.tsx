@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { expect, it } from "vitest";
 
 import { ColorControl } from "./ColorControl";
+import { readRecentColors } from "./color";
 import { CATALOG } from "./test/fixtures";
 
 function Control() {
@@ -33,4 +34,17 @@ it("keeps the colour strip together and shows a hex field only for a custom colo
   await user.click(within(group).getByRole("radio", { name: "Theme color" }));
   expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   expect(screen.getByTestId("value")).toHaveTextContent("null");
+});
+
+it("remembers a custom color entered directly in the color code field", async () => {
+  const user = userEvent.setup();
+  render(<Control />);
+  await user.click(screen.getByRole("button", { name: "Pick any color" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Hex" }), { target: { value: "abc" } });
+  await user.keyboard("{Escape}");
+  const code = screen.getByRole("textbox", { name: "Accent color, color code" });
+  await user.click(code);
+  fireEvent.change(code, { target: { value: "1a2b3c" } });
+  await user.keyboard("{Enter}");
+  expect(readRecentColors()[0]).toBe("#1A2B3C");
 });
