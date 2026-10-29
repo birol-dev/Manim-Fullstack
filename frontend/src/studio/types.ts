@@ -179,6 +179,11 @@ export interface ExportJob {
   status: ExportStatus;
   progress: number | null;
   message?: string | null;
+  /** Measured frame throughput estimate; absent until enough frames have finished. */
+  time_left?: string | null;
+  phase?: "drawing" | "finishing" | "done";
+  rendered_frames?: number;
+  total_frames?: number;
   url?: string | null;
   filename?: string | null;
   size?: number | null;

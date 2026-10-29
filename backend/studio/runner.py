@@ -8,8 +8,11 @@ file it was given.
 """
 
 import importlib
+import json
+import math
 import os
 import sys
+import time
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND not in sys.path:
@@ -17,6 +20,103 @@ if _BACKEND not in sys.path:
 
 from studio.kit import runtime  # noqa: E402
 from studio.registry import get_template  # noqa: E402
+from manim import tempconfig  # noqa: E402
+from manim.renderer.cairo_renderer import CairoRenderer  # noqa: E402
+
+PROGRESS_PREFIX = "@@studio-export "
+
+
+class TimingRenderer(CairoRenderer):
+    """Run the scene's timing without drawing images or encoding a movie.
+
+    Quantize each play/wait just as Cairo does at the export fps. Advancing by
+    these frames also makes remaining()/padding use the same clock as the movie.
+    Counting plays or using a preview's (15 fps, rounded) duration is insufficient.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(skip_animations=True, **kwargs)
+        self.frames = 0
+
+    def update_frame(self, *args, **kwargs):
+        pass
+
+    def save_static_frame_data(self, *args, **kwargs):
+        pass
+
+    def play(self, scene, *args, **kwargs):
+        started = self.time
+        super().play(scene, *args, **kwargs)
+        dt = 1 / self.camera.frame_rate
+        samples = scene.duration / dt
+        # Frozen waits repeat floor(duration * fps) frames; animated plays sample
+        # arange(0, duration, 1/fps), including a final fractional frame.
+        frozen = scene.is_current_animation_frozen_frame()
+        frames = int(samples) if frozen else math.ceil(samples)
+        self.frames += frames
+        # Match Cairo's floating-point clock too: remaining() can otherwise pad
+        # one different frame at an exact second boundary.
+        self.time = started
+        if frozen:
+            self.time += frames * dt
+        else:
+            for _ in range(frames):
+                self.time += dt
+
+
+def measure_scene(template):
+    with tempconfig({"dry_run": True, "progress_bar": "none", "save_last_frame": False}):
+        renderer = TimingRenderer()
+        scene = template(renderer=renderer)
+        scene.render()
+        return renderer.frames
+
+
+class FrameProgress:
+    """Count completed frames, including batched frozen waits and async encoders."""
+
+    def __init__(self, writer, total, send):
+        self.total, self.send = total, send
+        self.frames = 0
+        self.last_sent = 0.0
+        self.finish = writer.finish
+        # Manim >=0.19 queues frames to a background encoder. Counting queue.put
+        # would report a long frozen wait complete while its frames still encode.
+        # Observe the actual encoder instead, splitting its batches into frames.
+        if hasattr(writer, "encode_and_write_frame"):
+            self.write_frame = writer.encode_and_write_frame
+            writer.encode_and_write_frame = self.write_batch
+        else:  # Manim 0.18 streams frames directly into ffmpeg
+            self.write_frame = writer.write_frame
+            writer.write_frame = self.write
+        writer.finish = self.finishing
+        self.emit("drawing")
+
+    def emit(self, phase):
+        self.send({"phase": phase, "rendered_frames": self.frames, "total_frames": self.total})
+        self.last_sent = time.monotonic()
+
+    def write(self, frame, *args, **kwargs):
+        result = self.write_frame(frame, *args, **kwargs)
+        self.completed(int(kwargs.get("num_frames", args[0] if args else 1)))
+        return result
+
+    def write_batch(self, frame, num_frames):
+        for _ in range(num_frames):
+            self.write_frame(frame, 1)
+            self.completed(1)
+
+    def completed(self, count):
+        self.frames += count
+        if self.frames >= self.total:
+            self.emit("finishing")
+        elif time.monotonic() - self.last_sent >= 0.2:
+            self.emit("drawing")
+
+    def finishing(self, *args, **kwargs):
+        # finish() combines partial movies, encodes GIF/WebM/MOV and muxes sound.
+        self.emit("finishing")
+        return self.finish(*args, **kwargs)
 
 _job = runtime.current_job()
 _spec = get_template(_job["template"])  # refuses ids that aren't installed templates
@@ -25,4 +125,12 @@ _Template = importlib.import_module(f"studio.templates.{_spec.id}.scene").Templa
 
 
 class StudioRender(_Template):
-    pass
+    def render(self, *args, **kwargs):
+        total = measure_scene(_Template)
+
+        def send(event):
+            sys.stdout.write(PROGRESS_PREFIX + json.dumps(event) + "\n")
+            sys.stdout.flush()
+
+        self._export_progress = FrameProgress(self.renderer.file_writer, total, send)
+        return super().render(*args, **kwargs)

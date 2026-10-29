@@ -24,6 +24,7 @@ import secrets
 import shutil
 import sys
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -48,6 +49,37 @@ INTERRUPTED = "Interrupted: the app stopped before this export finished."
 _EXPORT_ID = re.compile(r"^[0-9a-f]{12}$")
 _ERROR_LINE = re.compile(r"\b[A-Za-z_][\w.]*(?:Error|Exception)\b")
 _BOX_CHARS = "│┃╭╰─━┏┗┓┛╮╯"
+PROGRESS_PREFIX = "@@studio-export "
+DRAWING = "Drawing frames…"
+FINISHING = "Finishing your video…"
+RENDER_PERCENT = 95  # leave room for muxing/conversion and publishing the file
+
+
+class FrameEstimate:
+    """Estimate from measured frame throughput, excluding startup and timing setup."""
+
+    def __init__(self):
+        self.samples = deque()
+
+    def update(self, frames: int, total: int, fps: int) -> Optional[str]:
+        if frames <= 0:
+            return None  # exclude scene/font setup before the first completed frame
+        now = time.monotonic()
+        if self.samples and frames <= self.samples[-1][1]:
+            return None
+        self.samples.append((now, frames))
+        while len(self.samples) > 2 and now - self.samples[1][0] > 12:
+            self.samples.popleft()
+        elapsed = now - self.samples[0][0]
+        drawn = frames - self.samples[0][1]
+        if len(self.samples) < 4 or elapsed < 3 or drawn < max(10, fps) or frames >= total:
+            return None
+        # An initial average over several seconds avoids extrapolating the first
+        # frame (font/layout startup) or a single fast repeated frame.
+        seconds = (total - frames) * elapsed / drawn
+        if seconds < 60:
+            return "Less than a minute left"
+        return f"About {max(1, round(seconds / 60))} min left"
 
 
 class ConflictError(StudioError):
@@ -108,7 +140,7 @@ class ManimVideoRunner:
     @staticmethod
     def args(job: VideoJob) -> list:
         extra = ["-r", f"{job.width},{job.height}", "--fps", str(job.fps), "--media_dir", job.media_dir,
-                 "--disable_caching"]
+                 "--disable_caching", "--progress_bar=none"]
         if job.format in ("gif", "webm", "mov"):
             extra += ["--format", job.format]
         if job.transparent:
@@ -125,18 +157,34 @@ class ManimVideoRunner:
             self._loop, self._executor = asyncio.get_running_loop(), executor
         ready = {}
         lines = deque(maxlen=60)
+        frame_protocol = False
 
         async def events(event):
+            nonlocal frame_protocol
             if self._cancelled:
                 # A cancel that arrived before Manim was spawned: the executor stops it at once.
                 await executor.cancel()
             kind = event.get("type")
-            if kind == "progress":
+            if kind == "progress" and not frame_protocol:
                 on_progress(event.get("animation"), event.get("percent", 0))
             elif kind == "file_ready":
                 ready["path"] = event.get("abs_path")
             elif kind in ("log", "error"):
                 message = event.get("message") or ""
+                if message.startswith(PROGRESS_PREFIX):
+                    try:
+                        payload = json.loads(message[len(PROGRESS_PREFIX):])
+                        if (payload["phase"] not in ("drawing", "finishing")
+                                or type(payload["rendered_frames"]) is not int
+                                or type(payload["total_frames"]) is not int
+                                or payload["rendered_frames"] < 0 or payload["total_frames"] <= 0):
+                            raise ValueError("Invalid frame progress")
+                    except (ValueError, KeyError, TypeError):
+                        pass  # malformed telemetry remains in the diagnostic log
+                    else:
+                        frame_protocol = True
+                        on_progress(payload, None)
+                        return
                 lines.append(message)
                 on_log(message)
 
@@ -241,6 +289,7 @@ class ExportManager:
                 if not isinstance(raw, dict) or not _EXPORT_ID.match(str(raw.get("id", ""))):
                     continue
                 record = dict(raw)
+                record["time_left"] = None  # estimates never survive a process restart
                 if record.get("status") in ACTIVE:
                     record.update(status="failed", progress=None, message=INTERRUPTED, error=INTERRUPTED)
                     changed = True
@@ -297,7 +346,7 @@ class ExportManager:
             while export_id in self._records:
                 export_id = secrets.token_hex(6)
             entry = {"id": export_id, **record, "status": "queued", "progress": None,
-                     "message": "Waiting to start", "created": utc_now(), "_job": dict(job),
+                     "message": "Waiting to start", "time_left": None, "created": utc_now(), "_job": dict(job),
                      "_log": deque(maxlen=40)}
             self._records[export_id] = entry
             self._save_locked()
@@ -327,6 +376,7 @@ class ExportManager:
             elif record["status"] == "rendering":
                 record["_cancel"] = True
                 record["message"] = "Stopping"
+                record["time_left"] = None
                 if self._current and self._current[0] == export_id:
                     runner = self._current[1]
             snapshot = public(record)
@@ -420,12 +470,14 @@ class ExportManager:
                 with self._lock:
                     record = self._records.get(export_id)
                     if record is not None and record.get("status") in ACTIVE:
-                        record.update(status="failed", progress=None, message="Export failed",
+                        record.update(status="failed", progress=None, message="Export failed", time_left=None,
                                       error="Internal error in the export queue.")
                         record.pop("_job", None)
 
     def _update(self, record: dict, save: bool = False, **fields) -> None:
         with self._lock:
+            if fields.get("status") in FINISHED:
+                fields["time_left"] = None
             record.update(fields)
             if save:
                 self._save_locked()
@@ -464,10 +516,11 @@ class ExportManager:
         try:
             os.makedirs(job_dir, exist_ok=True)
             if record["format"] == "png":
-                self._update(record, message="Rendering the image")
+                self._update(record, message=DRAWING, phase="drawing", rendered_frames=0, total_frames=1)
                 out = os.path.join(job_dir, "poster.png")
                 self.still(job, record["width"], record["height"], out)
                 self._check_cancel(record)
+                self._update(record, progress=RENDER_PERCENT, message=FINISHING, phase="finishing", rendered_frames=1)
                 final = self._publish(record, out, ".png")
             else:
                 try:
@@ -484,13 +537,36 @@ class ExportManager:
                 runner = self.runner_factory()
                 with self._lock:
                     self._current = (export_id, runner)
-                    record.update(progress=0 if plays else None, message="Starting Manim")
+                    record.update(progress=0, message=DRAWING, phase="drawing")
                 self._check_cancel(record)
+                estimate = FrameEstimate()
 
                 def on_progress(animation, percent):
+                    nonlocal duration
                     with self._lock:
-                        if record.get("_cancel"):
+                        if record.get("_cancel") or record["status"] != "rendering":
                             return
+                        if isinstance(animation, dict):
+                            if record.get("phase") == "finishing":
+                                return  # late/stale frame events cannot reopen drawing
+                            frames, total = animation["rendered_frames"], animation["total_frames"]
+                            if frames < record.get("rendered_frames", 0):
+                                return
+                            finishing = animation["phase"] == "finishing"
+                            duration = total / record["fps"]
+                            record.update(
+                                rendered_frames=frames, total_frames=total,
+                                progress=max(record.get("progress") or 0,
+                                             min(RENDER_PERCENT, int(RENDER_PERCENT * frames / total))),
+                                phase="finishing" if finishing else "drawing",
+                                message=FINISHING if finishing else DRAWING,
+                                time_left=None if finishing else estimate.update(frames, total, record["fps"]),
+                            )
+                            return
+                        if "total_frames" in record:
+                            return
+                        # Compatibility with injected runners using the old per-play
+                        # callback. The CLI above uses only structured frame counts.
                         if plays and animation is not None:
                             overall = int((animation + max(0, min(100, percent)) / 100) / plays * 100)
                             record["progress"] = max(record.get("progress") or 0, min(99, overall))
@@ -507,11 +583,12 @@ class ExportManager:
                                  timeout=self._timeout_for(record, duration))
                 path = runner.run(video, on_progress, on_log)
                 self._check_cancel(record)
+                self._update(record, message=FINISHING, phase="finishing", time_left=None)
                 final = self._publish(record, path, os.path.splitext(path)[1] or f".{record['format']}")
             with self._lock:
                 self._check_cancel(record)
                 rel = os.path.relpath(final, self.media_root).replace("\\", "/")
-                self._update(record, save=True, status="done", progress=100, message="Ready",
+                self._update(record, save=True, status="done", progress=100, message="Ready", phase="done",
                              url="/media/" + rel, filename=os.path.basename(final), size=os.path.getsize(final),
                              duration=duration, finished=utc_now())
         except ExportCancelled:

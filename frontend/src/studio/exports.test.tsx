@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { Toaster, toast } from "sonner";
 import { afterEach, expect, it, vi } from "vitest";
 
-import { ExportDialog, ExportsPage, ExportsPanel } from "./exports";
+import { ExportDialog, ExportRow, ExportsPage, ExportsPanel } from "./exports";
 import { installFakeStudio } from "./test/fakeStudio";
 import type { ExportJob } from "./types";
 
@@ -34,6 +34,63 @@ function renderPage(jobs: ExportJob[]) {
   const view = render(<ExportsPage exports={{ jobs, error: null, cancel, retry }} />);
   return { ...view, retry, cancel };
 }
+
+it("shows measured progress, plain messages and time left in export rows without regressing", () => {
+  const running = job({ status: "rendering", progress: 40, phase: "drawing", message: "Drawing frames…", time_left: "About 1 min left", url: null });
+  const cancel = vi.fn();
+  const view = render(<ul><ExportRow job={running} onCancel={cancel} /></ul>);
+  expect(screen.getByText("40% · Drawing frames…")).toBeInTheDocument();
+  expect(screen.getByText("About 1 min left")).toBeInTheDocument();
+  const bar = screen.getByRole("progressbar");
+  expect(bar).toHaveAttribute("aria-valuenow", "40");
+  expect(bar).toHaveClass("[&>div]:duration-700");
+  expect(bar.firstElementChild).toHaveStyle({ transform: "translateX(-60%)" });
+  view.rerender(<ul><ExportRow job={{ ...running, progress: 20 }} onCancel={cancel} /></ul>);
+  expect(bar).toHaveAttribute("aria-valuenow", "40");
+  expect(bar.firstElementChild).toHaveStyle({ transform: "translateX(-60%)" });
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(cancel).toHaveBeenCalledWith(expect.objectContaining({ id: running.id }));
+  view.rerender(<ul><ExportRow job={{ ...running, progress: 95, phase: "finishing", message: "Finishing your video…" }} /></ul>);
+  expect(bar).toHaveAttribute("aria-valuenow", "95");
+  expect(screen.getByText("95% · Finishing your video…")).toBeInTheDocument();
+  expect(screen.queryByText("About 1 min left")).not.toBeInTheDocument();
+  view.rerender(<ul><ExportRow job={{ ...running, id: "fresh", progress: 0 }} /></ul>);
+  expect(bar).toHaveAttribute("aria-valuenow", "0");
+});
+
+it("renders the progress message and time left in the exports panel", async () => {
+  const studio = installFakeStudio();
+  studio.exports = [job({ status: "rendering", progress: 62, phase: "drawing", message: "Drawing frames…", time_left: "Less than a minute left", url: null })];
+  render(<ExportsPanel open onOpenChange={vi.fn()} />);
+  expect(await screen.findByText("62% · Drawing frames…")).toBeInTheDocument();
+  expect(screen.getByText("Less than a minute left")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "62");
+});
+
+it("keeps dialog progress monotonic through polls and clears time left while finishing", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  const running = job({ status: "rendering", progress: 45, phase: "drawing", message: "Drawing frames…", time_left: "About 1 min left", url: null });
+  studio.exports = [running];
+  studio.reply = (call) => call.path === "/api/studio/exports" && call.method === "POST" ? { status: 202, body: running } : null;
+  render(<ExportDialog open onOpenChange={vi.fn()} request={request} transparentBackground={false} onFieldErrors={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "Make video" }));
+  expect(await screen.findByText("45%")).toBeInTheDocument();
+  expect(screen.getByText("Drawing frames…")).toBeInTheDocument();
+  expect(screen.getByText("About 1 min left")).toBeInTheDocument();
+  const bar = screen.getByRole("progressbar");
+  studio.exports = [{ ...running, progress: 70, time_left: "Less than a minute left" }];
+  await screen.findByText("70%");
+  studio.exports = [{ ...running, progress: 30, time_left: "Stale poll" }];
+  await screen.findByText("Stale poll");
+  expect(screen.getByText("70%")).toBeInTheDocument();
+  expect(bar).toHaveAttribute("aria-valuenow", "70");
+  studio.exports = [{ ...running, progress: 95, phase: "finishing", message: "Finishing your video…", time_left: null }];
+  await screen.findByText("Finishing your video…");
+  expect(screen.getByText("95%")).toBeInTheDocument();
+  expect(screen.queryByText(/minute left|1 min left|Stale poll/)).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Cancel export" })).toBeInTheDocument();
+});
 
 afterEach(() => {
   act(() => { toast.dismiss(); });

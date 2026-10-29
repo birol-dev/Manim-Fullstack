@@ -31,6 +31,17 @@ import type { ExportFormat, ExportJob, ExportQuality, FieldError } from "./types
 
 const POLL_MS = 700;
 
+/** Keep an older poll/list response from moving this export's bar backwards. */
+function useExportProgress(job: ExportJob | null) {
+  const incoming = job?.status === "done" ? 100 : job?.progress == null || !Number.isFinite(job.progress) ? null : Math.max(0, Math.min(99, Math.round(job.progress)));
+  const [shown, setShown] = useState({ id: job?.id, value: incoming });
+  const value = shown.id === job?.id && shown.value != null ? Math.max(shown.value, incoming ?? 0) : incoming;
+  if (shown.id !== job?.id || shown.value !== value) setShown({ id: job?.id, value });
+  return value;
+}
+
+const SMOOTH_PROGRESS = "[&>div]:duration-700 motion-reduce:[&>div]:transition-none";
+
 function DownloadLink({ job, size = "md", className, secondary = false, iconOnly = false }: { job: ExportJob; size?: "sm" | "md"; className?: string; secondary?: boolean; iconOnly?: boolean }) {
   if (!job.url) return null;
   return (
@@ -56,6 +67,7 @@ function Result({ job, posterUrl }: { job: ExportJob; posterUrl?: string }) {
 }
 
 function exportStage(job: ExportJob): string {
+  if (job.phase === "drawing" || job.phase === "finishing") return job.message || (job.phase === "drawing" ? "Drawing frames…" : "Finishing your video…");
   if (job.status === "queued" || /starting/i.test(job.message ?? "")) return "Starting";
   if (/encod|convert|mux/i.test(job.message ?? "")) return "Encoding";
   if (/rendering the image/i.test(job.message ?? "")) return "Drawing the picture";
@@ -152,6 +164,7 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
   const jobId = job?.id ?? null;
   const jobStatus = job?.status;
   const active = !!job && ACTIVE_EXPORT.has(job.status);
+  const progress = useExportProgress(job);
   useEffect(() => {
     if (open && jobId && jobStatus === "done") seenRef.current?.(jobId);
   }, [open, jobId, jobStatus]);
@@ -298,8 +311,8 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
             <div className="studio-result-well" data-state={active ? "making" : "done"} aria-busy={active}>
               {active ? <>
                 {jobPoster ? <img src={apiUrl(jobPoster)} alt="Preview of your export" className="studio-export-pending-poster" /> : <div className="studio-shimmer absolute inset-0" />}
-                <span className="studio-export-percentage" role="status">{job.progress != null ? `${Math.round(job.progress)}%` : "Getting ready"}</span>
-                {job.progress != null ? <Progress value={job.progress} striped aria-label="Export progress" className="studio-export-well-progress" /> : (
+                <span className="studio-export-percentage" role="status">{progress != null ? `${progress}%` : "Getting ready"}</span>
+                {progress != null ? <Progress value={progress} striped aria-label="Export progress" className={cn("studio-export-well-progress", SMOOTH_PROGRESS)} /> : (
                   <div className="studio-export-well-progress bg-line" role="progressbar" aria-label="Export progress"><div className="absolute inset-y-0 w-1/3 animate-indeterminate bg-accent" /></div>
                 )}
               </> : <Result job={job} posterUrl={jobPoster} />}
@@ -307,6 +320,7 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
             <div className="studio-export-detail">
               {active ? <>
                 <p className="flex items-center gap-2 text-sm text-fg-muted" role="status"><Spinner className="size-3.5" />{exportStage(job)}</p>
+                {job.time_left && job.phase !== "finishing" && <p className="text-xs text-fg-subtle">{job.time_left}</p>}
                 {!connection && <p className="text-xs text-warning">Lost touch with the server. Still trying…</p>}
               </> : <p className="studio-file-meta">{job.filename}</p>}
             </div>
@@ -458,6 +472,7 @@ interface ExportRowProps {
 
 export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }: ExportRowProps) {
   const active = ACTIVE_EXPORT.has(job.status);
+  const progress = useExportProgress(job);
   const finished = job.status === "done" || job.status === "failed";
   const title = job.title || "Untitled video";
   const [confirming, setConfirming] = useState(false);
@@ -489,11 +504,15 @@ export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }:
           ? <button type="button" className="studio-export-title studio-export-title-button" onClick={() => onView(job)}>{title}</button>
           : <span className="studio-export-title truncate text-fg">{title}</span>}
         <span className="studio-export-meta">
-          {[formatLabel(job.format), qualityLabel(job.quality), job.status === "done" ? formatBytes(job.size) : exportStatusLabel(job), timeAgo(job.created)]
+          {[formatLabel(job.format), qualityLabel(job.quality), job.status === "done" ? formatBytes(job.size) : exportStatusLabel({ status: job.status, progress: null }), timeAgo(job.created)]
             .filter(Boolean)
             .join(" · ")}
         </span>
-        {active && <Progress value={job.progress ?? 0} striped aria-label={`${title} progress`} className="h-1" />}
+        {active && <>
+          <span className="text-xs text-fg-muted">{progress != null ? `${progress}% · ` : ""}{exportStage(job)}</span>
+          {job.time_left && job.phase !== "finishing" && <span className="text-xs text-fg-subtle">{job.time_left}</span>}
+          <Progress value={progress ?? 0} striped aria-label={`${title} progress`} className={cn("h-1", SMOOTH_PROGRESS)} />
+        </>}
         {job.status === "failed" && (
           <span className="truncate text-xs text-danger" title={job.error || job.message || undefined}>
             Something went wrong while making this file.
