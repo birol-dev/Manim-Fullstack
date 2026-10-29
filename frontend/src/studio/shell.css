@@ -101,6 +101,9 @@
 :root[data-surface="studio"] .studio-empty-state .select-none { margin-top: 8px; }
 :root[data-surface="studio"] .studio-skip-link { position: fixed; z-index: 10; top: 8px; left: 272px; padding: 10px 16px; border-radius: 8px; background: var(--color-ink); color: var(--color-ink-fg); transform: translateY(-150%); }
 :root[data-surface="studio"] .studio-skip-link:focus { transform: translateY(0); }
+@media (min-width: 900px) {
+  :root[data-surface="studio"] .studio-shell[data-collapsed="true"] .studio-skip-link { left: 88px; }
+}
 :root[data-surface="studio"] [data-sonner-toaster] { --normal-bg: var(--color-surface); --normal-text: var(--color-fg); --normal-border: var(--color-line); }
 :root[data-surface="studio"][data-theme="dark"] .studio-poster-ambient[data-ready="true"] { opacity: .5; filter: blur(28px) saturate(1.3) brightness(.55); }
 :root[data-surface="studio"][data-theme="light"] .studio-poster-ambient[data-ready="true"] { opacity: .35; filter: blur(28px) saturate(1.3); }

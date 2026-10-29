@@ -1,4 +1,4 @@
-﻿/** Library pages inside the persistent Studio shell. */
+/** Library pages inside the persistent Studio shell. */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Clapperboard, RotateCw, Search, Video, X } from "lucide-react";
 import { toast } from "sonner";
