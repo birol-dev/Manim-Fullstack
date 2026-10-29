@@ -14,10 +14,46 @@
   padding-right: 2px;
 }
 
+/* In a scrolling column flex items shrink to a sliver: keep each row at its natural height. */
+:root[data-surface="studio"] .studio-connection-body > * {
+  flex-shrink: 0;
+}
+
 :root[data-surface="studio"] .studio-connection-primary {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* A long config scrolls inside its own card instead of making the dialog huge. */
+:root[data-surface="studio"] .studio-connection-body .studio-connection-code {
+  max-height: 240px;
+  overflow: auto;
+}
+
+:root[data-surface="studio"] .studio-connection-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--color-well);
+  color: var(--color-fg-muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-connection-note > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-connection-heading {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 :root[data-surface="studio"] .studio-connection-apps {

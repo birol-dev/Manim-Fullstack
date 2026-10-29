@@ -91,7 +91,15 @@ describe("ConnectionDialog", () => {
     const user = userEvent.setup();
     const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     await open(LEGACY);
-    expect(screen.queryByRole("combobox", { name: "App" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Your AI app" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+    const steps = within(screen.getByRole("list")).getAllByRole("listitem").map((item) => item.textContent);
+    expect(steps).toEqual([
+      "Copy the settings.",
+      "Paste them into your AI app's MCP settings.",
+      "Keep Manim Studio open while you use it.",
+    ]);
     expect(screen.getByRole("textbox", { name: "MCP configuration" })).toHaveTextContent("Bearer secr•••");
     expect(screen.getByText("Keep Manim Studio open while you use it.")).toBeInTheDocument();
 
@@ -106,19 +114,37 @@ describe("ConnectionDialog", () => {
 
   it("says whether Manim Studio can stay closed", async () => {
     await open(DESKTOP);
-    expect(screen.getByText("Works even when Manim Studio is closed — your AI app starts it in the background.")).toBeInTheDocument();
-    expect(screen.queryByText("Keep Manim Studio open while you use it.")).not.toBeInTheDocument();
+    expect(screen.getByText("Works even when Manim Studio is closed. Your AI app starts it in the background.")).toBeInTheDocument();
+    expect(screen.queryByText("Keep Manim Studio open while your AI uses it.")).not.toBeInTheDocument();
 
     cleanup();
     await open(DEV);
-    expect(screen.getByText("Keep Manim Studio open while you use it.")).toBeInTheDocument();
+    expect(screen.getByText("Keep Manim Studio open while your AI uses it.")).toBeInTheDocument();
     expect(screen.queryByText(/Works even when Manim Studio is closed/)).not.toBeInTheDocument();
+  });
+
+  it("marks the background note with role=note", async () => {
+    await open(DESKTOP);
+    expect(screen.getByRole("note")).toHaveTextContent("Works even when Manim Studio is closed. Your AI app starts it in the background.");
+
+    cleanup();
+    await open(DEV);
+    expect(screen.getByRole("note")).toHaveTextContent("Keep Manim Studio open while your AI uses it.");
+  });
+
+  it("drops the numbered steps and offers a self-setup section when the app can start Studio", async () => {
+    await open(DESKTOP);
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+    expect(screen.queryByText("Copy the setup prompt.")).not.toBeInTheDocument();
+    expect(screen.getByText("Paste it into your AI assistant's chat. It sets up the connection, or tells you where to paste it.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 3, name: "Or set it up yourself" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Your AI app" })).toBeInTheDocument();
   });
 
   it("switches the snippet with the app picker and remembers the choice", async () => {
     const user = userEvent.setup();
     await open(DESKTOP);
-    const picker = screen.getByRole("combobox", { name: "App" });
+    const picker = screen.getByRole("combobox", { name: "Your AI app" });
     expect(picker).toHaveValue("claude-desktop");
     expect(screen.getByRole("textbox", { name: "Claude Desktop configuration" }).textContent).toBe(mcpConfig(DESKTOP));
 
@@ -133,7 +159,7 @@ describe("ConnectionDialog", () => {
     cleanup();
     serve(DESKTOP);
     render(<ConnectionDialog onClose={() => {}} />);
-    expect(await screen.findByRole("combobox", { name: "App" })).toHaveValue("claude-code");
+    expect(await screen.findByRole("combobox", { name: "Your AI app" })).toHaveValue("claude-code");
     expect(screen.getByRole("textbox", { name: "Claude Code configuration" }).textContent).toBe(claudeCodeCommand(DESKTOP));
   });
 
@@ -146,7 +172,7 @@ describe("ConnectionDialog", () => {
     expect(clipboard).toHaveBeenLastCalledWith(buildSetupPrompt(DESKTOP));
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "App" }), "vscode");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Your AI app" }), "vscode");
     await user.click(within(codeCard("VS Code configuration")).getByRole("button", { name: "Copy" }));
     expect(clipboard).toHaveBeenLastCalledWith(vsCodeConfig(DESKTOP));
 

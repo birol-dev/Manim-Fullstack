@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, RotateCw } from "lucide-react";
+import { Check, CheckCircle2, Copy, Info, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -91,16 +91,18 @@ export function ConnectionDialog({ onClose }: { onClose: () => void }) {
               {promptCopy.state === "copied" ? <Check /> : <Copy />}
               {promptCopy.state === "copied" ? "Copied" : "Copy setup prompt"}
             </Button>
-            <p className="text-xs text-fg-muted">Paste it into your AI assistant's chat — it can set the connection up for you.</p>
+            <p className="text-xs text-fg-muted">Paste it into your AI assistant's chat. It sets up the connection, or tells you where to paste it.</p>
           </div>
           {stdio ? <>
-            <ol className="studio-connection-steps">
-              <li>Copy the setup prompt.</li>
-              <li>Paste it into your AI assistant and send it.</li>
-              <li>{stdio.background ? "Works even when Manim Studio is closed — your AI app starts it in the background." : "Keep Manim Studio open while you use it."}</li>
-            </ol>
+            <div role="note" className="studio-connection-note">
+              {stdio.background ? <CheckCircle2 className="size-4 shrink-0" aria-hidden /> : <Info className="size-4 shrink-0" aria-hidden />}
+              <span>{stdio.background
+                ? "Works even when Manim Studio is closed. Your AI app starts it in the background."
+                : "Keep Manim Studio open while your AI uses it."}</span>
+            </div>
+            <h3 className="studio-connection-heading">Or set it up yourself</h3>
             <div className="studio-connection-apps">
-              <label htmlFor="studio-connection-app">App</label>
+              <label htmlFor="studio-connection-app">Your AI app</label>
               <select id="studio-connection-app" className="studio-connection-select" value={app} onChange={(event) => chooseApp(event.target.value)}>
                 {SETUP_APPS.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
