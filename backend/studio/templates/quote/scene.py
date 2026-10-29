@@ -249,6 +249,7 @@ class Template(StudioScene):
                 edges.append(c)
         if edges[-1] < choreo.end:
             edges[-1] = choreo.end
+        self.cue("whoosh")  # studio-audio
         for a, b in zip(edges, edges[1:]):
             choreo.play(a, b)
         self.poster()

@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--app-root", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--audio-formats", action="store_true", help="Also verify WebM/Opus, MOV/PCM and silent GIF.")
     args = parser.parse_args()
     configure_logging(args.data_dir)
     started = time.monotonic()
@@ -29,7 +30,7 @@ def main():
                 return response.read()
 
         job = {"template": "countdown", "params": {"seconds": 5, "title": "Desktop runtime smoke", "style": "ring"},
-               "settings": {"aspect": "16:9", "theme": "clean"}}
+               "settings": {"aspect": "16:9", "theme": "clean", "sound": {"music": {"track": "calm"}}}}
         preview = json.loads(fetch("/api/studio/preview", {**job, "mode": "poster", "short": 120}))
         from PIL import Image
         with Image.open(io.BytesIO(fetch(preview["url"]))) as image:
@@ -49,16 +50,40 @@ def main():
         movie = fetch(export["url"])
         import av
         with av.open(io.BytesIO(movie)) as container:
+            assert container.streams.audio and container.streams.audio[0].codec_context.name == "aac", "MP4 must contain AAC"
             video = container.streams.video[0]
             width, height = video.width, video.height
             frames = sum(1 for _ in container.decode(video))
             duration = float(container.duration / av.time_base) if container.duration else None
             assert width > 0 and height > 0 and frames >= 50
+        with av.open(io.BytesIO(movie)) as container:
+            import numpy as np
+            audio_frames = list(container.decode(audio=0))
+            audio_samples = sum(frame.samples for frame in audio_frames)
+            peak = max(float(np.max(np.abs(frame.to_ndarray()))) for frame in audio_frames)
+            assert audio_samples > 0 and 0 < peak < 1, "Audio must be audible and unclipped"
         report = {"runtime_python": __import__("sys").version.split()[0],
                   "manim": __import__("importlib.metadata", fromlist=["version"]).version("manim"),
                   "template": "countdown", "preview": {"width": poster_size[0], "height": poster_size[1]},
-                  "mp4": {"width": width, "height": height, "frames": frames, "duration": duration, "bytes": len(movie)},
+                  "mp4": {"width": width, "height": height, "frames": frames, "duration": duration, "bytes": len(movie),
+                          "audio_codec": "aac", "audio_samples": audio_samples, "audio_peak": peak},
                   "elapsed_seconds": round(time.monotonic() - started, 2)}
+        if args.audio_formats:
+            report["sound_formats"] = {}
+            for fmt, expected in (("webm", "opus"), ("mov", "pcm_s16le"), ("gif", None)):
+                short = {**job, "params": {"seconds": 3, "title": "", "style": "big"}, "format": fmt, "quality": "draft"}
+                export = json.loads(fetch("/api/studio/exports", short))
+                deadline = time.monotonic() + 150
+                while export["status"] in ("queued", "rendering") and time.monotonic() < deadline:
+                    time.sleep(.25)
+                    export = json.loads(fetch("/api/studio/exports/" + export["id"]))
+                assert export["status"] == "done", export
+                with av.open(io.BytesIO(fetch(export["url"]))) as container:
+                    actual = container.streams.audio[0].codec_context.name if container.streams.audio else None
+                    assert actual == expected, (fmt, actual)
+                    if actual:
+                        assert sum(frame.samples for frame in container.decode(audio=0)) > 0
+                    report["sound_formats"][fmt] = actual
         (args.data_dir / "render-smoke.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print("Real embedded-runtime MP4 passed: " + json.dumps(report["mp4"]), flush=True)
     return 0

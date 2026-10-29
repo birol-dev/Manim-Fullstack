@@ -104,7 +104,9 @@ class MotionPreviews:
             stem = os.path.join(self.service.previews_dir, TEMP_MARK + record["id"])
             try:
                 os.makedirs(self.service.previews_dir, exist_ok=True)
-                kit = self.service._kit_fingerprint()
+                from .audio import audio_fingerprint
+                from .storage import KIT_ROOTS, tree_fingerprint
+                kit = (tree_fingerprint(*KIT_ROOTS), audio_fingerprint())
                 if self.kit is not None and kit != self.kit:
                     self.worker.stop()
                 self.kit = kit

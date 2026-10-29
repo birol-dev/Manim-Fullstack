@@ -402,12 +402,15 @@ class RequestBodyLimitMiddleware:
 
     @staticmethod
     def deadline_for(path: str) -> float:
-        if path == "/api/upload-asset":
+        if path in ("/api/upload-asset", "/api/studio/audio", "/mcp", "/mcp/"):
             return BODY_DEADLINE_SECONDS * UPLOAD_DEADLINE_FACTOR
         return BODY_DEADLINE_SECONDS
 
     @staticmethod
     def limit_for(path: str) -> tuple:
+        if path in ("/api/studio/audio", "/mcp", "/mcp/"):
+            # Multipart uploads and the MCP base64 JSON representation.
+            return 70 * 1024 * 1024, "Choose audio smaller than 50 MB."
         if path == "/api/upload-asset":
             return MAX_ASSET_SIZE_BYTES + UPLOAD_OVERHEAD_BYTES, "File size exceeds maximum allowed size (50MB)."
         return MAX_REQUEST_BODY_BYTES, _body_too_large()

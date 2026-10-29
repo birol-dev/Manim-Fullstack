@@ -125,7 +125,7 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool(structured_output=False)
     @_tool_errors
     async def preview(project_id: str, mode: Literal["poster", "storyboard", "motion"] = "storyboard") -> list:
-        """Inspect a poster/storyboard, or queue a silent motion preview (first 20s). Poll get_motion for its video URL."""
+        """Inspect a silent poster/storyboard, or queue a motion preview with sound (first 20s). Poll get_motion."""
         project = await service.get_project(project_id)
         if mode == "motion":
             result = await service.start_motion(project_id, project["template"], project["params"], project["settings"])
@@ -185,6 +185,19 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     async def list_icons() -> list[str]:
         """List the bundled icon names accepted by template icon fields."""
         return await service.icon_names()
+
+    @server.tool()
+    @_tool_errors
+    async def upload_audio(data_base64: str, filename: str = "music") -> dict:
+        """Upload MP3, M4A/AAC, WAV or OGG (base64, at most 50 MB/10 minutes).
+        Put the returned name in settings.sound.music.asset; omit music.track."""
+        return await service.upload_audio(data_base64, filename)
+
+    @server.tool()
+    @_tool_errors
+    async def list_music_tracks() -> list[dict]:
+        """Original bundled music. Put its id in settings.sound.music.track; omit music.asset."""
+        return await service.list_music_tracks()
 
     return server
 
@@ -259,6 +272,12 @@ class RestBridge:
 
     async def icon_names(self):
         return await self.request("GET", "/icons")
+
+    async def upload_audio(self, data, filename="music"):
+        return await self.request("POST", "/audio", json={"data": data, "filename": filename})
+
+    async def list_music_tracks(self):
+        return await self.request("GET", "/music-tracks")
 
 
 def main():

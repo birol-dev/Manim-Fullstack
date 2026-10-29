@@ -16,6 +16,13 @@ export function stableKey(value: unknown): string {
   });
 }
 
+/** Stills contain no sound; changing music must not request another image. */
+export function visualPreviewKey(request: PreviewRequest): string {
+  const settings = { ...request.settings };
+  delete settings.sound;
+  return stableKey({ ...request, settings });
+}
+
 type Fetcher = (request: PreviewRequest, signal?: AbortSignal) => Promise<PreviewResponse>;
 
 interface QueueEntry {
@@ -51,7 +58,7 @@ export class PosterQueue {
 
   /** The poster for *request*: cached, joined if already on its way, else queued. */
   get(request: PreviewRequest): Promise<PreviewResponse> {
-    const key = stableKey(request);
+    const key = visualPreviewKey(request);
     const cached = this.cache.get(key);
     if (cached) return cached;
     const promise = new Promise<PreviewResponse>((resolve, reject) => {
@@ -68,7 +75,7 @@ export class PosterQueue {
 
   /** Move a waiting request to the front (a card scrolled into view). */
   prioritize(request: PreviewRequest) {
-    const key = stableKey(request);
+    const key = visualPreviewKey(request);
     const index = this.waiting.findIndex((entry) => stableKey(entry.request) === key);
     if (index > 0) this.waiting.unshift(...this.waiting.splice(index, 1));
   }
@@ -135,7 +142,7 @@ export class LatestPreview {
   /** Ask for a preview of *request* once nothing has changed for the delay. */
   schedule(request: PreviewRequest, { immediate = false } = {}) {
     if (this.disposed) return;
-    const key = stableKey(request);
+    const key = visualPreviewKey(request);
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     // Already shown or already on its way: nothing to do.

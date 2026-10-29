@@ -180,12 +180,32 @@ KIT_ROOTS = (
 TEMP_MARK = ".~"
 
 
-def _stat_into(digest, path: str) -> None:
+def visual_source(data: bytes) -> bytes:
+    """Remove explicitly marked audio-only additions, preserving legacy bake hashes.
+
+    These markers may contain imports, cue calls and sound setup only. Visual
+    layout/timing changes MUST remain unmarked. Runtime reloads hash full source.
+    """
+    result, audio = [], False
+    for line in data.replace(b"\r\n", b"\n").splitlines(keepends=True):
+        if line.strip() == b"# studio-audio-begin":
+            audio = True
+        elif line.strip() == b"# studio-audio-end":
+            audio = False
+        elif not audio and not line.rstrip().endswith(b"# studio-audio"):
+            result.append(line)
+    if audio:
+        raise ValueError("Unclosed studio-audio source block")
+    return b"".join(result)
+
+
+def _stat_into(digest, path: str, visual_only=False) -> None:
     try:
         with open(path, "rb") as source:
             if path.endswith((".py", ".svg", ".json", ".txt", ".md")):
                 # Git may check source out as LF or CRLF; neither changes the render.
-                digest.update(source.read().replace(b"\r\n", b"\n"))
+                data = source.read().replace(b"\r\n", b"\n")
+                digest.update(visual_source(data) if visual_only and path.endswith(".py") else data)
                 digest.update(b";")
                 return
             for chunk in iter(lambda: source.read(128 * 1024), b""):
@@ -196,7 +216,7 @@ def _stat_into(digest, path: str) -> None:
     digest.update(b";")
 
 
-def tree_fingerprint(*roots: str) -> str:
+def tree_fingerprint(*roots: str, visual_only=False) -> str:
     """Hash of every file's relative path and contents under *roots* (files or folders).
 
     ``__pycache__`` folders, dot files and ``.pyc`` files are ignored, so importing a
@@ -206,7 +226,7 @@ def tree_fingerprint(*roots: str) -> str:
     for root in roots:
         digest.update(os.path.basename(root).encode() + b"|")
         if os.path.isfile(root):
-            _stat_into(digest, root)
+            _stat_into(digest, root, visual_only)
             continue
         if not os.path.isdir(root):
             digest.update(b"-missing-")
@@ -218,12 +238,16 @@ def tree_fingerprint(*roots: str) -> str:
                 if name.startswith(".") or name.endswith((".pyc", ".pyo")):
                     continue
                 digest.update(f"{rel}/{name}=".encode())
-                _stat_into(digest, os.path.join(dirpath, name))
+                _stat_into(digest, os.path.join(dirpath, name), visual_only)
     return digest.hexdigest()[:16]
 
 
 def template_dir(template_id: str) -> str:
     return os.path.join(TEMPLATES_DIR, template_id)
+
+
+def visual_tree_fingerprint(*roots: str) -> str:
+    return tree_fingerprint(*roots, visual_only=True)
 
 
 def png_size(path: str) -> Optional[tuple]:

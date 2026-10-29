@@ -181,6 +181,40 @@ async def get_icons():
     return await get_service().icon_names()
 
 
+@router.get("/music-tracks")
+@_errors
+async def get_music_tracks():
+    return await get_service().list_music_tracks()
+
+
+@router.get("/sounds/{kind}/{name}.wav")
+@_errors
+async def get_sound(kind: str, name: str):
+    return FileResponse(await get_service().sound_file(kind, name), media_type="audio/wav",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-cache"})
+
+
+@router.post("/audio", status_code=201)
+@_errors
+async def post_audio(request: Request):
+    if request.headers.get("content-type", "").startswith("multipart/form-data"):
+        from .sound import MAX_AUDIO_BYTES
+        async with request.form(max_files=1, max_fields=0) as form:
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                raise TemplateError("Choose an audio file.")
+            return await get_service().upload_audio(await upload.read(MAX_AUDIO_BYTES + 1), upload.filename)
+    body = await _body(request, ("data", "filename"))
+    return await get_service().upload_audio(body.get("data"), body.get("filename", "music"))
+
+
+@router.get("/audio/{name}")
+@_errors
+async def get_audio(name: str):
+    return FileResponse(get_service().audio_path(name), media_type="audio/wav",
+                        headers={"X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/images/{name}")
 @_errors
 async def get_image(name: str):

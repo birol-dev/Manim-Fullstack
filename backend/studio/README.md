@@ -1,5 +1,8 @@
 # Template studio
 
+Sound effects, original music, uploads, audition, writer compatibility and the
+audio/visual cache contract are documented in [SOUND.md](SOUND.md).
+
 Fill-in templates rendered with Manim. People use them through the Studio UI (gallery →
 form → preview → export); agents use them through MCP. Both go through one service layer.
 
@@ -67,12 +70,13 @@ a project id or a stable editor-session id. It returns a job immediately; poll
 request for the same project cancels its previous job. MCP `preview` also accepts
 `mode="motion"`; poll `get_motion` or stop it with `cancel_motion`.
 
-A separate warm `PreviewWorker` renders silent MP4s at 720px on the long side and
+A separate warm `PreviewWorker` renders MP4s with the project's sound mix at 720px on the long side and
 15fps, independently of the export queue and still/storyboard worker. Playback is
 limited to the **first 20 seconds of the real timeline**; it does not speed up a long
 countdown. The response includes `duration` and `truncated` for the UI caption.
 Only an explicit Play click starts rendering. Edits cancel the pending job and return
-to the still. Finished videos share the bounded preview cache, with keys covering
+to the still. Playback starts muted; Unmute is an explicit user gesture. Gallery peeks
+and still/storyboard previews remain silent. Finished videos share the bounded preview cache, with keys covering
 template/kit/icons, content, settings, uploaded asset stamps and preview limits.
 
 ## Writing a template
@@ -216,6 +220,12 @@ Tools: `search_templates`, `get_template`, `create_project`, `list_projects`,
 `cancel_export`, `add_image`, `list_icons`. A preview returns an image for the agent to inspect.
 `get_template` also returns `settings_schema` (themes, formats, background, brand, timing).
 `add_image` takes base64 and returns the name to put in an image field.
+`upload_audio` accepts base64 audio (50 MB/10 minutes) and returns a normalized
+asset name for `settings.sound.music.asset`. `list_music_tracks` returns the three
+original bundled tracks for `settings.sound.music.track`. The same settings schema
+and validation apply to UI and MCP. `/api/studio/audio` also accepts multipart files;
+`/api/studio/music-tracks` lists tracks and `/api/studio/sounds/{kind}/{name}.wav`
+serves an audition (`kind` is `music` or `effects`).
 Exports return immediately; poll `get_export` for the completed download URL.
 Project updates replace each supplied object; fetch first to preserve other fields.
 Draft projects can save incomplete input, while previews and exports validate it.

@@ -233,6 +233,7 @@ class Template(StudioScene):
             first.append(FadeIn(avatar, scale=0.7, run_time=self.plan["year_in"] * 0.8, rate_func=overshoot))
         if name is not None:
             first.append(m.appear(name, "drop", run_time=self.plan["year_in"] * 0.8))
+        self.cue("pop")  # studio-audio
         self.play(*first)
         second = [LaggedStart(*[FadeIn(b, scale=0.3, run_time=self.plan["title_in"] * 0.6, rate_func=ease_out)
                                 for b in bar], lag_ratio=0.15, run_time=self.plan["title_in"])]
@@ -409,6 +410,7 @@ class Template(StudioScene):
         _, counting = number.counting(0, spec.value, count, count_rate)
         self.play(counting, prog.animate(run_time=count, rate_func=count_rate).set_value(1.0))
         number.stop()
+        self.cue("tick")  # studio-audio
         fill.clear_updaters()
         if arc is not None:
             arc.clear_updaters()
@@ -682,6 +684,7 @@ class Template(StudioScene):
                     group.append(m.appear(cards[i + 1], "rise", run_time=min(plan["card_in"], count)))
                 self.play(*group)
                 numbers[i].stop()
+                self.cue("tick")  # studio-audio
 
         if closing is not None:
             self.play(m.appear(closing, "rise", run_time=plan["closing_in"]))
@@ -696,6 +699,7 @@ class Template(StudioScene):
                     _, counting = num.counting(0, num.spec.value, plan["count"][num.spec.index], count_rate)
                     self.play(counting)
                     num.stop()
+                    self.cue("tick")  # studio-audio
             cards, numbers = next_cards, next_numbers
         self.poster()
         self.target_length = max(self.target_length, self.elapsed + plan["final_min"]

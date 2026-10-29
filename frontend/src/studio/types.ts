@@ -75,7 +75,18 @@ export interface RenderSettings {
   safe_zone: boolean;
   locale: string;
   brand?: Record<string, unknown>;
+  sound?: SoundSettings;
 }
+
+export interface MusicTrack { id: string; title: string; description: string; url: string }
+export interface MusicSettings {
+  track: string | null;
+  asset: string | null;
+  volume: number;
+  fade_out: boolean;
+  loop: boolean;
+}
+export interface SoundSettings { effects: boolean; effects_volume: number; music: MusicSettings }
 
 export type Params = Record<string, unknown>;
 
@@ -132,6 +143,7 @@ export interface Catalog {
   themes?: Theme[];
   aspects?: unknown;
   qualities?: unknown;
+  music_tracks?: MusicTrack[];
 }
 
 export interface StoryboardInfo {

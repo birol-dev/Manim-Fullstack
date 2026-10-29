@@ -39,6 +39,15 @@ const SETTINGS_PATHS = [
   "settings.ending",
   "settings.safe_zone",
   "settings.locale",
+  "settings.sound",
+  "settings.sound.effects",
+  "settings.sound.effects_volume",
+  "settings.sound.music",
+  "settings.sound.music.asset",
+  "settings.sound.music.track",
+  "settings.sound.music.volume",
+  "settings.sound.music.fade_out",
+  "settings.sound.music.loop",
 ];
 
 interface InitialState {
@@ -477,7 +486,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
                 )}
               </TabsContent>
               <TabsContent value="look" className="studio-editor-panel">
-                <LookPanel key={formVersion} settings={settings} onChange={patchSettings} template={template} themes={themes} errors={matched.byPath} />
+                <LookPanel key={formVersion} settings={settings} onChange={patchSettings} template={template} themes={themes} musicTracks={catalog.music_tracks} errors={matched.byPath} />
               </TabsContent>
             </FormContext.Provider>
           </Tabs>

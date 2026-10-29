@@ -111,6 +111,7 @@ class Template(StudioScene):
             self.poster()
 
         main = think - warn_n
+        for n in range(min(3, think), 0, -1): self.cue("tick", offset=think - n)  # studio-audio
         if main > 0:
             self.play(left.animate(rate_func=linear).set_value(warn_n), run_time=main)
         for n in range(warn_n, 0, -1):
@@ -120,6 +121,7 @@ class Template(StudioScene):
 
         # -- 4. reveal: the ring turns into a check, the right answer lights up, the others dim
         badge = self._badge(plan, pal).move_to(ring_center)
+        self.cue("correct")  # studio-audio
         winner = cards[correct]
         anims = [FadeOut(ring.group, scale=0.8, run_time=m.t(0.4)),
                  FadeIn(badge, scale=0.4, rate_func=overshoot, run_time=m.t(0.6))]

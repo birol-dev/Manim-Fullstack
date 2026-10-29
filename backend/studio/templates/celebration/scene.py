@@ -476,6 +476,7 @@ class Template(StudioScene):
         hero.orbit.set_opacity(0)
 
         # 1. backdrop, hero, headline
+        self.cue("sparkle" if self.p.confetti else "pop", offset=T(0.9))  # studio-audio
         anims = [FadeIn(backdrop, run_time=T(0.9)), FadeIn(hero.halo, scale=0.4, run_time=T(0.8), rate_func=ease_out),
                  Create(hero.ring, run_time=T(0.95), rate_func=ease_out)]
         anims += [FadeIn(c, scale=0.35, run_time=T(0.75), rate_func=overshoot) for c in hero.core]

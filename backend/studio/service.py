@@ -46,9 +46,11 @@ from .exports import EXPORT_FORMATS, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
 from .registry import TemplateError
 from .motion import MotionPreviews, LONG_SIDE, FPS, MAX_DURATION
-from .schema import CATEGORY_TITLES
+from .schema import CATEGORY_TITLES, RenderSettings
+from .sound import EFFECTS, MAX_AUDIO_BYTES, SAMPLE_RATE, TRACKS, music_tracks
 from .storage import (ICONS_DIR, KIT_ROOTS, STUDIO_DIR, TEMP_MARK, ImageCropStore, png_size, prune_previews, slugify,
-                      template_dir, tree_fingerprint, utc_now)
+                      template_dir, visual_tree_fingerprint as tree_fingerprint, utc_now)
+from .storage import tree_fingerprint as runtime_fingerprint
 from .themes import THEMES, public_themes
 from .worker import PreviewWorker, WorkerCrashed, WorkerReplyError, WorkerStartError, WorkerTimeout
 
@@ -202,7 +204,8 @@ class StudioService:
     # -- templates -----------------------------------------------------------------
     def _refresh_template(self, template_id: str) -> str:
         """Drop the cached schema of a template whose files changed on disk; returns its fingerprint."""
-        fingerprint = tree_fingerprint(template_dir(template_id))
+        visual = tree_fingerprint(template_dir(template_id))
+        fingerprint = (runtime_fingerprint(template_dir(template_id)), visual)
         with self._state_lock:
             seen = self._template_fps.get(template_id)
             self._template_fps[template_id] = fingerprint
@@ -211,7 +214,7 @@ class StudioService:
                 for name in [n for n in sys.modules if n == package or n.startswith(package + ".")]:
                     sys.modules.pop(name, None)
                 registry._cache.pop(template_id, None)
-        return fingerprint
+        return visual
 
     def _spec(self, template_id):
         if not isinstance(template_id, str) or not template_id:
@@ -251,6 +254,8 @@ class StudioService:
             "aspects": [{"id": a, "label": ASPECT_LABELS.get(a, a), "ratio": list(r)} for a, r in ASPECT_RATIOS.items()],
             "qualities": [{"id": q, "label": QUALITY_LABELS[q], **QUALITIES[q]} for q in EXPORT_QUALITIES],
             "formats": copy.deepcopy(FORMAT_INFO),
+            "settings_schema": RenderSettings.model_json_schema(),
+            "music_tracks": music_tracks(),
         }
         with self._state_lock:
             self._catalog_cache = (key, result)
@@ -373,11 +378,21 @@ class StudioService:
         return stamps
 
     def _preview_key(self, spec, params: dict, settings: dict, mode: str, short: int) -> str:
+        visual_settings = {k: v for k, v in settings.items() if k != "sound"}
         payload = {"v": KEY_VERSION, "template": spec.id, "version": spec.meta.version,
                    "files": self._refresh_template(spec.id), "kit": self._kit_fingerprint(),
                    "icons": self._icons_fingerprint(),
-                   "params": params, "settings": settings, "mode": mode, "short": short,
-                   "assets": self._asset_stamps(params, settings)}
+                   "params": params, "settings": visual_settings, "mode": mode, "short": short,
+                   "assets": self._asset_stamps(params, visual_settings)}
+        if mode.startswith("motion-"):
+            from .audio import audio_fingerprint
+            sound = settings.get("sound", {})
+            asset = (sound.get("music") or {}).get("asset")
+            stamp = None
+            if asset:
+                info = os.stat(self.audio_path(asset))
+                stamp = [info.st_mtime_ns, info.st_size]
+            payload["audio"] = [sound, stamp, audio_fingerprint(), runtime_fingerprint(template_dir(spec.id))]
         blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(blob.encode("ascii")).hexdigest()[:32]
 
@@ -403,7 +418,7 @@ class StudioService:
 
     def _render_with_worker(self, job: dict, width: int, height: int, timeout: Optional[float] = None) -> dict:
         worker = self._get_worker()
-        kit = self._kit_fingerprint()
+        kit = (self._kit_fingerprint(), runtime_fingerprint(*KIT_ROOTS))
         if self._worker_kit_fp is not None and kit != self._worker_kit_fp:
             worker.stop()  # the kit changed on disk: it can only be re-imported in a new process
         self._worker_kit_fp = kit
@@ -499,6 +514,7 @@ class StudioService:
         if not isinstance(project, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", project):
             raise _field_error("project", "Use a project or editor session id (1–64 letters, numbers, - or _).")
         spec, params, settings, render_settings = self._validate(template, params, settings)
+        self._validate_audio(render_settings)
         # pixel_size uses the short side; round even for MP4's yuv420p encoder.
         aspect = ASPECT_RATIOS[render_settings.aspect]
         width = max(2, round(LONG_SIDE * aspect[0] / max(aspect) / 2) * 2)
@@ -548,6 +564,8 @@ class StudioService:
             raise TemplateError("Invalid export settings.", errors)
         title = self._title(title)
         spec, params, settings, render_settings = self._validate(template, params, settings)
+        if format not in ("gif", "png"):
+            self._validate_audio(render_settings)
         q = QUALITIES[quality]
         width, height = pixel_size(render_settings.aspect, q["short"])
         transparent = render_settings.background.kind == "transparent"
@@ -710,6 +728,60 @@ class StudioService:
 
     async def delete_project(self, project_id: str) -> dict:
         return await asyncio.to_thread(self.delete_project_sync, project_id)
+
+    # -- sound: normalized audio is private workspace content, shared by UI/MCP -------------------
+    def audio_path(self, name):
+        if not isinstance(name, str) or not re.fullmatch(r"audio-[a-f0-9]{32}\.wav", name):
+            raise _field_error("settings.sound.music.asset", "Choose music uploaded to this workspace.")
+        root = os.path.realpath(self.assets_dir)
+        path = os.path.realpath(os.path.join(root, name))
+        if os.path.dirname(path) != root or not os.path.isfile(path):
+            raise _field_error("settings.sound.music.asset", "This music is missing. Upload it again.")
+        return path
+
+    def _validate_audio(self, settings):
+        if settings.sound.music.asset and settings.sound.music.volume:
+            self.audio_path(settings.sound.music.asset)
+
+    def upload_audio_sync(self, data, filename="music"):
+        if isinstance(data, str):
+            try:
+                data = base64.b64decode(data.split(",", 1)[-1] if data.startswith("data:") else data, validate=True)
+            except (ValueError, binascii.Error):
+                raise _field_error("data", "Send the audio as base64.") from None
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            raise _field_error("data", "Choose an audio file.")
+        if len(data) > MAX_AUDIO_BYTES:
+            raise _field_error("data", "Choose audio smaller than 50 MB.")
+        from .audio import normalize_upload, read_pcm
+        try:
+            normalized = normalize_upload(bytes(data))
+        except ValueError as exc:
+            raise _field_error("data", str(exc)) from None
+        name = f"audio-{hashlib.sha256(normalized).hexdigest()[:32]}.wav"
+        os.makedirs(self.assets_dir, exist_ok=True)
+        path = os.path.join(self.assets_dir, name)
+        if not os.path.isfile(path):
+            try:
+                file_ops.atomic_write(path, normalized, exclusive=True)
+            except FileExistsError:
+                pass
+        title = os.path.basename(str(filename)).replace("\\", "/").rsplit("/", 1)[-1][:120]
+        return {"name": name, "title": title or "Your music", "duration": len(read_pcm(normalized)) / SAMPLE_RATE,
+                "url": f"/api/studio/audio/{name}"}
+
+    async def upload_audio(self, data, filename="music"):
+        return await asyncio.to_thread(self.upload_audio_sync, data, filename)
+
+    async def list_music_tracks(self):
+        return music_tracks()
+
+    async def sound_file(self, kind, name):
+        if (kind == "music" and name in {t["id"] for t in TRACKS}) or (kind == "effects" and name in EFFECTS):
+            from .audio import generated_file
+            return await asyncio.to_thread(generated_file, os.path.join(self.studio_dir, "audio-cache"), name,
+                                           music=kind == "music")
+        raise NotFoundError("That sound isn't available.")
 
     # -- images from agents ---------------------------------------------------------------------
     @staticmethod

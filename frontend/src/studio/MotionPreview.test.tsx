@@ -166,3 +166,16 @@ it("leaves storyboard mode free of playback controls", () => {
   expect(screen.queryByRole("button", { name: "Play animation" })).not.toBeInTheDocument();
   expect(startMotion).not.toHaveBeenCalled();
 });
+
+it("requires an explicit gesture to unmute and offers playback volume", async () => {
+  render(<PreviewPanel {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "Play animation" }));
+  const video = await screen.findByLabelText("Your animation") as HTMLVideoElement;
+  expect(video.muted).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Unmute preview" }));
+  expect(video.muted).toBe(false);
+  fireEvent.change(screen.getByRole("slider", { name: "Preview volume" }), { target: { value: ".3" } });
+  expect(video.volume).toBe(.3);
+  fireEvent.click(screen.getByRole("button", { name: "Mute preview" }));
+  expect(video.muted).toBe(true);
+});

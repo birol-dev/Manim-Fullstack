@@ -79,6 +79,35 @@ export const startMotion = (project: string, request: PreviewRequest) => postJso
 export const getMotion = (id: string) => requestJson<MotionPreview>(`/api/studio/motion/${encodeURIComponent(id)}`);
 export const cancelMotion = (id: string) => requestJson<MotionPreview>(`/api/studio/motion/${encodeURIComponent(id)}`, { method: "DELETE" });
 
+export interface AudioUpload { name: string; title: string; duration: number; url: string }
+export function uploadAudio(file: File, progress: (percent: number) => void, signal?: AbortSignal): Promise<AudioUpload> {
+  if (!/\.(mp3|m4a|aac|wav|ogg)$/i.test(file.name)) return Promise.reject(new Error("Choose an MP3, M4A/AAC, WAV or OGG file."));
+  if (!file.size || file.size > 50 * 1024 * 1024) return Promise.reject(new Error("Choose audio between 1 byte and 50 MB."));
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    xhr.open("POST", apiUrl("/api/studio/audio"));
+    xhr.timeout = 180_000;
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) progress(Math.min(99, Math.round(event.loaded / event.total * 100))); };
+    xhr.onload = () => {
+      cleanup();
+      let body;
+      try { body = JSON.parse(xhr.responseText); } catch { reject(new Error("Couldn't read the upload response.")); return; }
+      if (xhr.status >= 200 && xhr.status < 300) { progress(100); resolve(body); }
+      else reject(new Error(body.detail || "Couldn't upload this music."));
+    };
+    xhr.onerror = () => { cleanup(); reject(new Error(STUDIO_OFFLINE)); };
+    xhr.ontimeout = () => { cleanup(); reject(new Error("The upload took too long. Try again.")); };
+    xhr.onabort = () => { cleanup(); reject(new DOMException("Upload cancelled", "AbortError")); };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) { cleanup(); reject(new DOMException("Upload cancelled", "AbortError")); return; }
+    const body = new FormData();
+    body.append("file", file);
+    xhr.send(body);
+  });
+}
+
 export interface ExportRequest {
   template: string;
   params: Params;

@@ -26,7 +26,7 @@ def test_real_motion_is_capped_silent_and_playable(tmp_path):
     svc = StudioService(str(tmp_path / "motion"))
     try:
         for params, aspect in [({"seconds": 300, "confetti": False}, "16:9"), (SHORT, "9:16")]:
-            job = run(svc.start_motion("editor", "countdown", params, {"aspect": aspect}))
+            job = run(svc.start_motion("editor", "countdown", params, {"aspect": aspect, "sound": {"effects": False}}))
             deadline = time.monotonic() + 150
             while time.monotonic() < deadline:
                 result = run(svc.get_motion(job["id"]))

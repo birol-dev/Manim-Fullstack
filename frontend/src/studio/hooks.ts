@@ -5,7 +5,7 @@ import { ApiError } from "@/lib/api";
 
 import { cancelExport, friendlyError, getCatalog, listExports, requestPreview } from "./api";
 import { ACTIVE_EXPORT } from "./options";
-import { LatestPreview, PosterQueue, stableKey, type PreviewState } from "./preview";
+import { LatestPreview, PosterQueue, visualPreviewKey, type PreviewState } from "./preview";
 import type { Catalog, ExportJob, PreviewRequest, PreviewResponse } from "./types";
 
 export function useCatalog() {
@@ -56,7 +56,7 @@ export function useNearViewport(ref: RefObject<Element | null>, margin = "300px"
 
 /** A gallery poster for *request* (null: not yet). */
 export function usePoster(request: PreviewRequest | null, queue: PosterQueue = posterQueue) {
-  const key = request ? stableKey(request) : null;
+  const key = request ? visualPreviewKey(request) : null;
   const [result, setResult] = useState<{ key: string; response?: PreviewResponse; error?: unknown } | null>(null);
   useEffect(() => {
     if (!key) return;
@@ -92,7 +92,7 @@ const IDLE: PreviewState = { response: null, pending: false, error: null, shownK
 export function useLivePreview(request: PreviewRequest | null, delay = 400) {
   const [state, setState] = useState<PreviewState>(IDLE);
   const scheduler = useRef<LatestPreview | null>(null);
-  const key = request ? stableKey(request) : null;
+  const key = request ? visualPreviewKey(request) : null;
 
   useEffect(() => {
     const preview = new LatestPreview({ fetcher: (body) => requestPreview(body), delay, leading: true, onChange: setState });

@@ -1,5 +1,5 @@
 /** The big live preview, with a storyboard view (a contact sheet of moments from the video). */
-import { AlertTriangle, Image as ImageIcon, LayoutGrid, Pause, Play, RotateCw, X } from "lucide-react";
+import { AlertTriangle, Image as ImageIcon, LayoutGrid, Pause, Play, RotateCw, Volume2, VolumeX, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
 import { apiUrl } from "@/lib/api";
@@ -123,6 +123,9 @@ const CONTROLS_HIDE_MS = 2000;
 function MotionVideo({ url, posterUrl, initialDuration, onError }: { url: string; posterUrl?: string; initialDuration: number; onError: () => void }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [paused, setPaused] = useState(false);
+  const [muted, setMuted] = useState(true);
+  const [volume, setVolume] = useState(.75);
+  useEffect(() => { if (ref.current) ref.current.volume = volume; }, [volume]);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(initialDuration);
   const [controlsShown, setControlsShown] = useState(true);
@@ -174,12 +177,14 @@ function MotionVideo({ url, posterUrl, initialDuration, onError }: { url: string
       if (event.code === "Space" && !event.repeat && event.target === event.currentTarget) { event.preventDefault(); toggle(); }
     }}
   >
-    <video ref={ref} src={apiUrl(url)} poster={posterUrl ? apiUrl(posterUrl) : undefined} autoPlay loop muted playsInline onError={onError}
+    <video ref={ref} src={apiUrl(url)} poster={posterUrl ? apiUrl(posterUrl) : undefined} autoPlay loop muted={muted} playsInline onError={onError}
       onPlay={() => { setControlsShown(true); setPaused(false); }} onPause={() => setPaused(true)}
       onLoadedMetadata={() => { setDuration(ref.current?.duration || 0); void ref.current?.play().catch(() => setPaused(true)); }}
       onTimeUpdate={() => setPosition(ref.current?.currentTime || 0)} aria-label="Your animation" />
     <div className={cn("studio-motion-controls", !controlsVisible && "studio-motion-controls-hidden")} data-controls={controlsVisible ? "shown" : "hidden"}>
       <button type="button" onClick={toggle} aria-label={paused ? "Play animation" : "Pause animation"}>{paused ? <Play /> : <Pause />}</button>
+      <button type="button" aria-label={muted ? "Unmute preview" : "Mute preview"} aria-pressed={!muted} onClick={() => { setMuted(!muted); if (ref.current) { ref.current.muted = !muted; void ref.current.play().catch(() => setPaused(true)); } }}>{muted ? <VolumeX /> : <Volume2 />}</button>
+      {!muted && <input type="range" aria-label="Preview volume" min={0} max={1} step={.05} value={volume} onChange={(event) => setVolume(Number(event.target.value))} style={{ maxWidth: 64 }} />}
       <input type="range" aria-label="Preview position" min={0} max={duration || 1} step={0.05} value={position} onChange={(event) => {
         const time = Number(event.target.value);
         if (ref.current) ref.current.currentTime = time;
