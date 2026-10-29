@@ -509,15 +509,15 @@ def test_export_index_survives_a_restart(tmp_path):
     assert done["id"] not in {e["id"] for e in run(third.list_exports())}
 
 
-def test_history_pruning_deletes_the_export_file(tmp_path):
+def test_history_pruning_keeps_finished_files(tmp_path):
     svc, _ = make_service(tmp_path)
     manager = svc._export_manager()
     manager.max_records = 1
     try:
         first = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft"))["id"])
         second = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft"))["id"])
-        assert [record["id"] for record in manager.list()] == [second["id"]]
-        assert not os.path.exists(os.path.join(svc.exports_dir, first["filename"]))
+        assert [record["id"] for record in manager.list()] == [second["id"], first["id"]]
+        assert os.path.isfile(os.path.join(svc.exports_dir, first["filename"]))
         assert os.path.isfile(os.path.join(svc.exports_dir, second["filename"]))
     finally:
         svc.shutdown_sync()

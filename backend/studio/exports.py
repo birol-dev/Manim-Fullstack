@@ -303,29 +303,35 @@ class ExportManager:
             if changed:
                 self._save_locked()
 
+    def _prunable(self, record: dict) -> bool:
+        """Whether trimming may drop this record from the index.
+
+        A ``done`` record whose file still exists in the exports folder is kept for good:
+        trimming history must never delete a file the person did not delete.
+        """
+        if record.get("status") != "done":
+            return True
+        filename = record.get("filename")
+        if not filename or os.path.basename(filename) != filename:
+            return True
+        root = os.path.realpath(self.exports_dir)
+        path = os.path.realpath(os.path.join(root, filename))
+        try:
+            inside = path != root and os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        return not (inside and os.path.isfile(path))
+
     def _save_locked(self) -> None:
         records = sorted(self._records.values(), key=lambda r: r.get("created", ""), reverse=True)
-        if len(records) > self.max_records:
-            for old in records[self.max_records:]:
-                if old.get("status") in FINISHED:
-                    filename = old.get("filename")
-                    if filename and os.path.basename(filename) == filename:
-                        path = os.path.realpath(os.path.join(self.exports_dir, filename))
-                        root = os.path.realpath(self.exports_dir)
-                        try:
-                            inside = path != root and os.path.commonpath([root, path]) == root
-                        except ValueError:
-                            inside = False
-                        if inside:
-                            try:
-                                os.unlink(os.path.join(self.exports_dir, filename))
-                            except FileNotFoundError:
-                                pass
-                            except OSError as exc:
-                                logger.warning("studio: could not delete pruned export %s (%s)", filename, exc)
-                                continue
-                    self._records.pop(old["id"], None)
-            records = [r for r in records if r["id"] in self._records]
+        prunable = 0
+        for record in records:
+            if not self._prunable(record):
+                continue
+            prunable += 1
+            if prunable > self.max_records:
+                self._records.pop(record["id"], None)  # oldest first; the file (if any) stays
+        records = [r for r in records if r["id"] in self._records]
         data = json.dumps({"version": 1, "exports": [public(r) for r in records]}, indent=1).encode("utf-8")
         try:
             os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
@@ -348,6 +354,14 @@ class ExportManager:
             entry = {"id": export_id, **record, "status": "queued", "progress": None,
                      "message": "Waiting to start", "time_left": None, "created": utc_now(), "_job": dict(job),
                      "_log": deque(maxlen=40)}
+            entry.setdefault("request", {
+                "template": entry.get("template"),
+                "params": dict(job.get("params") or {}),
+                "settings": dict(job.get("settings") or {}),
+                "format": entry.get("format"),
+                "quality": entry.get("quality"),
+                "title": entry.get("title"),
+            })
             self._records[export_id] = entry
             self._save_locked()
             self._ensure_thread()

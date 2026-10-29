@@ -186,6 +186,85 @@ def test_png_finishes_before_becoming_ready(tmp_path):
         manager.shutdown()
 
 
+def _export_manager(tmp_path, **kwargs):
+    options = {"exports_dir": str(tmp_path / "exports"), "work_dir": str(tmp_path / "work"),
+               "index_path": str(tmp_path / "index.json"), "media_root": str(tmp_path),
+               "plan": None, "still": None, "runner_factory": None}
+    return ExportManager(**{**options, **kwargs})
+
+
+def test_history_trimming_never_drops_a_finished_file(tmp_path):
+    manager = _export_manager(tmp_path, max_records=0)
+    manager._ensure_loaded()
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "kept.mp4").write_bytes(b"video")
+    with manager._lock:
+        manager._records = {"aaaaaaaaaaaa": {"id": "aaaaaaaaaaaa", "status": "done", "created": "1",
+                                             "filename": "kept.mp4"}}
+        manager._save_locked()
+    assert [record["id"] for record in manager.list()] == ["aaaaaaaaaaaa"]
+    assert (exports / "kept.mp4").read_bytes() == b"video"
+
+
+def test_history_trimming_drops_only_old_prunable_records(tmp_path):
+    manager = _export_manager(tmp_path, max_records=2)
+    manager._ensure_loaded()
+    exports = tmp_path / "exports"
+    exports.mkdir()
+    (exports / "kept.mp4").write_bytes(b"video")
+    with manager._lock:
+        manager._records = {
+            "aaaaaaaaaaaa": {"id": "aaaaaaaaaaaa", "status": "done", "created": "5", "filename": "kept.mp4"},
+            "bbbbbbbbbbbb": {"id": "bbbbbbbbbbbb", "status": "failed", "created": "4"},
+            "cccccccccccc": {"id": "cccccccccccc", "status": "cancelled", "created": "3"},
+            "dddddddddddd": {"id": "dddddddddddd", "status": "failed", "created": "2"},
+            "eeeeeeeeeeee": {"id": "eeeeeeeeeeee", "status": "done", "created": "1", "filename": "gone.mp4"},
+        }
+        manager._save_locked()
+    # Newest first: the finished file stays, and only two prunable records fit the cap.
+    assert [record["id"] for record in manager.list()] == ["aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"]
+    assert (exports / "kept.mp4").read_bytes() == b"video"
+
+
+def test_export_request_is_saved_and_survives_a_reload(tmp_path):
+    def still(job, width, height, out):
+        Path(out).write_bytes(b"poster")
+
+    first = _export_manager(tmp_path, still=still)
+    try:
+        record = first.start({"template": "countdown", "title": "Timer", "format": "png", "quality": "720p",
+                              "width": 360, "height": 640, "fps": 15},
+                             {"template": "countdown", "params": {"seconds": 7},
+                              "settings": {"theme": "dark"}, "assets_dir": str(tmp_path)})
+        expected = {"template": "countdown", "params": {"seconds": 7}, "settings": {"theme": "dark"},
+                    "format": "png", "quality": "720p", "title": "Timer"}
+        assert record["request"] == expected
+        done = wait_until(lambda: (r if (r := first.get(record["id"]))["status"] == "done" else None))
+        assert done["request"] == expected
+    finally:
+        first.shutdown()
+
+    again = _export_manager(tmp_path, still=still)
+    try:
+        assert again.get(record["id"])["request"] == expected
+    finally:
+        again.shutdown()
+
+
+def test_records_without_a_request_still_load(tmp_path):
+    index = tmp_path / "index.json"
+    index.write_text(json.dumps({"version": 1, "exports": [
+        {"id": "abcdef000001", "status": "failed", "created": "1", "message": "Export failed"},
+    ]}), encoding="utf-8")
+    manager = _export_manager(tmp_path)
+    try:
+        record = manager.get("abcdef000001")
+        assert record["status"] == "failed" and "request" not in record
+    finally:
+        manager.shutdown()
+
+
 @pytest.fixture
 def runner_module(tmp_path):
     manim = pytest.importorskip("manim")

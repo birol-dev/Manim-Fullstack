@@ -389,6 +389,14 @@ function removeExportFile(id: string) {
   return requestJson<unknown>(`/api/studio/exports/${encodeURIComponent(id)}?remove=true`, { method: "DELETE" });
 }
 
+/** The request that made an export, echoed by the API so an old record can be made again. */
+type ExportJobRecord = ExportJob & { request?: ExportRequest | null };
+
+function storedRequest(job: ExportJob): ExportRequest | null {
+  const request = (job as ExportJobRecord).request;
+  return request && typeof request === "object" ? request : null;
+}
+
 const VIDEO_THUMB_FORMATS = new Set<string>(["mp4", "webm"]);
 const IMAGE_THUMB_FORMATS = new Set<string>(["gif", "png"]);
 
@@ -466,17 +474,22 @@ interface ExportRowProps {
   onView?: (job: ExportJob) => void;
   /** Called once the row has finished animating out. */
   onDeleted?: (job: ExportJob) => void;
+  /** Refresh the list, so a started export shows up with its progress. */
+  onRefresh?: () => void;
   /** Narrow rows (the editor's sheet) keep only the download icon. */
   compact?: boolean;
 }
 
-export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }: ExportRowProps) {
+export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact = false }: ExportRowProps) {
   const active = ACTIVE_EXPORT.has(job.status);
   const progress = useExportProgress(job);
-  const finished = job.status === "done" || job.status === "failed";
+  const finished = job.status === "done" || job.status === "failed" || job.status === "cancelled";
+  const canDeleteFile = job.status === "done";
+  const request = storedRequest(job);
   const title = job.title || "Untitled video";
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [leaving, setLeaving] = useState(false);
   useEffect(() => {
     if (!leaving || !onDeleted) return;
@@ -488,7 +501,7 @@ export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }:
     try {
       await removeExportFile(job.id);
       setConfirming(false);
-      toast.success("Export deleted");
+      toast.success(canDeleteFile ? "Export deleted" : "Removed from list");
       setLeaving(true);
     } catch (error) {
       toast.error(friendlyError(error, "Couldn't delete that file."));
@@ -496,8 +509,20 @@ export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }:
       setDeleting(false);
     }
   };
+  const retry = async () => {
+    if (!request || retrying) return;
+    setRetrying(true);
+    try {
+      await startExport(request);
+      onRefresh?.();
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't start that export again."));
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
-    <li className="studio-export-row" data-leaving={leaving || undefined} aria-busy={deleting || undefined}>
+    <li className="studio-export-row" data-leaving={leaving || undefined} aria-busy={deleting || retrying || undefined}>
       <ExportThumb job={job} onOpen={job.status === "done" ? onView : undefined} />
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         {job.status === "done" && onView
@@ -525,12 +550,21 @@ export function ExportRow({ job, onCancel, onView, onDeleted, compact = false }:
           Cancel
         </Button>
       )}
+      {!active && !canDeleteFile && request && (
+        <Button variant="secondary" size="sm" onClick={retry} disabled={retrying}>
+          {retrying ? <Spinner /> : <RotateCw />}
+          Try again
+        </Button>
+      )}
       {finished && <ActionMenu
         className="studio-export-menu"
         title={title}
         items={[
           ...(job.status === "done" && job.url ? [{ label: "Download", icon: <Download aria-hidden />, href: apiUrl(job.url), download: job.filename ?? true }] : []),
-          { label: "Delete file", icon: <Trash2 aria-hidden />, danger: true, onSelect: () => setConfirming(true) },
+          ...(job.status === "done" && request ? [{ label: "Make again", icon: <RotateCw aria-hidden />, onSelect: retry }] : []),
+          canDeleteFile
+            ? { label: "Delete file", icon: <Trash2 aria-hidden />, danger: true, onSelect: () => setConfirming(true) }
+            : { label: "Remove from list", icon: <Trash2 aria-hidden />, danger: true, onSelect: remove },
         ]}
       />}
       <Dialog open={confirming} onOpenChange={(open) => { if (!open && !deleting) setConfirming(false); }}>
@@ -581,7 +615,7 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
     setHidden((current) => new Set(current).add(job.id));
     onRefresh?.();
   };
-  const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} compact={compact} />;
+  const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} onRefresh={onRefresh} compact={compact} />;
   return <>
     {grouped
       ? groupExportsByDay(visible).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>

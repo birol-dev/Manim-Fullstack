@@ -4,6 +4,7 @@ import { Toaster, toast } from "sonner";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { ExportDialog, ExportRow, ExportsPage, ExportsPanel } from "./exports";
+import type { ExportRequest } from "./api";
 import { installFakeStudio } from "./test/fakeStudio";
 import type { ExportJob } from "./types";
 
@@ -24,7 +25,7 @@ const base: ExportJob = {
   duration: 9,
 };
 
-type TestJob = Partial<ExportJob> & { width?: number; height?: number; finished?: number | string };
+type TestJob = Partial<ExportJob> & { width?: number; height?: number; finished?: number | string; request?: ExportRequest };
 
 const job = (overrides: TestJob = {}) => ({ ...base, created: Math.floor(Date.now() / 1000), ...overrides }) as ExportJob;
 
@@ -311,7 +312,7 @@ it("offers Download only for finished files and keeps Cancel on running ones", a
   await user.keyboard("{Escape}");
   await user.click(screen.getByRole("button", { name: "Options for Broken sale" }));
   expect(screen.queryByRole("menuitem", { name: "Download" })).not.toBeInTheDocument();
-  expect(screen.getByRole("menuitem", { name: "Delete file" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Remove from list" })).toBeInTheDocument();
   await user.keyboard("{Escape}");
   expect(screen.queryByRole("button", { name: "Options for Running sale" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
@@ -337,4 +338,60 @@ it("groups finished files by local day, newest first", () => {
   expect(titles("Earlier")).toEqual(["Last week file"]);
   const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
   expect(headings).toEqual(["Today", "Yesterday", "Earlier"]);
+});
+
+const storedRequest = (): ExportRequest => ({ template: "countdown", params: { seconds: 7 }, settings: {}, format: "mp4", quality: "720p", title: "Timer" });
+
+it("starts a failed export again from its stored request and shows the new one", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  const request = storedRequest();
+  studio.exports = [job({ id: "e9", title: "Broken sale", status: "failed", error: "bad", url: null, request })];
+  render(<ExportsPanel open onOpenChange={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports")).toBe(true));
+  expect(studio.calls.find((call) => call.method === "POST" && call.path === "/api/studio/exports")?.body).toEqual(request);
+  expect(await screen.findByText(/Waiting to start…/)).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Timer progress" })).toBeInTheDocument();
+});
+
+it("hides Try again when an old record has no request", () => {
+  renderPage([job({ id: "e2", title: "Broken sale", status: "failed", error: "bad", url: null })]);
+  expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+});
+
+it("gives cancelled rows a menu that removes them from the list", async () => {
+  const user = userEvent.setup();
+  const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ input, init });
+    return { ok: true, status: 200, headers: new Headers(), json: async () => ({}) } as unknown as Response;
+  }));
+  try {
+    const { retry } = renderPage([job({ id: "e3", title: "Stopped sale", status: "cancelled", url: null })]);
+    await user.click(screen.getByRole("button", { name: "Options for Stopped sale" }));
+    await user.click(screen.getByRole("menuitem", { name: "Remove from list" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(String(requests[0].input)).toBe("/api/studio/exports/e3?remove=true");
+    expect(requests[0].init?.method).toBe("DELETE");
+    await waitFor(() => expect(screen.queryByText("Stopped sale")).not.toBeInTheDocument());
+    expect(retry).toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it("offers Make again on a finished file with a stored request", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  const request = storedRequest();
+  studio.exports = [job({ id: "e9", request })];
+  render(<ExportsPanel open onOpenChange={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "Options for Weekend sale" }));
+  await user.click(screen.getByRole("menuitem", { name: "Make again" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.method === "POST" && call.path === "/api/studio/exports")).toBe(true));
+  expect(studio.calls.find((call) => call.method === "POST" && call.path === "/api/studio/exports")?.body).toEqual(request);
 });
