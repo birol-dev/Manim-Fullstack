@@ -9,13 +9,17 @@ app's origin/host middleware and body-size limit apply to it like to every route
 
 from __future__ import annotations
 
+import asyncio
 import functools
+import ipaddress
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import preferences as preferences_module
 from . import service as service_module
+from . import setup_components as setup_components_module
+from . import setup_mcp as setup_mcp_module
 from .errors import StudioError
 from .registry import TemplateError
 
@@ -80,6 +84,108 @@ async def patch_preferences(request: Request):
     """Merge a partial preferences object; invalid values answer 422 with field errors."""
     body = await _body(request, preferences_module.PREFERENCE_KEYS)
     return await get_service().update_preferences(body)
+
+
+def get_setup_mcp():
+    """The AI-app connector the setup routes use (tests swap this)."""
+    return setup_mcp_module.McpSetup()
+
+
+def get_setup_components():
+    """The add-on detector and installer of the service's workspace (tests swap this)."""
+    return get_service().setup_manager()
+
+
+class _SetupForbidden(StudioError):
+    status = 403
+
+
+def _require_local(request: Request) -> None:
+    """Connecting apps, installing add-ons and opening folders are for this computer only."""
+    host = request.client.host if request.client else ""
+    if host in ("", "testclient", "localhost"):
+        return
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        pass
+    raise _SetupForbidden("This can only be changed from this computer.")
+
+
+def default_connection(base_url: str) -> dict:
+    """The record for an app that installed no builder of its own (the bare router)."""
+    service = get_service()
+    return setup_mcp_module.connection_record(base_url, service.workspace_dir, service.app_root)
+
+
+# The app installs its own builder where it includes this router (main.py), so the
+# setup routes never import the server to ask it what connection it publishes.
+connection_provider = default_connection
+
+
+def set_connection_provider(provider) -> None:
+    """Install the record builder the setup routes read."""
+    global connection_provider
+    connection_provider = provider
+
+
+async def _connection(request: Request) -> dict:
+    """The record GET /api/studio/connection publishes, so a saved entry cannot drift."""
+    return connection_provider(str(request.base_url).rstrip("/"))
+
+
+def _setup_status(manager, setup, connection: dict) -> dict:
+    return {
+        "platform": manager.platform,
+        "mode": manager.mode,
+        "components": manager.components(),
+        "ai_apps": setup.entries(connection),
+        "data_folder": manager.workspace,
+    }
+
+
+@router.get("/setup/status")
+@_errors
+async def get_setup_status(request: Request):
+    """What is ready, what is optional, and which AI apps are already connected."""
+    connection = await _connection(request)
+    return await asyncio.to_thread(_setup_status, get_setup_components(), get_setup_mcp(), connection)
+
+
+@router.post("/setup/ai-apps/{app_id}/connect")
+@_errors
+async def post_setup_connect(app_id: str, request: Request):
+    """Add this app's entry to one AI assistant's settings (a backup is kept once)."""
+    _require_local(request)
+    connection = await _connection(request)
+    return await asyncio.to_thread(get_setup_mcp().connect, app_id, connection)
+
+
+@router.delete("/setup/ai-apps/{app_id}/connect")
+@_errors
+async def delete_setup_connect(app_id: str, request: Request):
+    """Remove only our entry from that app's settings."""
+    _require_local(request)
+    connection = await _connection(request)
+    return await asyncio.to_thread(get_setup_mcp().disconnect, app_id, connection)
+
+
+@router.post("/setup/components/{component_id}/install", status_code=202)
+@_errors
+async def post_setup_install(component_id: str, request: Request):
+    """Start one add-on download; progress shows in GET /setup/status."""
+    _require_local(request)
+    return await asyncio.to_thread(get_setup_components().install, component_id)
+
+
+@router.post("/setup/reveal-data-folder", status_code=204)
+@_errors
+async def post_setup_reveal(request: Request):
+    """Show the workspace's data folder in the system's file manager."""
+    _require_local(request)
+    await asyncio.to_thread(setup_components_module.reveal_folder, get_service().workspace_dir)
+    return Response(status_code=204)
 
 
 @router.get("/peeks/{key}.mp4")

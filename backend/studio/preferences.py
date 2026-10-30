@@ -64,6 +64,36 @@ def _colors(value):
     return colors
 
 
+def _brand_name(value):
+    if not isinstance(value, str):
+        raise _error("brand_name", "Use text.")
+    if len(value) > 80:
+        raise _error("brand_name", "Use at most 80 characters.")
+    return value
+
+
+def _optional_text(field: str, limit: int):
+    def check(value):
+        if value is None:
+            return None
+        if not isinstance(value, str) or len(value) > limit:
+            raise _error(field, f"Use text of at most {limit} characters, or null.")
+        return value
+
+    return check
+
+
+def _optional_hex(field: str):
+    def check(value):
+        if value is None:
+            return None
+        if not isinstance(value, str) or not _HEX.match(value.strip()):
+            raise _error(field, "Use a hex color like #2563EB, or null.")
+        return "#" + value.strip().lstrip("#").upper()
+
+    return check
+
+
 def _seen(value):
     if not isinstance(value, list):
         raise _error("seen_exports", "Use a list of export ids.")
@@ -85,6 +115,11 @@ SCHEMA = {
     "template_categories_open": _categories,
     "recent_colors": _colors,
     "seen_exports": _seen,
+    "onboarding_done": _boolean("onboarding_done"),
+    "brand_name": _brand_name,
+    "brand_color": _optional_hex("brand_color"),
+    "default_format": _optional_text("default_format", 32),
+    "default_theme": _optional_text("default_theme", 64),
 }
 PREFERENCE_KEYS = tuple(SCHEMA)
 

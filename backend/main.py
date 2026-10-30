@@ -53,6 +53,7 @@ from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 from studio import api as studio_api
 from studio.service import service as studio_service
 from studio.auth import COOKIE, agent_token, app_allowed, bearer, matches
+from studio.setup_mcp import connection_record
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
     UnsafePathError,
@@ -2404,6 +2405,14 @@ async def websocket_render(websocket: WebSocket):
 
 # Template studio (/api/studio): previews under media/studio, data under workspace/studio.
 studio_service.configure(WORKSPACE_DIR, MEDIA_DIR, ASSETS_DIR, app_root=BASE_DIR, prewarm=True)
+
+
+def _studio_connection_record(base_url: str) -> dict:
+    """The connection record the endpoint publishes and the setup routes read."""
+    return connection_record(base_url, WORKSPACE_DIR, BASE_DIR, available=studio_mcp is not None)
+
+
+studio_api.set_connection_provider(_studio_connection_record)
 app.include_router(studio_api.router)
 
 # The SDK is optional for source checkouts that only use the GUI.
@@ -2422,20 +2431,7 @@ except ImportError:
 @app.get("/api/studio/connection")
 async def studio_connection(request: Request):
     """Local connection details for the app's Connect to AI dialog."""
-    base = str(request.base_url).rstrip("/")
-    script = os.path.join(BASE_DIR, "backend", "studio", "mcp_server.py")
-    python = os.path.abspath(sys.executable)
-    if os.environ.get("MANIM_API_TOKEN") and os.environ.get("MANIM_WORKSPACE"):
-        # The desktop shell sets both; its data folder is the workspace's parent.
-        stdio = {"command": python, "args": ["-B", script, "--desktop-data", os.path.dirname(WORKSPACE_DIR)],
-                 "background": True}
-    else:
-        # A source checkout: HTTP only works while this server is running.
-        stdio = {"command": python,
-                 "args": [script, "--url", base, "--token-file", os.path.join(WORKSPACE_DIR, "studio", "mcp-token")],
-                 "background": False}
-    return JSONResponse({"available": studio_mcp is not None, "url": base + "/mcp/",
-                         "token": agent_token(WORKSPACE_DIR), "stdio": stdio},
+    return JSONResponse(_studio_connection_record(str(request.base_url).rstrip("/")),
                         headers={"Cache-Control": "no-store"})
 
 # Serve the built frontend (index.html + static files). /assets is handled above.

@@ -209,6 +209,22 @@ the MCP server (`studio/mcp_server.py`) call. Validation errors come back as
 pasted rows from a spreadsheet). Other keys: `title` (label), `description` (help),
 `maxLength`, `minimum`/`maximum`, `minItems`/`maxItems`, `x-placeholder`, `x-unit`, `x-step`.
 
+## Setup and add-ons
+
+Zero-setup support for people who never open a terminal. `GET /api/studio/setup/status`
+reports the platform and mode, the components (`webview2` on Windows, the Manim
+renderer, and the optional `ffmpeg` and `latex`), the seven AI apps the MCP setup can
+connect (`claude-desktop`, `claude-code`, `cursor`, `vscode`, `windsurf`, `codex`,
+`gemini-cli`), and the data folder. `POST`/`DELETE /setup/ai-apps/{id}/connect` add or
+remove one `manim-studio` entry in that app's own config, using the same command and
+args as `/api/studio/connection`; a damaged config is refused (409) and never written.
+`POST /setup/components/{id}/install` (202) downloads a pinned, SHA-256-checked
+release into `workspace/studio/tools` on Windows, and `POST /setup/reveal-data-folder`
+opens the workspace folder. Changing routes answer 403 to a non-loopback client.
+`setup_mcp.py` keeps one backup per config, writes atomically, preserves every other
+entry and comment, and repairs stale entries at desktop startup; `setup_components.py`
+puts installed tools on PATH for render subprocesses.
+
 ## Agent connections (MCP)
 
 The app mounts Streamable HTTP at `/mcp/`. The gallery's **Connect to AI** button

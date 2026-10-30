@@ -96,6 +96,23 @@ def test_seen_exports_are_capped(store):
             store.update({"seen_exports": bad})
 
 
+def test_setup_preferences_validate_and_persist(store):
+    values = store.update({"onboarding_done": True, "brand_name": "Ana's Studio", "brand_color": "2563eb",
+                           "default_format": "mp4", "default_theme": "midnight"})
+    assert values == {"onboarding_done": True, "brand_name": "Ana's Studio", "brand_color": "#2563EB",
+                      "default_format": "mp4", "default_theme": "midnight"}
+    assert store.update({"brand_color": None, "default_format": None, "default_theme": None}) == {
+        "onboarding_done": True, "brand_name": "Ana's Studio", "brand_color": None,
+        "default_format": None, "default_theme": None}
+
+    with pytest.raises(TemplateError) as info:
+        store.update({"onboarding_done": "yes", "brand_name": "x" * 81, "brand_color": "blue",
+                      "default_format": 3, "default_theme": ["dark"]})
+    assert {e["field"] for e in info.value.errors} == {
+        "onboarding_done", "brand_name", "brand_color", "default_format", "default_theme"}
+    assert store.read()["brand_name"] == "Ana's Studio"
+
+
 def test_a_corrupt_or_oversized_file_reads_as_empty(store):
     os.makedirs(os.path.dirname(store.path), exist_ok=True)
     with open(store.path, "w", encoding="utf-8") as f:

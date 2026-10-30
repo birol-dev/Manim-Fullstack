@@ -40,7 +40,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import host, peeks, preferences, registry
+from . import host, peeks, preferences, registry, setup_components
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -136,6 +136,9 @@ class StudioService:
         self.export_timeout = export_timeout
         self.max_active_exports = int(max_active_exports)
         self.prewarm = bool(prewarm)
+        self.tools_dir = os.path.join(self.studio_dir, "tools")
+        setup_components.add_tools_to_path(self.tools_dir)
+        self._setup_manager = None
         self._worker_factory = worker_factory or self._default_worker
         self._motion_worker_factory = motion_worker_factory or (lambda: PreviewWorker(
             media_dir=os.path.join(self.tmp_dir, "motion-media"), request_timeout=120.0))
@@ -146,7 +149,29 @@ class StudioService:
         self._worker_kit_fp = None
         self._icons_fp = (0.0, None)
         self._catalog_cache = None
+        if self.prewarm and setup_components.mode_name() == "desktop":
+            self._start_setup_repair()
         return self
+
+    def setup_manager(self) -> setup_components.ComponentManager:
+        """The setup screen's detector and installer; one per workspace."""
+        if self._setup_manager is None or self._setup_manager.workspace != self.workspace_dir:
+            self._setup_manager = setup_components.ComponentManager(self.workspace_dir)
+        return self._setup_manager
+
+    def _start_setup_repair(self) -> None:
+        """At a desktop launch, fix saved AI-app entries whose command moved."""
+        workspace, app_root = self.workspace_dir, self.app_root
+
+        def run():
+            try:
+                from . import setup_mcp
+
+                setup_mcp.repair_desktop(workspace, app_root)
+            except Exception as exc:  # noqa: BLE001 - startup repair must not break launch
+                logger.info("studio: AI app connection repair skipped (%s)", exc)
+
+        threading.Thread(target=run, name="studio-setup-repair", daemon=True).start()
 
     # -- lifecycle -----------------------------------------------------------------
     def _default_worker(self):
