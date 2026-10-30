@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AIConnection } from "./api";
-import { ConnectionDialog } from "./ConnectionDialog";
+import { ManualSetup } from "./ConnectionDialog";
 import {
   buildSetupPrompt,
   claudeCodeCommand,
@@ -35,7 +35,7 @@ function serve(connection: unknown) {
 
 async function open(connection: unknown) {
   serve(connection);
-  render(<ConnectionDialog onClose={() => {}} />);
+  render(<ManualSetup />);
   return screen.findByRole("button", { name: "Copy setup prompt" });
 }
 
@@ -45,7 +45,7 @@ function codeCard(label: string) {
   return card as HTMLElement;
 }
 
-describe("ConnectionDialog", () => {
+describe("Manual setup", () => {
   it("puts the stdio command for every app in the prompt and leaves the token out", async () => {
     const user = userEvent.setup();
     const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -158,7 +158,7 @@ describe("ConnectionDialog", () => {
 
     cleanup();
     serve(DESKTOP);
-    render(<ConnectionDialog onClose={() => {}} />);
+    render(<ManualSetup />);
     expect(await screen.findByRole("combobox", { name: "Your AI app" })).toHaveValue("claude-code");
     expect(screen.getByRole("textbox", { name: "Claude Code configuration" }).textContent).toBe(claudeCodeCommand(DESKTOP));
   });

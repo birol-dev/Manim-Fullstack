@@ -1,6 +1,6 @@
 /** Library pages inside the persistent Studio shell. */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, Check, Clapperboard, RotateCw, Search, Video, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ArrowRight, Check, Clapperboard, LayoutGrid, RotateCw, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,11 +13,16 @@ import { inputClass, SectionHeading } from "./components";
 import { ExportsPage } from "./exports";
 import { useExports, useNearViewport, usePoster } from "./hooks";
 import { cardSettings, filterCards, timeAgo, toDate } from "./options";
+import { readBrandName } from "./preferences";
 import { ProjectMenu } from "./ProjectMenu";
 import { routeHash, type Route } from "./router";
-import type { Card, Catalog, PreviewRequest, PreviewResponse, ProjectSummary, TemplateInfo } from "./types";
+import { useSetupStatus } from "./setup";
+import type { Aspect, Card, Catalog, ExportJob, PreviewRequest, PreviewResponse, ProjectSummary, TemplateInfo } from "./types";
 import type { Library } from "./useLibrary";
 import { useCardPeek } from "./useCardPeek";
+import "./home.css";
+
+const ASPECT_RATIO: Record<Aspect, string> = { "16:9": "16 / 9", "9:16": "9 / 16", "1:1": "1 / 1", "4:5": "4 / 5" };
 
 function PosterImage({ url, response, error, peek }: { url?: string | null; response?: PreviewResponse | null; error?: unknown; peek?: ReactNode }) {
   const source = url || response?.url;
@@ -36,17 +41,18 @@ function PosterImage({ url, response, error, peek }: { url?: string | null; resp
   return <span className="studio-shimmer absolute inset-0" aria-hidden />;
 }
 
-function Poster({ card, template, peek }: { card: Card; template: TemplateInfo | undefined; peek: ReactNode }) {
+function Poster({ card, template, peek, aspect }: { card: Card; template: TemplateInfo | undefined; peek: ReactNode; aspect?: Aspect }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearViewport(ref);
-  const request = near ? { template: card.template, params: card.params, settings: cardSettings(card, template), mode: "poster" as const } : null;
+  const settings = { ...cardSettings(card, template), ...(aspect ? { aspect } : {}) };
+  const request = near ? { template: card.template, params: card.params, settings, mode: "poster" as const } : null;
   const { response, error } = usePoster(request);
-  return <div ref={ref} className="studio-poster-well"><PosterImage response={response} error={error} peek={peek} /></div>;
+  return <div ref={ref} className="studio-poster-well" style={aspect ? { aspectRatio: ASPECT_RATIO[aspect] } : undefined}><PosterImage response={response} error={error} peek={peek} /></div>;
 }
 
-function CardTile({ card, template }: { card: Card; template: TemplateInfo | undefined }) {
+function CardTile({ card, template, className }: { card: Card; template: TemplateInfo | undefined; className?: string }) {
   const { video, visible, onCanPlay, onError, cardEvents } = useCardPeek(card.peek_url);
-  return <li><a href={routeHash({ kind: "new", template: card.template, preset: card.id })} className="studio-card" {...cardEvents}>
+  return <li className={className}><a href={routeHash({ kind: "new", template: card.template, preset: card.id })} className="studio-card" {...cardEvents}>
     <Poster card={card} template={template} peek={card.peek_url && <video ref={video} className="studio-card-peek" data-visible={visible} preload="none" muted playsInline aria-hidden="true" tabIndex={-1} onCanPlay={onCanPlay} onError={onError} />} />
     <span className="studio-card-copy"><span className="studio-card-title">{card.title}</span><span className="studio-card-summary">{card.summary}</span></span>
   </a></li>;
@@ -125,28 +131,143 @@ function ProjectTiles({ projects, library, home = false }: { projects: ProjectSu
   </>;
 }
 
-const WELCOME_STEPS = ["Pick a template", "Change the words, colors and format", "Export a video"];
+/** One card from each category, so the hero shows a spread of real work. */
+function heroPicks(catalog: Catalog): Array<{ card: Card; template: TemplateInfo | undefined; aspect: Aspect }> {
+  const pools = catalog.sections.map((section) => section.cards).filter((cards) => cards.length > 0);
+  const picks: Card[] = [];
+  for (let round = 0; round < 4 && picks.length < 3; round += 1) {
+    for (const pool of pools) {
+      const card = pool[round];
+      if (card && !picks.some((picked) => picked.template === card.template && picked.id === card.id)) picks.push(card);
+      if (picks.length === 3) break;
+    }
+  }
+  const templates = new Map(catalog.templates.map((template) => [template.id, template]));
+  return picks.map((card, index) => {
+    const template = templates.get(card.template);
+    const wanted: Aspect = index === 1 ? "9:16" : "16:9";
+    const aspect = template?.aspects.includes(wanted) ? wanted : template?.default_aspect ?? wanted;
+    return { card, template, aspect };
+  });
+}
 
-/** A quiet three-step nudge for a library with nothing in it yet. */
-function WelcomeSteps() {
-  return <ol className="studio-welcome-steps" aria-label="How making a video works">
-    {WELCOME_STEPS.map((step, index) => <li key={step}><span className="studio-welcome-number">{index + 1}</span><span>{step}</span></li>)}
-  </ol>;
+const HERO_TILTS = [-4, 3, -2];
+
+function HomeHero({ catalog }: { catalog: Catalog }) {
+  const frames = useMemo(() => heroPicks(catalog), [catalog]);
+  const brandName = readBrandName();
+  return <section className="studio-home-hero" aria-labelledby="studio-home-title">
+    <div className="studio-home-hero-copy">
+      {brandName && <p className="studio-home-greeting">Welcome, {brandName}</p>}
+      <h1 id="studio-home-title" className="studio-display studio-home-headline">
+        <span className="studio-display-fade">What are you</span>{" "}
+        <em className="studio-home-special">making?</em>
+      </h1>
+      <p className="studio-home-promise">Pick a template, change the words, and export a video. Everything is ready to go.</p>
+      <a href="#/templates" className="studio-home-cta">Browse templates <ArrowRight aria-hidden /></a>
+    </div>
+    {frames.length > 0 && <div className="studio-home-hero-media" aria-hidden="true">
+      {frames.map(({ card, template, aspect }, index) => <figure
+        key={`${card.template}/${card.id}`}
+        className={`studio-home-frame studio-home-frame-${index}`}
+        style={{ "--frame-tilt": `${HERO_TILTS[index] ?? 0}deg` } as CSSProperties}
+      >
+        <Poster card={card} template={template} aspect={aspect} peek={null} />
+      </figure>)}
+    </div>}
+  </section>;
+}
+
+/** Four small steps, hidden for good once all of them are done. */
+function SetupTray({ projects, exports }: { projects: ProjectSummary[] | null; exports: ExportJob[] | null }) {
+  const { status } = useSetupStatus();
+  const brandName = readBrandName();
+  const steps = [
+    { id: "video", title: "Make your first video", line: "Pick a template and make it yours.", done: (projects?.length ?? 0) > 0, href: "#/templates" },
+    { id: "export", title: "Export a video", line: "Turn it into a file you can share.", done: exports?.some((job) => job.status === "done") ?? false, href: "#/exports" },
+    { id: "ai", title: "Connect your AI", line: "Let your assistant make videos with you.", done: status?.ai_apps.some((app) => app.connected) ?? false, href: "#/settings/ai" },
+    { id: "name", title: "Tell us your name", line: "It goes on what you make.", done: !!brandName, href: "#/settings/profile" },
+  ];
+  const done = steps.filter((step) => step.done).length;
+  if (done === steps.length) return null;
+  const next = steps.find((step) => !step.done)?.id;
+  return <section className="studio-home-setup" aria-labelledby="studio-home-setup-title">
+    <div className="studio-home-setup-head">
+      <h2 id="studio-home-setup-title">Finish your setup — {done}/4</h2>
+      <p>Four small steps and you're ready to make videos.</p>
+    </div>
+    <ul className="studio-home-setup-grid">
+      {steps.map((step, index) => <li key={step.id}>
+        <a href={step.href} className="studio-home-setup-card" data-done={step.done ? "true" : undefined} data-next={step.id === next ? "true" : undefined}>
+          <span className="studio-home-setup-mark" aria-hidden>{step.done ? <Check /> : index + 1}</span>
+          <span className="studio-home-setup-copy">
+            <span className="studio-home-setup-title">{step.done && <span className="sr-only">Done: </span>}{step.title}</span>
+            <span className="studio-home-setup-line">{step.line}</span>
+          </span>
+        </a>
+      </li>)}
+    </ul>
+  </section>;
+}
+
+function Home({ catalog, library, exports }: { catalog: Catalog; library: Library; exports: ReturnType<typeof useExports> }) {
+  const templates = useMemo(() => new Map(catalog.templates.map((template) => [template.id, template])), [catalog.templates]);
+  const chapters = catalog.sections.filter((section) => section.cards.length > 0);
+  const jobs = Array.isArray(exports?.jobs) ? exports.jobs : null;
+  return <div className="studio-home">
+    <HomeHero catalog={catalog} />
+    <SetupTray projects={library.projects} exports={jobs} />
+    <YourVideos library={library} home />
+    {chapters.length > 0 && <div className="studio-home-chapters">
+      {chapters.map((section, index) => <section key={section.id} className="studio-home-chapter" aria-labelledby={`home-section-${section.id}`}>
+        <div className="studio-home-chapter-head">
+          <div className="studio-index-line">
+            <span className="studio-home-chapter-number" aria-hidden>{String(index + 1).padStart(2, "0")}</span>
+            <h2 id={`home-section-${section.id}`} className="studio-home-chapter-title">{section.title}</h2>
+          </div>
+          <a className="studio-see-all" href={routeHash({ kind: "templates", category: section.id })}>See all {section.cards.length} <ArrowRight aria-hidden /></a>
+        </div>
+        <ul className="studio-home-zigzag">
+          {section.cards.slice(0, 4).map((card, cardIndex) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} className={`studio-home-zig-${cardIndex}`} />)}
+        </ul>
+      </section>)}
+    </div>}
+    <section className="studio-chapter-dark studio-home-ai" aria-labelledby="studio-home-ai-title">
+      <h2 id="studio-home-ai-title" className="studio-display studio-home-ai-title">
+        <span className="studio-display-fade">Let your AI assistant</span>{" "}
+        <em className="studio-home-special">make</em> the video.
+      </h2>
+      <p className="studio-home-ai-line">Claude, Cursor, VS Code, Windsurf, Codex and Gemini can make videos with you. Connect the one you use.</p>
+      <Button asChild size="md"><a href="#/settings/ai">Connect your AI <ArrowRight aria-hidden /></a></Button>
+    </section>
+  </div>;
 }
 
 function YourVideos({ library, home = false }: { library: Library; home?: boolean }) {
   const [sort, setSort] = useState("edited");
   const { projects, error, retry } = library;
   const sorted = [...(projects ?? [])].sort((a, b) => !home && sort === "name" ? (a.title || "Untitled video").localeCompare(b.title || "Untitled video") : (toDate(b.updated)?.getTime() ?? 0) - (toDate(a.updated)?.getTime() ?? 0));
-  if (home && projects?.length === 0 && !error) return <WelcomeSteps />;
-  return <section aria-labelledby="your-videos" className="studio-gallery-section">
-    <SectionHeading id="your-videos" action={home ? <a href="#/videos" className="studio-see-all">See all <ArrowRight aria-hidden /></a> : <div className="studio-video-sort"><label htmlFor="video-sort">Sort by</label><Select value={sort} onValueChange={setSort}><SelectTrigger id="video-sort" aria-label="Sort videos"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="edited">Last edited</SelectItem><SelectItem value="name">Name</SelectItem></SelectContent></Select></div>}>
-      {home ? "Continue editing" : projects ? `${projects.length} ${projects.length === 1 ? "video" : "videos"}` : "Your library"}
-    </SectionHeading>
-    {!!error && <div role="alert" className="studio-inline-error"><span>Couldn't load your videos. {friendlyError(error)}</span><Button size="sm" variant="secondary" onClick={retry}><RotateCw /> Try again</Button></div>}
-    {projects === null && !error ? <div role="status" aria-label="Loading your videos"><ul className="studio-template-grid">{[0, 1, 2, 3].map((key) => <CardSkeleton key={key} />)}</ul></div> : projects?.length === 0 && !error ? <div className="studio-empty-state">
-      <Video aria-hidden /><h2>No videos yet</h2><p>Pick a template to make your first one.</p><Button asChild size="md"><a href="#/templates">Browse templates <ArrowRight /></a></Button>
-    </div> : <ProjectTiles projects={home ? sorted.slice(0, 4) : sorted} library={library} home={home} />}
+  const errorBanner = !!error && <div role="alert" className="studio-inline-error"><span>Couldn't load your videos. {friendlyError(error)}</span><Button size="sm" variant="secondary" onClick={retry}><RotateCw /> Try again</Button></div>;
+  if (home) {
+    if (!error && (!projects || projects.length === 0)) return null;
+    return <section aria-labelledby="studio-home-recent" className="studio-gallery-section">
+      <SectionHeading id="studio-home-recent" action={<a href="#/videos" className="studio-see-all">See all <ArrowRight aria-hidden /></a>}>Continue editing</SectionHeading>
+      {errorBanner}
+      {projects && projects.length > 0 && <ProjectTiles projects={sorted.slice(0, 4)} library={library} home />}
+    </section>;
+  }
+  return <section aria-label="Video library" className="studio-videos-page">
+    <div className="studio-videos-toolbar">
+      <p className="studio-videos-count">{projects ? `${projects.length} ${projects.length === 1 ? "video" : "videos"}` : "Your library"}</p>
+      <div className="studio-video-sort"><label htmlFor="video-sort">Sort by</label><Select value={sort} onValueChange={setSort}><SelectTrigger id="video-sort" aria-label="Sort videos"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="edited">Last edited</SelectItem><SelectItem value="name">Name</SelectItem></SelectContent></Select></div>
+    </div>
+    {errorBanner}
+    {projects === null && !error ? <div role="status" aria-label="Loading your videos"><ul className="studio-template-grid">{[0, 1, 2, 3].map((key) => <CardSkeleton key={key} />)}</ul></div> : projects?.length === 0 && !error ? <div className="studio-empty" role="status">
+      <div className="studio-empty-picture studio-empty-video"><Video aria-hidden /></div>
+      <h2>No videos yet</h2>
+      <p>Pick a template, change the words, and it saves here on its own.</p>
+      <div className="studio-empty-actions"><Button asChild size="md"><a href="#/templates">Browse templates <ArrowRight aria-hidden /></a></Button></div>
+    </div> : <ProjectTiles projects={sorted} library={library} />}
   </section>;
 }
 
@@ -158,43 +279,64 @@ function matchesVideo(project: ProjectSummary, query: string) {
   return words.every((word) => title.includes(word));
 }
 
-export function Gallery({ catalog, route, library, exports }: { catalog: Catalog; route: Route; library: Library; exports: ReturnType<typeof useExports> }) {
-  const templates = useMemo(() => new Map(catalog.templates.map((template) => [template.id, template])), [catalog.templates]);
-  if (route.kind === "videos") return <YourVideos library={library} />;
-  if (route.kind === "exports") return <ExportsPage exports={exports} />;
-  const home = route.kind === "gallery";
-  const category = route.kind === "templates" ? route.category : undefined;
-  const query = route.kind === "templates" ? route.query ?? "" : "";
-  const sections = catalog.sections.filter((section) => !category || section.id === category).map((section) => ({ ...section, cards: filterCards(section.cards, query, templates) })).filter((section) => section.cards.length);
-  const cards = filterCards(sections.flatMap((section) => section.cards), query, templates);
-  const videos = query ? (library.projects ?? []).filter((project) => matchesVideo(project, query)) : [];
+function EmptyTemplates({ query, category }: { query: string; category?: string }) {
+  const clearSearch = routeHash({ kind: "templates", ...(category ? { category } : {}) });
+  return <div className="studio-empty" role="status">
+    <div className="studio-empty-picture"><LayoutGrid aria-hidden /></div>
+    <h2>{query ? `Nothing matches "${query}"` : "No templates here yet"}</h2>
+    <p>{query ? "Try another word, or look through everything." : "Pick another category, or see everything we have."}</p>
+    <div className="studio-empty-actions">
+      {query && <Button asChild size="md"><a href={clearSearch}>Clear search</a></Button>}
+      <a className="studio-empty-link" href="#/templates">See all templates</a>
+    </div>
+  </div>;
+}
+
+interface TemplatesProps {
+  catalog: Catalog;
+  category?: string;
+  query: string;
+  templates: Map<string, TemplateInfo>;
+  library: Library;
+  cards: Card[];
+  videos: ProjectSummary[];
+}
+
+function TemplatesPage({ catalog, category, query, templates, library, cards, videos }: TemplatesProps) {
   const summary = query
     ? `${[
       videos.length ? `${videos.length} ${videos.length === 1 ? "video" : "videos"}` : "",
       cards.length ? `${cards.length} ${cards.length === 1 ? "template" : "templates"}` : "",
     ].filter(Boolean).join(" and ")} matching “${query}”`
     : `${cards.length} ${cards.length === 1 ? "template" : "templates"}`;
-  return <div className="studio-gallery-content">
-    {home ? <>
-      <header className="studio-gallery-hero"><h1>What are you making?</h1><p>Pick a starting point. You can change every word, color and format, then export a video.</p></header>
-      <YourVideos library={library} home />
-      <div className="studio-template-intro"><h2>Start from a template</h2></div>
-      {sections.map((section) => <section key={section.id} aria-labelledby={`section-${section.id}`} className="studio-gallery-section">
-        <SectionHeading id={`section-${section.id}`} action={<a href={routeHash({ kind: "templates", category: section.id })} className="studio-see-all" aria-label={`See all ${section.title}`}>See all <ArrowRight aria-hidden /></a>}>{section.title}</SectionHeading>
-        <ul className="studio-template-grid studio-home-row">{section.cards.slice(0, 4).map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
-      </section>)}
-    </> : cards.length === 0 && videos.length === 0 ? <div className="studio-empty-state" role="status"><Search aria-hidden /><p>{query ? `Nothing matches "${query}". Try another word.` : "No designs in this category yet."}</p><Button asChild variant="secondary" size="md"><a href="#/templates">Show all designs</a></Button></div> : <div className="studio-search-results">
-      <p className="studio-results-count" role="status">{summary}</p>
-      {videos.length > 0 && <section className="studio-gallery-section" aria-labelledby="studio-video-results">
-        <SectionHeading id="studio-video-results">Your videos</SectionHeading>
-        <ProjectTiles projects={videos} library={library} />
-      </section>}
-      {cards.length > 0 && <section className="studio-gallery-section" aria-label="Templates">
-        {videos.length > 0 && <SectionHeading>Templates</SectionHeading>}
-        <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
-      </section>}
-    </div>}
+  const categoryHref = (id?: string) => routeHash({ kind: "templates", ...(id ? { category: id } : {}), ...(query ? { query } : {}) });
+  return <div className="studio-templates-page">
+    <nav className="studio-template-categories" aria-label="Browse templates">
+      <a href={categoryHref()} className="studio-category-pill" aria-label="All templates" aria-current={!category ? "page" : undefined}>All</a>
+      {catalog.sections.map((section) => <a key={section.id} href={categoryHref(section.id)} className="studio-category-pill" aria-label={`${section.title}, ${section.cards.length} ${section.cards.length === 1 ? "template" : "templates"}`} aria-current={category === section.id ? "page" : undefined}>{section.title}</a>)}
+    </nav>
+    <p className="studio-results-count" role="status">{summary}</p>
+    {videos.length > 0 && <section className="studio-gallery-section" aria-label="Your videos">
+      <SectionHeading>Your videos</SectionHeading>
+      <ProjectTiles projects={videos} library={library} />
+    </section>}
+    {cards.length > 0 ? <section className="studio-gallery-section" aria-label="Templates">
+      {videos.length > 0 && <SectionHeading>Templates</SectionHeading>}
+      <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
+    </section> : videos.length === 0 ? <EmptyTemplates query={query} category={category} /> : null}
   </div>;
+}
+
+export function Gallery({ catalog, route, library, exports }: { catalog: Catalog; route: Route; library: Library; exports: ReturnType<typeof useExports> }) {
+  const templates = useMemo(() => new Map(catalog.templates.map((template) => [template.id, template])), [catalog.templates]);
+  if (route.kind === "videos") return <YourVideos library={library} />;
+  if (route.kind === "exports") return <ExportsPage exports={exports} />;
+  if (route.kind === "gallery") return <Home catalog={catalog} library={library} exports={exports} />;
+  const category = route.kind === "templates" ? route.category : undefined;
+  const query = route.kind === "templates" ? route.query ?? "" : "";
+  const cards = filterCards(catalog.sections.filter((section) => !category || section.id === category).flatMap((section) => section.cards), query, templates);
+  const videos = query ? (library.projects ?? []).filter((project) => matchesVideo(project, query)) : [];
+  return <TemplatesPage catalog={catalog} category={category} query={query} templates={templates} library={library} cards={cards} videos={videos} />;
 }
 
 function CardSkeleton() {

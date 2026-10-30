@@ -9,6 +9,11 @@
   max-height: 100%;
 }
 
+/* The media is the colour on screen: no ring, no drop shadow, just a small radius so a poster
+   does not cut the well's corner. */
+:root[data-surface="studio"] .studio-preview-frame { border-radius: 12px; box-shadow: none; }
+:root[data-surface="studio"] .studio-preview-frame::after { display: none; }
+
 /* The caption row under the artwork holds the Play pill and the format/duration text. */
 .studio-preview-caption-row {
   display: flex;
@@ -40,11 +45,49 @@
   pointer-events: none;
 }
 
+/* Over a white poster and over a dark one: the pill keeps its own light surface and a hairline
+   that never disappears into the artwork. This is a floating control, so its soft shadow is
+   part of the separation. */
+:root[data-surface="studio"] .studio-motion-controls {
+  border: 1px solid rgb(255 255 255 / .7);
+  color: #1b1b1b;
+  background: rgb(250 250 247 / .92);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .18), 0 14px 32px -16px rgb(0 0 0 / .5);
+  backdrop-filter: blur(18px) saturate(1.1);
+}
+:root[data-surface="studio"] .studio-motion-controls button { border-radius: 999px; color: inherit; }
+:root[data-surface="studio"] .studio-motion-controls button:hover { background: rgb(0 0 0 / .06); }
+:root[data-surface="studio"] .studio-motion-controls button:focus-visible { outline: 2px solid #1b1b1b; outline-offset: 2px; }
+:root[data-surface="studio"] .studio-motion-controls input { accent-color: #1b1b1b; }
+:root[data-surface="studio"] .studio-motion-play:hover { background: rgb(255 255 252 / .98); }
+:root[data-surface="studio"] .studio-motion-progress { background: rgb(27 27 27 / .14); }
+:root[data-surface="studio"] .studio-motion-progress span { background: #1b1b1b; }
+:root[data-surface="studio"] .studio-motion-cap {
+  border: 1px solid rgb(255 255 255 / .7);
+  color: #1b1b1b;
+  background: rgb(250 250 247 / .92);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / .18), 0 10px 24px -14px rgb(0 0 0 / .45);
+  backdrop-filter: blur(18px) saturate(1.1);
+}
+
+/* A chip over the media has the same job: stay readable without tinting the artwork. */
+:root[data-surface="studio"] .studio-updating-chip { background: var(--color-surface); box-shadow: 0 0 0 1px rgb(0 0 0 / .12), 0 10px 28px -18px rgb(0 0 0 / .45); }
+
+/* The preview's own notes: one soft panel, no coloured hairline. */
+:root[data-surface="studio"] .studio-preview-note { border-radius: 12px; background: rgb(255 255 255 / .94); color: var(--color-fg-muted); box-shadow: 0 0 0 1px rgb(0 0 0 / .1); backdrop-filter: blur(12px); }
+:root[data-surface="studio"] .studio-preview-note-action { border-radius: 999px; color: var(--color-fg); font-weight: 500; }
+:root[data-surface="studio"] .studio-preview-note-action:hover { background: var(--color-raised); }
+
+/* Storyboard frames keep their own space; only the shared shadow goes. */
+:root[data-surface="studio"] .studio-storyboard-frame { box-shadow: none; }
+:root[data-surface="studio"] .studio-storyboard-grid figcaption { color: var(--color-fg-muted); font-size: 12px; }
+
+.studio-preview-sound { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-height: 44px; padding: 6px 14px; border: 0; border-radius: 999px; color: var(--color-fg-muted); background: var(--color-surface); font-size: 12.5px; cursor: pointer; transition: background 160ms ease-out, color 160ms ease-out; }
+.studio-preview-sound svg { width: 15px; height: 15px; }
+.studio-preview-sound[aria-pressed="true"] { color: var(--color-fg); background: var(--color-surface); box-shadow: inset 0 0 0 1.5px var(--color-ink); }
+.studio-preview-sound:hover { color: var(--color-fg); }
+.studio-preview-sound:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; }
+
 @media (prefers-reduced-motion: reduce) {
   .studio-motion-video .studio-motion-controls { transition: none; }
 }
-.studio-preview-sound { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex-shrink: 0; min-height: 44px; padding: 6px 10px; border: 1px solid var(--color-line); border-radius: 999px; color: var(--color-fg-muted); background: var(--color-surface); font-size: 12px; cursor: pointer; }
-.studio-preview-sound svg { width: 15px; height: 15px; }
-.studio-preview-sound[aria-pressed="true"] { color: var(--color-accent); border-color: var(--color-accent); }
-.studio-preview-sound:hover { background: var(--color-raised); }
-.studio-preview-sound:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }

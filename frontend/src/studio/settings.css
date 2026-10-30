@@ -1,0 +1,908 @@
+/* Settings: a quiet menu, one form at a time, everything in plain words. */
+
+:root[data-surface="studio"] .studio-settings {
+  display: flex;
+  flex-direction: column;
+  padding-top: clamp(20px, 6vw, 56px);
+}
+
+:root[data-surface="studio"] .studio-settings-title {
+  margin: 0 0 clamp(28px, 5vw, 52px);
+  color: var(--color-fg);
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 1.8rem + 2.8vw, 3.75rem);
+  font-weight: 250;
+  line-height: 1;
+  letter-spacing: -.035em;
+}
+
+:root[data-surface="studio"] .studio-settings-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: clamp(28px, 4vw, 50px);
+}
+
+/* The menu: plain words, one ink pill on the page you are on, no box around the rest. */
+:root[data-surface="studio"] .studio-settings-menu {
+  display: flex;
+  flex: 0 0 220px;
+  flex-direction: column;
+  gap: 2px;
+  width: 220px;
+}
+
+:root[data-surface="studio"] .studio-settings-menu a {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 16px;
+  border-radius: 999px;
+  color: var(--color-fg-muted);
+  font-size: 14px;
+  line-height: 1.3;
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-settings-menu a:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+
+:root[data-surface="studio"] .studio-settings-menu a[aria-current="page"] {
+  background: var(--color-ink);
+  color: var(--color-ink-fg);
+}
+
+:root[data-surface="studio"] .studio-settings-menu a[aria-current="page"]:hover {
+  background: var(--color-ink-hover);
+  color: var(--color-ink-fg);
+}
+
+:root[data-surface="studio"] .studio-settings-body {
+  width: 100%;
+  max-width: 640px;
+  min-width: 0;
+}
+
+/* One section: a small title, a grey line of why, then the fields. */
+:root[data-surface="studio"] .studio-settings-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-section > h2 {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -.015em;
+}
+
+:root[data-surface="studio"] .studio-settings-description {
+  max-width: 58ch;
+  margin: 8px 0 0;
+  color: var(--color-fg-muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+:root[data-surface="studio"] .studio-settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  margin-top: 28px;
+}
+
+:root[data-surface="studio"] .studio-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-label {
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-settings-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+:root[data-surface="studio"] .studio-settings-field .studio-input {
+  min-height: 48px;
+  padding-inline: 20px;
+  border-radius: 999px;
+  border-color: var(--color-line-strong);
+  background: var(--color-surface);
+  font-size: 14px;
+}
+
+:root[data-surface="studio"] .studio-settings-field .studio-input:hover {
+  border-color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-settings-hint {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+:root[data-surface="studio"] .studio-settings-brand-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+:root[data-surface="studio"] .studio-settings-brand-swatch {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+}
+
+:root[data-surface="studio"] .studio-settings-brand-swatch[data-empty="true"] {
+  background: repeating-linear-gradient(135deg, var(--color-raised) 0 4px, var(--color-surface) 4px 8px);
+}
+
+:root[data-surface="studio"] .studio-settings-field > .studio-color-control {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+:root[data-surface="studio"] .studio-settings-field .studio-color-strip {
+  justify-content: flex-start;
+}
+
+:root[data-surface="studio"] .studio-settings-save-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+:root[data-surface="studio"] .studio-settings-save-row :is(button).select-none {
+  height: 42px;
+  padding-inline: 22px;
+}
+
+:root[data-surface="studio"] .studio-settings-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-success);
+  font-size: 12.5px;
+}
+
+:root[data-surface="studio"] .studio-settings-saved svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Picture tiles: one radio group, a drawn miniature and its plain name. */
+:root[data-surface="studio"] .studio-settings-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+:root[data-surface="studio"] .studio-settings-tiles-themes {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+:root[data-surface="studio"] .studio-settings-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 8px;
+  border-radius: 14px;
+  background: var(--color-raised);
+  color: var(--color-fg-muted);
+  text-align: center;
+  transition: background-color 160ms ease-out, box-shadow 160ms ease-out, color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-settings-tile:hover {
+  background: var(--color-line);
+  color: var(--color-fg);
+}
+
+:root[data-surface="studio"] .studio-settings-tile[aria-checked="true"] {
+  background: var(--color-surface);
+  color: var(--color-fg);
+  box-shadow: inset 0 0 0 1.5px var(--color-ink);
+}
+
+:root[data-surface="studio"] .studio-settings-tile:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+:root[data-surface="studio"] .studio-settings-tile-wide {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 12px 16px;
+  text-align: left;
+}
+
+:root[data-surface="studio"] .studio-settings-tile-picture {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-settings-tile-wide .studio-settings-tile-picture {
+  width: 56px;
+  flex-shrink: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-tile-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-tile-title {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+:root[data-surface="studio"] .studio-settings-tile-caption {
+  color: var(--color-fg-subtle);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A rectangle in the chosen shape. */
+:root[data-surface="studio"] .studio-settings-shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 44px;
+}
+
+:root[data-surface="studio"] .studio-settings-shape > span {
+  display: block;
+  height: 100%;
+  max-width: calc(100% - 6px);
+  aspect-ratio: var(--shape-ratio);
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+}
+
+/* Three shapes together: "whatever the template uses". */
+:root[data-surface="studio"] .studio-settings-shape-any {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+:root[data-surface="studio"] .studio-settings-shape-any > span {
+  display: block;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+:root[data-surface="studio"] .studio-settings-shape-any > span:nth-child(1) { width: 20px; height: 12px; }
+:root[data-surface="studio"] .studio-settings-shape-any > span:nth-child(2) { width: 12px; height: 12px; }
+:root[data-surface="studio"] .studio-settings-shape-any > span:nth-child(3) { width: 8px; height: 12px; }
+
+/* A tiny page, drawn: light, dark, or both. */
+:root[data-surface="studio"] .studio-settings-look-picture {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 44px;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture > span {
+  position: relative;
+  width: 46px;
+  height: 32px;
+  border-radius: 6px;
+  background: #fbfbfa;
+  box-shadow: inset 0 0 0 1px #dcdcd8;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture > span::before {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: #c9c9c5;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture > span::after {
+  content: "";
+  position: absolute;
+  bottom: 7px;
+  left: 7px;
+  width: 12px;
+  height: 9px;
+  border-radius: 2px;
+  background: #e8e8e4;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="dark"] > span {
+  background: #1d1d1d;
+  box-shadow: inset 0 0 0 1px #3a3a3a;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="dark"] > span::before { background: #5a5a5a; }
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="dark"] > span::after { background: #303030; }
+
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="system"] > span {
+  background: linear-gradient(90deg, #fbfbfa 0 50%, #1d1d1d 50% 100%);
+  box-shadow: inset 0 0 0 1px #cfcfcb;
+}
+
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="system"] > span::before { background: #9a9a96; }
+:root[data-surface="studio"] .studio-settings-look-picture[data-mode="system"] > span::after { background: #b0b0ac; }
+
+/* A tiny theme sample: its own background, its own words and colours. */
+:root[data-surface="studio"] .studio-settings-theme-picture {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  width: 100%;
+  height: 56px;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+:root[data-surface="studio"] .studio-settings-theme-aa {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+:root[data-surface="studio"] .studio-settings-theme-dots {
+  display: flex;
+  gap: 3px;
+}
+
+:root[data-surface="studio"] .studio-settings-theme-dots > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+:root[data-surface="studio"] .studio-settings-theme-any {
+  background: linear-gradient(100deg, #f4f4f2 0 49%, #171717 51% 100%);
+  color: #8a8a86;
+}
+
+/* AI apps: one row each, a hairline between them, the pill on the right. */
+:root[data-surface="studio"] .studio-settings-apps {
+  display: flex;
+  flex-direction: column;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+:root[data-surface="studio"] .studio-settings-app {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0;
+}
+
+:root[data-surface="studio"] .studio-settings-app + .studio-settings-app {
+  border-top: 1px solid var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-app-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-app-name {
+  color: var(--color-fg);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-settings-app-state {
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-app-hint {
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-app-error {
+  max-width: 56ch;
+  margin: 2px 0 0;
+  color: var(--color-danger);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-app-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+:root[data-surface="studio"] .studio-settings-app-actions :is(button).select-none {
+  height: 34px;
+  padding-inline: 14px;
+}
+
+:root[data-surface="studio"] .studio-settings-app-quiet {
+  padding: 10px 0;
+}
+
+:root[data-surface="studio"] .studio-settings-app-quiet .studio-settings-app-name {
+  color: var(--color-fg-muted);
+}
+
+:root[data-surface="studio"] .studio-settings-app-quiet .studio-settings-app-state {
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-settings-quiet-group {
+  margin-top: 24px;
+}
+
+:root[data-surface="studio"] .studio-settings-quiet-group > h3 {
+  margin: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-line);
+  color: var(--color-fg-subtle);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+:root[data-surface="studio"] .studio-settings-quiet-group .studio-settings-apps {
+  margin-top: 6px;
+}
+
+:root[data-surface="studio"] .studio-settings-state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--color-success-soft);
+  color: var(--color-fg);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+:root[data-surface="studio"] .studio-settings-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-settings-dot[data-tone="ok"] { background: var(--color-success); }
+:root[data-surface="studio"] .studio-settings-dot[data-tone="bad"] { background: var(--color-danger); }
+:root[data-surface="studio"] .studio-settings-dot[data-tone="busy"] { background: var(--color-warning); }
+
+:root[data-surface="studio"] .studio-settings-empty {
+  margin-top: 24px;
+  padding: 56px 24px;
+}
+
+:root[data-surface="studio"] .studio-settings-link {
+  padding: 4px 2px;
+  border-radius: 4px;
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+:root[data-surface="studio"] .studio-settings-link:hover {
+  color: var(--color-fg);
+}
+
+/* The manual route stays folded away until someone asks for it. */
+:root[data-surface="studio"] .studio-settings-manual {
+  margin-top: 36px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-manual > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: var(--color-raised);
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-settings-manual > summary::-webkit-details-marker {
+  display: none;
+}
+
+:root[data-surface="studio"] .studio-settings-manual > summary::after {
+  content: "+";
+  margin-left: 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+:root[data-surface="studio"] .studio-settings-manual[open] > summary {
+  background: var(--color-surface);
+  color: var(--color-fg);
+  box-shadow: inset 0 0 0 1px var(--color-line-strong);
+}
+
+:root[data-surface="studio"] .studio-settings-manual[open] > summary::after {
+  content: "−";
+}
+
+:root[data-surface="studio"] .studio-settings-manual-body {
+  margin-top: 16px;
+}
+
+/* Loading and failures always leave a way forward. */
+:root[data-surface="studio"] .studio-settings-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 0;
+  color: var(--color-fg-muted);
+  font-size: 13px;
+}
+
+:root[data-surface="studio"] .studio-settings-load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+:root[data-surface="studio"] .studio-settings-load-error > p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* This computer: one row per tool, a dot for its state, the action on the right. */
+:root[data-surface="studio"] .studio-settings-system-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 0;
+  color: var(--color-fg);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-system {
+  display: flex;
+  flex-direction: column;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+:root[data-surface="studio"] .studio-settings-system-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+:root[data-surface="studio"] .studio-settings-system-row + .studio-settings-system-row {
+  border-top: 1px solid var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-system-dot {
+  margin-top: 7px;
+}
+
+:root[data-surface="studio"] .studio-settings-system-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-system-name {
+  color: var(--color-fg);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-settings-needed {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-raised);
+  color: var(--color-fg-subtle);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .02em;
+  vertical-align: 1px;
+}
+
+:root[data-surface="studio"] .studio-settings-system-purpose {
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-system-state {
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-settings-system-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+:root[data-surface="studio"] .studio-settings-system-actions :is(button).select-none {
+  height: 34px;
+  padding-inline: 14px;
+}
+
+:root[data-surface="studio"] .studio-settings-progress {
+  position: relative;
+  width: 100%;
+  max-width: 280px;
+  height: 4px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-progress > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--color-ink);
+  transition: width 240ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-settings-progress[data-unknown="true"] > span {
+  width: 35%;
+  animation: studio-settings-progress 1.6s ease-in-out infinite;
+}
+
+@keyframes studio-settings-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+:root[data-surface="studio"] .studio-settings-folder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-folder-copy {
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-settings-folder h3 {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+:root[data-surface="studio"] .studio-settings-folder-path {
+  margin: 4px 0 0;
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* About: the plain facts, then the two other places to go. */
+:root[data-surface="studio"] .studio-settings-about {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 28px 0 0;
+}
+
+:root[data-surface="studio"] .studio-settings-about > div {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+}
+
+:root[data-surface="studio"] .studio-settings-about dt {
+  flex: 0 0 92px;
+  color: var(--color-fg-subtle);
+  font-size: 13px;
+}
+
+:root[data-surface="studio"] .studio-settings-about dd {
+  margin: 0;
+  color: var(--color-fg);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+:root[data-surface="studio"] .studio-settings-links {
+  display: flex;
+  flex-direction: column;
+  margin-top: 36px;
+}
+
+:root[data-surface="studio"] .studio-settings-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--color-line);
+  color: var(--color-fg);
+  transition: color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-settings-link-row:last-child {
+  border-bottom: 1px solid var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-settings-link-row:hover {
+  color: var(--color-ink);
+}
+
+:root[data-surface="studio"] .studio-settings-link-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+:root[data-surface="studio"] .studio-settings-link-copy small {
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+:root[data-surface="studio"] .studio-settings-link-row svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--color-fg-subtle);
+}
+
+@media (max-width: 799px) {
+  :root[data-surface="studio"] .studio-settings-layout {
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  :root[data-surface="studio"] .studio-settings-menu {
+    flex: none;
+    flex-direction: row;
+    width: 100%;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+
+  :root[data-surface="studio"] .studio-settings-menu::-webkit-scrollbar {
+    display: none;
+  }
+
+  :root[data-surface="studio"] .studio-settings-menu a {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 14px;
+    background: var(--color-raised);
+    font-size: 13px;
+  }
+
+  :root[data-surface="studio"] .studio-settings-menu a[aria-current="page"] {
+    background: var(--color-ink);
+  }
+
+  :root[data-surface="studio"] .studio-settings-body {
+    max-width: none;
+  }
+
+  :root[data-surface="studio"] .studio-settings-tiles,
+  :root[data-surface="studio"] .studio-settings-tiles-themes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  :root[data-surface="studio"] .studio-settings-save-row {
+    justify-content: stretch;
+  }
+
+  :root[data-surface="studio"] .studio-settings-save-row :is(button).select-none {
+    width: 100%;
+  }
+
+  :root[data-surface="studio"] .studio-settings-app {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  :root[data-surface="studio"] .studio-settings-app-actions {
+    width: 100%;
+    padding-top: 0;
+  }
+
+  :root[data-surface="studio"] .studio-settings-system-row {
+    gap: 10px;
+  }
+
+  :root[data-surface="studio"] .studio-settings-folder {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

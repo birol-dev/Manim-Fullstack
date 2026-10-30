@@ -1,0 +1,724 @@
+/* The welcome tour: a quiet form on the canvas, a floating preview window that runs off the page.
+   Everything is scoped to the Studio surface and left of Author mode. */
+
+:root[data-surface="studio"] main.studio-onboarding {
+  --onboarding-margin: clamp(16px, 3vw, 56px);
+  --onboarding-top: clamp(72px, 10vh, 120px);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--onboarding-top) var(--onboarding-margin) 0;
+  background: var(--color-canvas);
+  color: var(--color-fg);
+}
+
+/* Logo in the corner, like a gallery's name above the door. */
+:root[data-surface="studio"] .studio-onboarding-logo {
+  position: absolute;
+  top: clamp(18px, 3.4vh, 36px);
+  left: var(--onboarding-margin);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-fg);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  line-height: 1;
+}
+
+:root[data-surface="studio"] .studio-onboarding-logo .studio-brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-logo .studio-brand-mark svg {
+  width: 12px;
+  height: 12px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 470px) minmax(0, 1fr);
+  align-items: start;
+  gap: clamp(40px, 6vw, 90px);
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- The questions ---- */
+:root[data-surface="studio"] .studio-onboarding-form {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: calc(100dvh - var(--onboarding-top) - 24px);
+  overflow-y: auto;
+  padding: 0 2px 32px;
+  scrollbar-width: none;
+}
+
+:root[data-surface="studio"] .studio-onboarding-form::-webkit-scrollbar {
+  display: none;
+}
+
+:root[data-surface="studio"] .studio-onboarding-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 36px;
+  margin-bottom: clamp(20px, 3.4vh, 32px);
+}
+
+:root[data-surface="studio"] .studio-onboarding-back,
+:root[data-surface="studio"] .studio-onboarding-back-spacer {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-back {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--color-fg-muted);
+  transition: background-color 160ms ease-out, color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-back:hover {
+  background: var(--color-raised);
+  color: var(--color-fg);
+}
+
+:root[data-surface="studio"] .studio-onboarding-back svg {
+  width: 18px;
+  height: 18px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-progress {
+  flex: 1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-line);
+}
+
+:root[data-surface="studio"] .studio-onboarding-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-ink);
+  transition: width 280ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-question {
+  margin: 0;
+  color: var(--color-fg);
+  font-family: var(--font-display);
+  font-size: clamp(2.1rem, 1.5rem + 1.7vw, 2.95rem);
+  font-weight: 250;
+  line-height: 1.03;
+  letter-spacing: -.035em;
+  text-wrap: balance;
+}
+
+:root[data-surface="studio"] .studio-onboarding-question:focus {
+  outline: none;
+}
+
+:root[data-surface="studio"] .studio-onboarding-question:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-question em {
+  font-style: italic;
+  font-weight: 250;
+}
+
+:root[data-surface="studio"] .studio-onboarding-question .studio-onboarding-fade {
+  color: var(--studio-display-fade);
+}
+
+:root[data-surface="studio"] .studio-onboarding-help {
+  max-width: 46ch;
+  margin: 20px 0 0;
+  color: var(--color-fg-muted);
+  font-size: 14.5px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+:root[data-surface="studio"] .studio-onboarding-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 24px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-label {
+  color: var(--color-fg);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-onboarding-input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 20px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-size: 15px;
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-input::placeholder {
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-onboarding-input:hover {
+  border-color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-onboarding-input:focus-visible {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* ---- Shape tiles: four soft cards, each a little drawn video in its own colour ---- */
+:root[data-surface="studio"] .studio-onboarding-tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 24px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 18px;
+  background: var(--color-raised);
+  color: var(--color-fg-muted);
+  text-align: left;
+  transition: background-color 160ms ease-out, color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile:hover {
+  background: var(--color-line);
+  color: var(--color-fg);
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile[aria-checked="true"] {
+  background: var(--color-surface);
+  color: var(--color-fg);
+  box-shadow: inset 0 0 0 1.5px var(--color-ink);
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-shape {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 76px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-shape svg {
+  display: block;
+  width: 72px;
+  height: 72px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile-title {
+  color: var(--color-fg);
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+:root[data-surface="studio"] .studio-onboarding-tile-hint {
+  color: var(--color-fg-subtle);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ---- Colour: the shared control, then six ready-made swatches ---- */
+:root[data-surface="studio"] .studio-onboarding-block > .studio-color-control {
+  align-items: flex-start;
+  min-width: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-block .studio-color-strip {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+:root[data-surface="studio"] .studio-onboarding-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-swatch {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .1);
+  transition: box-shadow 140ms ease-out, transform 140ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-swatch:hover {
+  transform: scale(1.06);
+}
+
+:root[data-surface="studio"] .studio-onboarding-swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-ink);
+}
+
+:root[data-surface="studio"] .studio-onboarding-swatch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+/* ---- AI step and the ready step borrow the settings lists ---- */
+:root[data-surface="studio"] .studio-onboarding-ai .studio-settings-apps {
+  margin-top: 8px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-ai .studio-settings-empty {
+  margin-top: 0;
+  padding: 40px 16px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-ai .studio-settings-manual {
+  margin-top: 24px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-line {
+  max-width: 46ch;
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+
+:root[data-surface="studio"] .studio-onboarding-ready .studio-settings-system-summary {
+  margin-top: 12px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-ready .studio-settings-folder {
+  display: none;
+}
+
+:root[data-surface="studio"] .studio-onboarding-check {
+  display: flex;
+  margin-top: 12px;
+}
+
+/* ---- The ink pill, then a quiet way past the question ---- */
+:root[data-surface="studio"] .studio-onboarding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 18px;
+  margin-top: 40px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-actions :is(button).select-none {
+  height: 48px;
+  padding-inline: 26px;
+  font-size: 14.5px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-skip {
+  padding: 8px 4px;
+  border-radius: 999px;
+  color: var(--color-fg-muted);
+  font-size: 13.5px;
+  line-height: 1.3;
+  transition: color 160ms ease-out;
+}
+
+:root[data-surface="studio"] .studio-onboarding-skip:hover {
+  color: var(--color-fg);
+}
+
+:root[data-surface="studio"] .studio-onboarding-skip:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ---- The floating preview window: cropped by the page on purpose ---- */
+:root[data-surface="studio"] .studio-onboarding-preview {
+  align-self: start;
+  width: calc(100% + var(--onboarding-margin) + 24px);
+  min-width: 0;
+  height: calc(100dvh - var(--onboarding-top) + 48px);
+  margin-right: calc(-1 * var(--onboarding-margin) - 24px);
+}
+
+:root[data-surface="studio"] .studio-onboarding-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 32px 0 0 0;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-float);
+}
+
+:root[data-surface="studio"] .studio-onboarding-window-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  height: 54px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-surface);
+}
+
+:root[data-surface="studio"] .studio-onboarding-window-dot {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--color-line-strong);
+}
+
+:root[data-surface="studio"] .studio-onboarding-window-busy {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-onboarding-window-busy svg {
+  width: 15px;
+  height: 15px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-window-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  min-height: 0;
+  overflow: hidden;
+  padding: clamp(24px, 4vw, 56px);
+}
+
+:root[data-surface="studio"] .studio-onboarding-hello {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(20px, 3vh, 32px);
+  width: 100%;
+  min-height: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-hello-greeting {
+  max-width: 22ch;
+  margin: 0;
+  color: var(--color-fg);
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 1.3rem + 1.8vw, 3.1rem);
+  font-weight: 250;
+  line-height: 1.05;
+  letter-spacing: -.035em;
+  text-align: center;
+  text-wrap: balance;
+}
+
+:root[data-surface="studio"] .studio-onboarding-figure {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+  margin: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-figure img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+:root[data-surface="studio"] .studio-onboarding-preview-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-onboarding-preview-dot {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .12);
+}
+
+/* Calm placeholder: a grey picture, then one line saying things still work. */
+:root[data-surface="studio"] .studio-onboarding-preview-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  max-width: 34ch;
+  margin: 0 auto;
+  text-align: center;
+  color: var(--color-fg-muted);
+}
+
+:root[data-surface="studio"] .studio-onboarding-preview-picture {
+  display: grid;
+  place-items: center;
+  width: 120px;
+  height: 120px;
+  border-radius: 24px;
+  background: var(--color-raised);
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-onboarding-preview-picture svg {
+  width: 40px;
+  height: 40px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-preview-empty p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* ---- The illustrative AI conversation ---- */
+:root[data-surface="studio"] .studio-onboarding-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 16px;
+  width: min(100%, 400px);
+  height: 100%;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-label {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-raised);
+  color: var(--color-fg-subtle);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-bubble {
+  max-width: 100%;
+  padding: 16px 18px;
+  border-radius: 18px 18px 18px 6px;
+  background: var(--color-raised);
+  color: var(--color-fg);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-bubble small {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--color-fg-subtle);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-bubble p {
+  margin: 0;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-thumb {
+  display: grid;
+  place-items: center;
+  width: 150px;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--color-raised);
+  color: var(--color-fg-subtle);
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-thumb svg {
+  width: 28px;
+  height: 28px;
+}
+
+:root[data-surface="studio"] .studio-onboarding-chat-note {
+  max-width: 36ch;
+  margin: 0;
+  color: var(--color-fg-subtle);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* ---- Medium screens ---- */
+@media (max-width: 1120px) {
+  :root[data-surface="studio"] .studio-onboarding-stage {
+    grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
+    gap: clamp(32px, 5vw, 64px);
+  }
+}
+
+/* ---- One column: the window moves under the button, still cropped on the right ---- */
+@media (max-width: 899px) {
+  :root[data-surface="studio"] main.studio-onboarding {
+    height: auto;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-bottom: 24px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-stage {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-form {
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-preview {
+    flex: none;
+    width: calc(100% + var(--onboarding-margin) + 24px);
+    height: clamp(240px, 38vh, 340px);
+    margin-right: calc(-1 * var(--onboarding-margin) - 24px);
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-window {
+    border-radius: 28px 0 0 0;
+  }
+}
+
+@media (max-width: 560px) {
+  :root[data-surface="studio"] main.studio-onboarding {
+    --onboarding-top: 84px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-logo {
+    font-size: 14px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-question {
+    font-size: clamp(1.8rem, 1.3rem + 2.4vw, 2.2rem);
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-help {
+    font-size: 14px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-tiles {
+    gap: 8px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-tile {
+    padding: 10px;
+    border-radius: 16px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-shape {
+    height: 64px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-shape svg {
+    width: 62px;
+    height: 62px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-actions {
+    align-items: center;
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-actions :is(button).select-none {
+    width: 100%;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-window-body {
+    gap: 16px;
+    padding: 20px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-hello-greeting {
+    font-size: 1.8rem;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-chat {
+    gap: 12px;
+  }
+
+  :root[data-surface="studio"] .studio-onboarding-chat-thumb {
+    width: 112px;
+  }
+}

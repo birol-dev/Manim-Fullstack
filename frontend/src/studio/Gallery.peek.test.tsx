@@ -1,13 +1,26 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { Gallery } from "./Gallery";
 import { CATALOG } from "./test/fixtures";
+import type { Route } from "./router";
+import type { SetupStatus } from "./setup";
+import type { Catalog, ExportJob, ProjectSummary } from "./types";
+
+let mockSetupStatus: SetupStatus | null = null;
 
 vi.mock("./hooks", () => ({
   useNearViewport: () => true,
   usePoster: () => ({ response: { url: "/still.png", width: 640, height: 360 }, error: null }),
 }));
+
+vi.mock("./setup", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup")>();
+  return {
+    ...actual,
+    useSetupStatus: () => ({ status: mockSetupStatus, error: null, refresh: () => {} }),
+  };
+});
 
 let fine = true;
 let reduced = false;
@@ -19,6 +32,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   fine = true;
   reduced = false;
+  mockSetupStatus = null;
   listeners = new Set();
   vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
     get matches() { return query.includes("reduced-motion") ? reduced : fine; },
@@ -39,14 +53,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function open({ peeks = true, home = false } = {}) {
-  const catalog = structuredClone(CATALOG);
-  for (const section of catalog.sections) {
-    for (const card of section.cards) card.peek_url = peeks ? `/peeks/${card.id}.mp4` : null;
+interface OpenOptions {
+  peeks?: boolean;
+  home?: boolean;
+  route?: Route;
+  projects?: ProjectSummary[];
+  exports?: ExportJob[];
+  catalog?: Catalog;
+}
+
+function open({ peeks = true, home = false, route, projects, exports, catalog: customCatalog }: OpenOptions = {}) {
+  const catalog = customCatalog ?? structuredClone(CATALOG);
+  if (!customCatalog) {
+    for (const section of catalog.sections) {
+      for (const card of section.cards) card.peek_url = peeks ? `/peeks/${card.id}.mp4` : null;
+    }
   }
-  return render(<Gallery catalog={catalog} route={home ? { kind: "gallery" } : { kind: "templates" }}
-    library={{ projects: [{ id: "saved", template: "countdown", title: "Saved timer", updated: 1, poster_url: "/saved.png" }] } as never}
-    exports={{} as never} />);
+  return render(<Gallery catalog={catalog} route={route ?? (home ? { kind: "gallery" } : { kind: "templates" })}
+    library={{ projects: projects ?? [{ id: "saved", template: "countdown", title: "Saved timer", updated: 1, poster_url: "/saved.png" }] } as never}
+    exports={{ jobs: exports ?? [], error: null, cancel: vi.fn(), retry: vi.fn() } as never} />);
 }
 
 function first() {
@@ -213,4 +238,56 @@ it("cancels dwell and playback on unmount", async () => {
   expect(video).not.toHaveAttribute("src");
   await act(() => vi.advanceTimersByTimeAsync(1000));
   expect(play).toHaveBeenCalledTimes(1);
+});
+
+const doneExport: ExportJob = { id: "e1", template: "countdown", format: "mp4", quality: "720p", status: "done", progress: 100, created: 1 };
+
+describe("home setup and chapters", () => {
+  it("shows which setup steps are done and highlights the next one", () => {
+    mockSetupStatus = { platform: "windows", mode: "desktop", components: [], ai_apps: [], data_folder: "C:\\Videos" };
+    open({
+      home: true,
+      projects: [{ id: "p1", title: "My timer", template: "countdown", updated: 1 }],
+      exports: [doneExport],
+    });
+    const tray = screen.getByRole("region", { name: "Finish your setup — 2/4" });
+    expect(within(tray).getByRole("link", { name: /Make your first video/ })).toHaveAttribute("data-done", "true");
+    expect(within(tray).getByRole("link", { name: /Export a video/ })).toHaveAttribute("data-done", "true");
+    expect(within(tray).getByRole("link", { name: /Connect your AI/ })).toHaveAttribute("data-next", "true");
+    expect(within(tray).getByRole("link", { name: /Tell us your name/ })).not.toHaveAttribute("data-done");
+  });
+
+  it("hides the setup tray once every step is done", () => {
+    mockSetupStatus = {
+      platform: "windows",
+      mode: "desktop",
+      components: [],
+      ai_apps: [{ id: "claude-desktop", label: "Claude Desktop", detected: true, connected: true, needs_repair: false, restart_hint: null, error: null }],
+      data_folder: "C:\\Videos",
+    };
+    localStorage.setItem("studio:brand-name", "Ada");
+    open({
+      home: true,
+      projects: [{ id: "p1", title: "My timer", template: "countdown", updated: 1 }],
+      exports: [doneExport],
+    });
+    expect(screen.queryByRole("region", { name: /Finish your setup/ })).not.toBeInTheDocument();
+  });
+
+  it("lays chapters out as a zig-zag and links to the whole chapter", () => {
+    open({ home: true });
+    const chapter = screen.getByRole("region", { name: "Timers & countdowns" });
+    const cards = within(chapter).getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("#/new/"));
+    expect(cards).toHaveLength(2);
+    expect(cards[0].closest("li")).toHaveClass("studio-home-zig-0");
+    expect(cards[1].closest("li")).toHaveClass("studio-home-zig-1");
+    expect(within(chapter).getByRole("link", { name: "See all 2" })).toHaveAttribute("href", "#/templates/timers");
+  });
+
+  it("shows a clear empty state when no template matches the search", () => {
+    open({ route: { kind: "templates", query: "zebra" } });
+    expect(screen.getByRole("heading", { name: 'Nothing matches "zebra"' })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Clear search" })).toHaveAttribute("href", "#/templates");
+    expect(screen.getByRole("link", { name: "See all templates" })).toHaveAttribute("href", "#/templates");
+  });
 });

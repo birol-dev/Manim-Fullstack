@@ -1,7 +1,7 @@
 /** Export dialog (make a file from the video) and the list of recent exports. */
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowRight, Check, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, RotateCw, Trash2, XCircle } from "lucide-react";
+import { ArrowRight, Check, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, Play, RotateCw, Trash2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -621,6 +621,7 @@ export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact
         className="studio-export-menu"
         title={title}
         items={[
+          ...(job.status === "done" && onView ? [{ label: "Open", icon: <Play aria-hidden />, onSelect: () => onView(job) }] : []),
           ...(job.status === "done" && job.url ? [{ label: "Download", icon: <Download aria-hidden />, href: apiUrl(job.url), download: job.filename ?? true }] : []),
           ...(job.status === "done" && capabilities?.reveal ? [{ label: "Show in folder", icon: <FolderOpen aria-hidden />, onSelect: () => showInFolder(job.id) }] : []),
           ...(job.status === "done" && capabilities?.copy_file ? [{ label: "Copy file", icon: <Copy aria-hidden />, onSelect: () => copyFileToClipboard(job.id) }] : []),
@@ -674,6 +675,9 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
   const [viewing, setViewing] = useState<ExportJob | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const visible = jobs.filter((job) => !hidden.has(job.id));
+  // Active jobs sit above the day groups: they are the only thing that needs an answer now.
+  const active = grouped ? visible.filter((job) => ACTIVE_EXPORT.has(job.status)) : [];
+  const finished = grouped ? visible.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
   const forget = (job: ExportJob) => {
     setHidden((current) => new Set(current).add(job.id));
     onRefresh?.();
@@ -681,10 +685,16 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
   const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} onRefresh={onRefresh} compact={compact} />;
   return <>
     {grouped
-      ? groupExportsByDay(visible).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>
-        <h2 id={`studio-export-day-${group.key}`} className="studio-export-day-label">{group.label}</h2>
-        <ul className="studio-exports-list">{group.jobs.map(row)}</ul>
-      </section>)
+      ? <>
+        {active.length > 0 && <section className="studio-export-day" aria-labelledby="studio-export-day-making">
+          <h2 id="studio-export-day-making" className="studio-export-day-label">Making now</h2>
+          <ul className="studio-exports-list">{active.map(row)}</ul>
+        </section>}
+        {groupExportsByDay(finished).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>
+          <h2 id={`studio-export-day-${group.key}`} className="studio-export-day-label">{group.label}</h2>
+          <ul className="studio-exports-list">{group.jobs.map(row)}</ul>
+        </section>)}
+      </>
       : <ul className="studio-exports-list studio-exports-panel-list">{visible.map(row)}</ul>}
     <ExportViewer job={viewing} onClose={() => setViewing(null)} />
   </>;
@@ -720,13 +730,27 @@ export function ExportsPanel({ open, onOpenChange, refreshKey }: { open: boolean
   );
 }
 
-/** The library uses the same rows and cancellation behavior as the editor's sheet. */
+/** The library's exports page: answer "is it ready?" first, then a compact timeline. */
 export function ExportsPage({ exports: { jobs, error, cancel, retry } }: { exports: ReturnType<typeof useExports> }) {
-  return <section className="studio-gallery-section" aria-label="Exported files">
-    <p className="studio-results-count">Files you've made, newest first.</p>
+  const active = jobs?.filter((job) => ACTIVE_EXPORT.has(job.status)).length ?? 0;
+  const ready = jobs?.filter((job) => job.status === "done").length ?? 0;
+  return <section className="studio-exports-page" aria-label="Exported files">
     {!!error && <div role="alert" className="studio-inline-error"><span>Couldn't refresh exports. {friendlyError(error)}</span><Button variant="secondary" size="sm" onClick={retry}><RotateCw /> Try again</Button></div>}
-    {jobs === null && !error ? <p role="status" className="flex items-center gap-2 py-6 text-sm text-fg-muted"><Spinner /> Loading exports…</p> : jobs?.length ? <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} grouped /> : !error && <div className="studio-empty-state">
-      <FolderDown aria-hidden /><h2>No exports yet</h2><p>Open a video and use Export to make your first file.</p><Button asChild size="md"><a href="#/videos">Go to your videos <ArrowRight /></a></Button>
-    </div>}
+    {jobs === null
+      ? !error && <p role="status" className="studio-exports-loading"><Spinner /> Loading exports…</p>
+      : jobs.length === 0
+        ? !error && <div className="studio-empty" role="status">
+          <div className="studio-empty-picture studio-empty-export"><FolderDown aria-hidden /></div>
+          <h2>Nothing exported yet</h2>
+          <p>Finished videos land here, ready to share.</p>
+          <div className="studio-empty-actions"><Button asChild size="md"><a href="#/templates">Make a video <ArrowRight aria-hidden /></a></Button></div>
+        </div>
+        : <>
+          <div className="studio-exports-summary">
+            <p className="studio-exports-answer" role="status">{active > 0 ? `Making ${active === 1 ? "your video" : `${active} videos`}…` : ready > 0 ? "Your videos are ready." : "Nothing to share yet."}</p>
+            <p className="studio-exports-hint">{jobs.length} {jobs.length === 1 ? "file" : "files"} · newest first</p>
+          </div>
+          <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} grouped />
+        </>}
   </section>;
 }

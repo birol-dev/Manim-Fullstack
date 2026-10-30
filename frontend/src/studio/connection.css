@@ -1,22 +1,16 @@
-/* The connection dialog: a scrolling body, a compact app picker and collapsed advanced settings. */
-:root[data-surface="studio"] [data-ui="dialog-content"].studio-connection-dialog {
-  width: min(600px, calc(100vw - 32px));
-  max-width: 600px;
+/* Manual setup: a prompt to copy, a compact app picker and collapsed advanced settings. */
+:root[data-surface="studio"] .studio-manual-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
 :root[data-surface="studio"] .studio-connection-body {
   display: flex;
-  flex: 1;
-  min-height: 0;
   flex-direction: column;
   gap: 16px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-/* In a scrolling column flex items shrink to a sliver: keep each row at its natural height. */
-:root[data-surface="studio"] .studio-connection-body > * {
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 :root[data-surface="studio"] .studio-connection-primary {
@@ -25,7 +19,7 @@
   gap: 8px;
 }
 
-/* A long config scrolls inside its own card instead of making the dialog huge. */
+/* A long config scrolls inside its own card instead of making the page huge. */
 :root[data-surface="studio"] .studio-connection-body .studio-connection-code {
   max-height: 240px;
   overflow: auto;
@@ -37,7 +31,7 @@
   gap: 8px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: var(--color-well);
+  background: var(--color-raised);
   color: var(--color-fg-muted);
   font-size: 12.5px;
   line-height: 1.4;
@@ -53,7 +47,7 @@
   margin: 0;
   color: var(--color-fg);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 :root[data-surface="studio"] .studio-connection-apps {

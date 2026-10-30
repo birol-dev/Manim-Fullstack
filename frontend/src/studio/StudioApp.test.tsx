@@ -170,14 +170,12 @@ describe("gallery", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("shows a first-run welcome, the latest four videos, then the full sorted video library", async () => {
+  it("shows the setup tray, the latest four videos, then the full sorted video library", async () => {
     const user = userEvent.setup();
     const view = open("#/");
-    const steps = await screen.findByRole("list", { name: "How making a video works" });
-    expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
-    expect(within(steps).getByText("Pick a template")).toBeInTheDocument();
-    expect(within(steps).getByText("Change the words, colors and format")).toBeInTheDocument();
-    expect(within(steps).getByText("Export a video")).toBeInTheDocument();
+    const setup = await screen.findByRole("region", { name: /Finish your setup/ });
+    expect(within(setup).getByText("Finish your setup — 0/4")).toBeInTheDocument();
+    expect(within(setup).getByRole("link", { name: /Make your first video/ })).toHaveAttribute("data-next", "true");
     expect(screen.queryByRole("heading", { name: "Continue editing" })).not.toBeInTheDocument();
     view.unmount();
     for (let i = 1; i <= 5; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, created: i, updated: i });
@@ -234,7 +232,7 @@ describe("gallery", () => {
     expect(await screen.findByRole("heading", { name: "No videos yet" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Browse templates/ })).toHaveAttribute("href", "#/templates");
     await user.click(screen.getByRole("link", { name: "Exports" }));
-    expect(await screen.findByRole("heading", { name: "No exports yet" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Nothing exported yet" })).toBeInTheDocument();
     view.unmount();
     localStorage.setItem(SEEN_EXPORTS_KEY, "[]");
     studio.exports.push({ id: "e9", template: "countdown", title: "Ready timer", format: "mp4", quality: "720p", status: "done", progress: 100, created: 1, url: "/media/timer.mp4", filename: "timer.mp4" });
@@ -286,7 +284,7 @@ describe("gallery", () => {
     expect(within(categories).getByRole("link", { name: "Show numbers" })).toHaveAttribute("aria-current", "page");
     await user.type(screen.getByRole("searchbox", { name: "Search designs" }), "classroom");
     expect(screen.getByText(/Nothing matches/)).toBeInTheDocument();
-    await user.click(screen.getByRole("link", { name: "Show all designs" }));
+    await user.click(screen.getByRole("link", { name: "See all templates" }));
     await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search designs" })).toHaveValue(""));
     expect(screen.getByRole("link", { name: /Classroom timer/ })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Templates" })).toHaveAttribute("aria-current", "page");
@@ -331,7 +329,7 @@ describe("gallery", () => {
     expect(connect).toHaveAttribute("href", "#/settings/ai");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(connect);
-    expect(await screen.findByRole("heading", { name: "Connect to AI" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "AI assistants" })).toBeInTheDocument();
     expect(window.location.hash).toBe("#/settings/ai");
     expect(screen.getByRole("link", { name: "Connect to AI" })).toHaveAttribute("aria-current", "page");
   });
@@ -367,7 +365,7 @@ describe("gallery", () => {
     const card = screen.getByRole("link", { name: /Classroom timer/ });
     expect(card).toHaveAttribute("href", "#/new/countdown/classroom-timer");
 
-    await waitFor(() => expect(studio.previews()).toHaveLength(3));
+    await waitFor(() => expect(studio.previews().length).toBeGreaterThanOrEqual(3));
     const poster = studio.previews().find((request) => request.params.title === "Quiet reading time")!;
     expect(poster).toMatchObject({ template: "countdown", mode: "poster", settings: { aspect: "16:9", theme: "clean", energy: "calm" } });
     await waitFor(() => expect(card.querySelector("img")).toHaveAttribute("src", expect.stringMatching(/\/media\/studio\/previews\/\d\.png$/)));

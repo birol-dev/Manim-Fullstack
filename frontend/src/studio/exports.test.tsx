@@ -529,3 +529,20 @@ it("reports a failed copy as a toast", async () => {
   expect(await screen.findByText(problem)).toBeInTheDocument();
   expect(screen.queryByText("Copied — paste it into an email or chat")).not.toBeInTheDocument();
 });
+
+it("shows a helpful empty exports state", () => {
+  renderPage([]);
+  expect(screen.getByRole("heading", { name: "Nothing exported yet" })).toBeInTheDocument();
+  expect(screen.getByText("Finished videos land here, ready to share.")).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Make a video" })).toHaveAttribute("href", "#/templates");
+});
+
+it("puts active exports above the finished ones", () => {
+  renderPage([
+    job({ id: "done", title: "Finished sale" }),
+    job({ id: "running", title: "Running sale", status: "rendering", progress: 25, url: null }),
+  ]);
+  const headings = screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent);
+  expect(headings[0]).toBe("Making now");
+  expect(screen.getByRole("progressbar", { name: "Running sale progress" })).toBeInTheDocument();
+});

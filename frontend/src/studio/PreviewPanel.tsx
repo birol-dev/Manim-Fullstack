@@ -76,13 +76,13 @@ function Stage({ feed, ratio, transparent, label, children }: { feed: PreviewFee
           </span>
         )}
         {(fieldProblems || otherError) && !busy && (
-          <div className="absolute inset-x-2 bottom-2 flex items-center gap-2 rounded-lg border border-warning/30 bg-canvas/85 px-3 py-2 text-xs text-fg-muted backdrop-blur-sm">
+          <div className="studio-preview-note absolute inset-x-2 bottom-2 flex items-center gap-2 px-3 py-2 text-xs">
             <AlertTriangle aria-hidden className="size-4 shrink-0 text-warning" />
             <span className="min-w-0 flex-1">
               {fieldProblems ? "Some fields need a fix before the preview can update. They're marked in red." : otherError}
             </span>
             {otherError && (
-              <button type="button" onClick={feed.retry} className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 font-medium text-fg hover:bg-raised">
+              <button type="button" onClick={feed.retry} className="studio-preview-note-action flex shrink-0 items-center gap-1 px-2 py-1">
                 <RotateCw className="size-3.5" /> Try again
               </button>
             )}

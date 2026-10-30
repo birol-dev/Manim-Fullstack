@@ -3,7 +3,7 @@
 :root[data-surface="studio"] .studio-sidebar { display: flex; height: 100%; min-height: 0; flex-shrink: 0; background: var(--color-surface); }
 
 /* The rail: every destination, in the same place, always visible. */
-:root[data-surface="studio"] .studio-rail-nav { display: flex; flex: 0 0 64px; flex-direction: column; align-items: stretch; gap: 4px; width: 64px; height: 100%; padding: 14px 8px 16px; background: var(--color-surface); }
+:root[data-surface="studio"] .studio-rail-nav { display: flex; flex: 0 0 72px; flex-direction: column; align-items: stretch; gap: 4px; width: 72px; height: 100%; padding: 14px 8px 16px; background: var(--color-surface); }
 :root[data-surface="studio"] .studio-rail-logo { display: grid; place-items: center; width: 48px; height: 48px; margin: 0 auto 8px; border-radius: 16px; transition: background 160ms ease-out; }
 :root[data-surface="studio"] .studio-rail-logo:hover { background: var(--color-raised); }
 :root[data-surface="studio"] .studio-rail-logo .studio-brand-mark { width: 32px; height: 32px; border-radius: 11px; }
@@ -11,12 +11,12 @@
 :root[data-surface="studio"] .studio-rail-tool { display: grid; place-items: center; width: 44px; height: 34px; margin: 0 auto 6px; border-radius: 12px; color: var(--color-fg-subtle); transition: background 160ms ease-out, color 160ms ease-out; }
 :root[data-surface="studio"] .studio-rail-tool:hover { background: var(--color-raised); color: var(--color-fg); }
 :root[data-surface="studio"] .studio-rail-tool svg { width: 17px; height: 17px; }
-:root[data-surface="studio"] .studio-rail-link { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 50px; padding: 6px 2px; border-radius: 16px; color: var(--color-fg-muted); font-size: 9.5px; font-weight: 500; line-height: 1.1; text-align: center; transition: background-color 160ms ease-out, color 160ms ease-out; }
+:root[data-surface="studio"] .studio-rail-link { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 50px; padding: 6px 4px; border-radius: 16px; color: var(--color-fg-muted); font-size: 9px; font-weight: 500; letter-spacing: -0.01em; line-height: 1.15; text-align: center; transition: background-color 160ms ease-out, color 160ms ease-out; }
 :root[data-surface="studio"] .studio-rail-link:hover { background: var(--color-raised); color: var(--color-fg); }
 :root[data-surface="studio"] .studio-rail-link[aria-current="page"] { background: var(--color-ink); color: var(--color-ink-fg); }
 :root[data-surface="studio"] .studio-rail-icon { position: relative; display: flex; flex-shrink: 0; align-items: center; justify-content: center; }
 :root[data-surface="studio"] .studio-rail-icon svg { width: 20px; height: 20px; stroke-width: 1.6; }
-:root[data-surface="studio"] .studio-rail-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+:root[data-surface="studio"] .studio-rail-label { max-width: 100%; text-wrap: balance; }
 :root[data-surface="studio"] .studio-rail-spacer { flex: 1; min-height: 16px; }
 :root[data-surface="studio"] .studio-rail-icon .studio-nav-count { position: absolute; top: -6px; right: -12px; display: grid; place-items: center; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--color-ink-fg); color: var(--color-ink); font-size: 9px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
 :root[data-surface="studio"] .studio-rail-icon .studio-export-activity { position: absolute; top: -2px; right: -3px; width: 7px; height: 7px; border-radius: 999px; background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-surface); }

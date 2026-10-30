@@ -183,7 +183,7 @@ export function DurationWidget({ field, value, onChange, id, describedBy, invali
           onClick={() => step(-30)}
           disabled={atMin}
           aria-label="30 seconds less"
-          className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line-strong bg-raised text-fg-muted hover:bg-overlay hover:text-fg disabled:opacity-40"
+          className="studio-step flex size-9 shrink-0 items-center justify-center text-fg-muted disabled:opacity-40"
         >
           <Minus className="size-4" />
         </button>
@@ -212,7 +212,7 @@ export function DurationWidget({ field, value, onChange, id, describedBy, invali
           onClick={() => step(30)}
           disabled={atMax}
           aria-label="30 seconds more"
-          className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line-strong bg-raised text-fg-muted hover:bg-overlay hover:text-fg disabled:opacity-40"
+          className="studio-step flex size-9 shrink-0 items-center justify-center text-fg-muted disabled:opacity-40"
         >
           <Plus className="size-4" />
         </button>
@@ -272,7 +272,7 @@ export function ArrayChoiceWidget({ value, onChange, id, describedBy, invalid, o
 export function ToggleWidget({ field, value, onChange, id, describedBy }: WidgetProps) {
   const help = field.help ?? field.description;
   return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-line bg-raised/40 px-3 py-2.5">
+    <div className="studio-toggle-row flex items-start justify-between gap-3 px-3 py-2.5">
       <div className="min-w-0">
         <label htmlFor={id} className="text-[13px] font-medium text-fg">
           {field.title}

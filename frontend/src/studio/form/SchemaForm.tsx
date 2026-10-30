@@ -152,7 +152,7 @@ export function SchemaForm({ fields, values, onChange, prefix = "params", classN
   const emphasisPath = inherited === undefined ? firstEmphasisPath(fields, values, prefix) : inherited;
   return (
     <EmphasisPath.Provider value={emphasisPath}>
-      <div className={cn("flex flex-col gap-5", className)}>
+      <div className={cn("flex flex-col gap-7", className)}>
         {fields.map((field) => (
           <FieldRenderer
             key={field.key}

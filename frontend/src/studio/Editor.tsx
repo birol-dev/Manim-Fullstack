@@ -1,6 +1,6 @@
 /** The editor: a form on the left, the live preview on the right, export on top. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, Film, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -21,11 +21,12 @@ import "./editor.css";
 import { LookPanel } from "./LookPanel";
 import { SoundPanel } from "./SoundPanel";
 import { ASPECTS, initialSettings, isPortrait } from "./options";
+import { readBrandColor, readDefaultFormat, readDefaultTheme } from "./preferences";
 import { stableKey } from "./preview";
 import { PreviewPanel, type PreviewView } from "./PreviewPanel";
 import type { Route } from "./router";
 import { fieldPaths, fieldsOf, initialParams } from "./schemaForm";
-import type { Aspect, Catalog, FieldError, Params, PreviewRequest, Project, RenderSettings, TemplateInfo } from "./types";
+import type { Aspect, Catalog, FieldError, Params, PreviewRequest, Project, RenderSettings, TemplateInfo, Theme } from "./types";
 
 const SETTINGS_PATHS = [
   "settings",
@@ -73,18 +74,38 @@ interface EditorPageProps {
   onProjectCreated: (id: string) => void;
 }
 
-function Message({ title, children }: { title: string; children?: React.ReactNode }) {
+function Message({ title, line }: { title: string; line: string }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-      <h1 className="text-lg font-semibold text-fg">{title}</h1>
-      {children}
-      <Button asChild variant="secondary" size="md">
-        <a href="#/">
-          <ArrowLeft /> Back to all designs
-        </a>
-      </Button>
+    <div className="studio-empty h-full">
+      <div className="studio-empty-picture" aria-hidden>
+        <Film />
+      </div>
+      <h1 className="studio-empty-title">{title}</h1>
+      <p className="studio-empty-line">{line}</p>
+      <div className="studio-empty-actions">
+        <Button asChild variant="primary" size="md">
+          <a href="#/">
+            <ArrowLeft /> Back to all designs
+          </a>
+        </Button>
+      </div>
     </div>
   );
+}
+
+/**
+ * A new video starts from its card, then from the workspace's defaults where they fit: a format
+ * this template offers, a theme that exists, and the brand colour. Saved projects skip this.
+ */
+function newVideoSettings(template: TemplateInfo, card: Partial<RenderSettings> | undefined, themes: Theme[]): RenderSettings {
+  const settings = initialSettings(template, card);
+  const format = readDefaultFormat();
+  if (format && template.aspects.includes(format as Aspect)) settings.aspect = format as Aspect;
+  const theme = readDefaultTheme();
+  if (theme && themes.some((item) => item.id === theme)) settings.theme = theme;
+  const accent = readBrandColor();
+  if (accent) settings.brand = { ...settings.brand, accent };
+  return settings;
 }
 
 /** Picks what to edit: a new video from a card, or a saved project. */
@@ -94,12 +115,14 @@ export function EditorPage({ catalog, route, onProjectCreated }: EditorPageProps
   const [opened] = useState(route);
   if (opened.kind === "new") {
     const template = catalog.templates.find((item) => item.id === opened.template);
-    if (!template) return <Message title="This design isn't available anymore." />;
+    if (!template) {
+      return <Message title="This design isn't available anymore." line="The designs have changed. Pick another one to start from." />;
+    }
     const card = template.presets.find((item) => item.id === opened.preset);
     const initial: InitialState = {
       title: card?.title ?? template.title,
       params: initialParams(template.defaults, card?.params),
-      settings: initialSettings(template, card?.settings),
+      settings: newVideoSettings(template, card?.settings, catalog.themes ?? []),
       projectId: null,
       updated: null,
     };
@@ -147,9 +170,10 @@ function ProjectLoader({ catalog, id, onProjectCreated }: { catalog: Catalog; id
   if ("error" in state) {
     const missing = state.error instanceof ApiError && state.error.status === 404;
     return (
-      <Message title={missing ? "This video couldn't be found." : "Couldn't open this video."}>
-        {!missing && <p className="text-sm text-fg-muted">{friendlyError(state.error)}</p>}
-      </Message>
+      <Message
+        title={missing ? "This video couldn't be found." : "Couldn't open this video."}
+        line={missing ? "It may have been deleted, or saved on another computer." : friendlyError(state.error)}
+      />
     );
   }
   return <EditorBody catalog={catalog} template={state.template} initial={state.initial} onProjectCreated={onProjectCreated} />;
@@ -454,7 +478,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
         </div>
       </header>
 
-      {saveError && <p role="alert" className="border-b border-danger/30 bg-danger-soft px-4 py-2 text-xs text-danger">{saveError} Use Retry save to try again.</p>}
+      {saveError && <p role="alert" className="studio-editor-save-error">{saveError} Use Retry save to try again.</p>}
 
       <div className="studio-editor-body">
         <aside className="studio-editor-sidebar">
@@ -476,7 +500,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
             <FormContext.Provider value={formContext}>
               <TabsContent value="content" className="studio-editor-panel">
                 {matched.unmatched.length > 0 && (
-                  <div role="alert" className="mb-4 flex gap-2 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-fg-muted">
+                  <div role="alert" className="studio-editor-problem">
                     <AlertTriangle aria-hidden className="mt-0.5 size-3.5 shrink-0 text-danger" />
                     <ul>
                       {matched.unmatched.map((error) => (
