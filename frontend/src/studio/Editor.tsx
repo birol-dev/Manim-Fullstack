@@ -95,7 +95,7 @@ function Message({ title, line }: { title: string; line: string }) {
 
 /**
  * A new video starts from its card, then from the workspace's defaults where they fit: a format
- * this template offers, a theme that exists, and the brand colour. Saved projects skip this.
+ * this template offers, a theme that exists, and the brand color. Saved projects skip this.
  */
 function newVideoSettings(template: TemplateInfo, card: Partial<RenderSettings> | undefined, themes: Theme[]): RenderSettings {
   const settings = initialSettings(template, card);

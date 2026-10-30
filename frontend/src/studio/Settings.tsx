@@ -191,7 +191,7 @@ function ProfileSection({ catalog }: { catalog: Catalog | null }) {
     setSaved({ name: trimmed, color });
     setJustSaved(true);
   };
-  return <Panel id="profile" title="You" description="Your name and colour make new videos feel like yours.">
+  return <Panel id="profile" title="You" description="Your name and color make new videos feel like yours.">
     <form className="studio-settings-form" onSubmit={(event) => { void submit(event); }}>
       <div className="studio-settings-fields">
         <div className="studio-settings-field">
@@ -209,21 +209,21 @@ function ProfileSection({ catalog }: { catalog: Catalog | null }) {
         </div>
         <div className="studio-settings-field">
           <div className="studio-settings-label-row">
-            <span id={`${id}-color-label`} className="studio-settings-label">Brand colour</span>
+            <span id={`${id}-color-label`} className="studio-settings-label">Brand color</span>
             <span className="studio-settings-brand-value">
               <span className="studio-settings-brand-swatch" data-empty={color ? undefined : "true"} style={color ? { background: color } : undefined} aria-hidden />
-              {color ?? "Template colour"}
+              {color ?? "Template color"}
             </span>
           </div>
           <ColorControl
             id={`${id}-color`}
-            label="Brand colour"
+            label="Brand color"
             value={color}
             theme={catalog?.themes?.[0]}
             describedBy={`${id}-color-hint`}
             onChange={(value) => { setColor(value); setJustSaved(false); }}
           />
-          <p id={`${id}-color-hint`} className="studio-settings-hint">New videos start with this colour. You can change it per video.</p>
+          <p id={`${id}-color-hint`} className="studio-settings-hint">New videos start with this color. You can change it per video.</p>
         </div>
       </div>
       <SaveRow dirty={dirty} justSaved={justSaved} />

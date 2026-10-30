@@ -366,7 +366,7 @@
 :root[data-surface="studio"] .studio-settings-look-picture[data-mode="system"] > span::before { background: #9a9a96; }
 :root[data-surface="studio"] .studio-settings-look-picture[data-mode="system"] > span::after { background: #b0b0ac; }
 
-/* A tiny theme sample: its own background, its own words and colours. */
+/* A tiny theme sample: its own background, its own words and colors. */
 :root[data-surface="studio"] .studio-settings-theme-picture {
   display: flex;
   flex-direction: column;

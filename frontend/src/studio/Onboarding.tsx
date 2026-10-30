@@ -42,7 +42,7 @@ interface Shape {
   accent: string;
 }
 
-/** The four shapes, in the words a person uses for them, each with one colour block of its own. */
+/** The four shapes, in the words a person uses for them, each with one color block of its own. */
 const SHAPES: Record<string, Omit<Shape, "id">> = {
   "16:9": { title: "Landscape", hint: "YouTube, screens", w: 16, h: 9, accent: "#E4572E" },
   "9:16": { title: "Vertical", hint: "Reels, TikTok, Stories", w: 9, h: 16, accent: "#2F6FED" },
@@ -79,12 +79,10 @@ function pickCard(catalog: Catalog | null): Card | null {
   return sale ?? celebration ?? cards[0];
 }
 
-const QUICK_COLORS = ["#E11D48", "#F97316", "#F59E0B", "#10B981", "#2563EB", "#8B5CF6"];
-
 const QUESTIONS = [
   <><span className="studio-onboarding-fade">What should we</span> <em>call</em> <span className="studio-onboarding-fade">you?</span></>,
   <><span className="studio-onboarding-fade">What will you make</span> <em>most</em>?</>,
-  <><span className="studio-onboarding-fade">Pick your</span> <em>colour</em>.</>,
+  <><span className="studio-onboarding-fade">Pick your</span> <em>color</em>.</>,
   <><span className="studio-onboarding-fade">Bring your</span> <em>AI</em> <span className="studio-onboarding-fade">along?</span></>,
   <><span className="studio-onboarding-fade">You're</span> <em>ready</em>.</>,
 ];
@@ -92,7 +90,7 @@ const QUESTIONS = [
 const HELP = [
   "We'll use it to greet you. You can change it later.",
   "Pick the shape you use most. You can change it for each video.",
-  "Your videos start with this colour. Pick one, or make your own.",
+  "Your videos start with this color. Pick one, or make your own.",
   "Optional. Your AI assistant can then make videos here for you.",
   "",
 ];
@@ -151,7 +149,7 @@ export function OnboardingPage() {
     [card, catalog.catalog],
   );
 
-  // A new colour waits a moment, so dragging the picker asks for one poster, not twenty.
+  // A new color waits a moment, so dragging the picker asks for one poster, not twenty.
   useEffect(() => {
     const timer = window.setTimeout(() => setPreviewColor(color), COLOR_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
@@ -352,28 +350,15 @@ export function OnboardingPage() {
         </div>}
 
         {step === 2 && <div className="studio-onboarding-block">
-          <span id={colorLabelId} className="studio-onboarding-label">Brand colour</span>
+          <span id={colorLabelId} className="studio-onboarding-label">Brand color</span>
           <ColorControl
             id={colorControlId}
-            label="Brand colour"
+            label="Brand color"
             value={color}
             theme={catalog.catalog?.themes?.[0]}
             describedBy={helperId}
             onChange={setColor}
           />
-          <div className="studio-onboarding-swatches" role="radiogroup" aria-label="Quick colours">
-            {QUICK_COLORS.map((hex) => <button
-              key={hex}
-              type="button"
-              role="radio"
-              aria-checked={color === hex}
-              aria-label={hex}
-              title={hex}
-              className="studio-onboarding-swatch"
-              style={{ background: hex }}
-              onClick={() => setColor(hex)}
-            />)}
-          </div>
         </div>}
 
         {step === 3 && <div className="studio-onboarding-block studio-onboarding-ai">
@@ -428,8 +413,8 @@ export function OnboardingPage() {
               {step === 1 && hasShape && chosenShape && <p className="studio-onboarding-preview-caption">{chosenShape.title} · {chosenShape.id}</p>}
               {step === 2 && <p className="studio-onboarding-preview-caption">
                 {color
-                  ? <><span className="studio-onboarding-preview-dot" style={{ background: color }} aria-hidden />Your colour</>
-                  : "Template colour"}
+                  ? <><span className="studio-onboarding-preview-dot" style={{ background: color }} aria-hidden />Your color</>
+                  : "Template color"}
               </p>}
             </>}
           </div>

@@ -110,7 +110,7 @@ describe("the welcome tour", () => {
     expect(screen.getByText("Vertical · 9:16")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(screen.getByRole("heading", { name: /Pick your colour\./ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Pick your color\./ })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Continue" }));
     expect(screen.getByRole("heading", { name: /Bring your AI along\?/ })).toBeInTheDocument();
@@ -242,7 +242,7 @@ describe("the welcome tour", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("radio", { name: /Square/ }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
-    await user.click(within(screen.getByRole("radiogroup", { name: "Quick colours" })).getByRole("radio", { name: "#10B981" }));
+    await user.click(await within(screen.getByRole("radiogroup", { name: "Brand color" })).findByRole("radio", { name: "#10B981" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(localStorage.getItem(BRAND_NAME_KEY)).toBe("Ada");
@@ -300,7 +300,7 @@ describe("the welcome tour", () => {
     expect(screen.getByRole("radio", { name: /Landscape/ })).toBeInTheDocument();
   });
 
-  it("debounces the colour so a burst of choices asks for one poster", async () => {
+  it("debounces the color so a burst of choices asks for one poster", async () => {
     const user = userEvent.setup();
     render(<OnboardingPage />);
 
@@ -308,10 +308,10 @@ describe("the welcome tour", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
-    const swatches = screen.getByRole("radiogroup", { name: "Quick colours" });
-    fireEvent.click(within(swatches).getByRole("radio", { name: "#E11D48" }));
-    fireEvent.click(within(swatches).getByRole("radio", { name: "#F97316" }));
-    fireEvent.click(within(swatches).getByRole("radio", { name: "#8B5CF6" }));
+    const colors = screen.getByRole("radiogroup", { name: "Brand color" });
+    fireEvent.click(within(colors).getByRole("radio", { name: "#E11D48" }));
+    fireEvent.click(within(colors).getByRole("radio", { name: "#F97316" }));
+    fireEvent.click(within(colors).getByRole("radio", { name: "#8B5CF6" }));
 
     await waitFor(() => expect(studio.previews().at(-1)?.settings.brand).toEqual({ accent: "#8B5CF6" }), { timeout: 2000 });
     const accents = studio.previews()
@@ -343,7 +343,7 @@ describe("the welcome tour", () => {
     await user.click(screen.getByRole("button", { name: "Continue" }));
     await user.click(screen.getByRole("button", { name: "Continue" }));
 
-    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Quick colours" })).getByRole("radio", { name: "#2563EB" }));
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Brand color" })).getByRole("radio", { name: "#2563EB" }));
     await waitFor(() => expect(studio.previews().length).toBe(2), { timeout: 2000 });
 
     expect(screen.getByRole("img", { name: /preview$/ })).toHaveAttribute("src", firstSrc);

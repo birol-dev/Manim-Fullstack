@@ -194,7 +194,7 @@
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
-/* ---- Shape tiles: four soft cards, each a little drawn video in its own colour ---- */
+/* ---- Shape tiles: four soft cards, each a little drawn video in its own color ---- */
 :root[data-surface="studio"] .studio-onboarding-tiles {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -287,7 +287,7 @@
   line-height: 1.4;
 }
 
-/* ---- Colour: the shared control, then six ready-made swatches ---- */
+/* ---- Color: the shared control ---- */
 :root[data-surface="studio"] .studio-onboarding-block > .studio-color-control {
   align-items: flex-start;
   min-width: 0;
@@ -297,35 +297,6 @@
   justify-content: flex-start;
   flex-wrap: wrap;
   overflow: visible;
-}
-
-:root[data-surface="studio"] .studio-onboarding-swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-:root[data-surface="studio"] .studio-onboarding-swatch {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: 999px;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / .1);
-  transition: box-shadow 140ms ease-out, transform 140ms ease-out;
-}
-
-:root[data-surface="studio"] .studio-onboarding-swatch:hover {
-  transform: scale(1.06);
-}
-
-:root[data-surface="studio"] .studio-onboarding-swatch[aria-checked="true"] {
-  box-shadow: 0 0 0 2px var(--color-canvas), 0 0 0 4px var(--color-ink);
-}
-
-:root[data-surface="studio"] .studio-onboarding-swatch:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 3px;
 }
 
 /* ---- AI step and the ready step borrow the settings lists ---- */

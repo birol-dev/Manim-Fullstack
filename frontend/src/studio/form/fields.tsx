@@ -288,7 +288,7 @@ export function ToggleWidget({ field, value, onChange, id, describedBy }: Widget
   );
 }
 
-/** The same colour control used by Look's backgrounds. */
+/** The same color control used by Look's backgrounds. */
 export function ColorWidget({ field, value, onChange, id, describedBy, invalid }: WidgetProps) {
   const { theme } = useFormContext();
   return <ColorControl id={id} label={field.title} value={value} onChange={onChange} theme={theme} nullable={field.nullable} describedBy={describedBy} invalid={invalid} />;

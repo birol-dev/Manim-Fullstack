@@ -108,7 +108,7 @@ describe("settings sections", () => {
 });
 
 describe("profile and new videos", () => {
-  it("saves the name and brand colour only when something changed", async () => {
+  it("saves the name and brand color only when something changed", async () => {
     const user = userEvent.setup();
     servePreferences();
     localStorage.setItem(BRAND_NAME_KEY, "Acme");
@@ -117,7 +117,7 @@ describe("profile and new videos", () => {
     const name = screen.getByRole("textbox", { name: "What should we call you?" });
     expect(name).toHaveValue("Acme");
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
-    expect(screen.getByText("New videos start with this colour. You can change it per video.")).toBeInTheDocument();
+    expect(screen.getByText("New videos start with this color. You can change it per video.")).toBeInTheDocument();
 
     await user.clear(name);
     await user.type(name, "Omer Studio");

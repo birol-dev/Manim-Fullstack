@@ -299,7 +299,7 @@ export function setBrandName(value: string) {
   writePreference("brand_name", normalizeBrandName(value) ?? "");
 }
 
-/** "#RRGGBB", or null when the brand keeps the template's own colours. */
+/** "#RRGGBB", or null when the brand keeps the template's own colors. */
 export function readBrandColor(): string | null {
   return readPreference("brand_color") ?? null;
 }

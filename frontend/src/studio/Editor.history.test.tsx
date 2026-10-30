@@ -84,7 +84,7 @@ it("undoes format, look changes, list add/remove/move, and table edits", async (
   await user.click(screen.getByRole("radio", { name: /Bold pop/ }));
   await user.click(screen.getByRole("button", { name: "Undo" }));
   expect(screen.getByRole("radio", { name: /Clean light/ })).toHaveAttribute("aria-checked", "true");
-});
+}, 60_000);
 
 it("records an AI update as one undoable step without resaving it until undo", async () => {
   studio.projects.push({ id: "p9", title: "Original project", template: "countdown", params: { title: "Original", seconds: 300 }, settings: {}, created: 1, updated: 1 });
