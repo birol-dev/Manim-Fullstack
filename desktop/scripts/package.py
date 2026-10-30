@@ -1,4 +1,4 @@
-"""Produce an unsigned portable directory, not an installer. Run prepare.py first."""
+"""Produce the portable directory. Run prepare.py first; package.ps1 then builds the installer."""
 from __future__ import annotations
 
 import hashlib
@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+from build_installer import ensure_icon, sign_file
 from prepare import DESKTOP, ROOT, RUNTIME, remove_generated, runtime_paths
 
 # The stdio command in GET /api/studio/connection runs backend/studio/mcp_server.py,
@@ -55,8 +56,10 @@ def main():
                 for p in sorted((destination / "backend").rglob("*")) if p.is_file()}
     (destination / "backend-snapshot.sha256.json").write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
     subprocess.run([str(compiler), "/nologo", "/target:winexe", "/platform:x64", "/optimize+",
-                    "/r:System.Windows.Forms.dll", f"/out:{destination / 'Manim Studio.exe'}",
+                    "/r:System.Windows.Forms.dll", f"/win32icon:{ensure_icon()}",
+                    f"/out:{destination / 'Manim Studio.exe'}",
                     str(DESKTOP / "native/StudioHost.cs")], check=True)
+    sign_file(destination / "Manim Studio.exe")
     shutil.copy2(ROOT / "LICENSE", destination / "LICENSE")
     shutil.copy2(DESKTOP / "README.md", destination / "DESKTOP-README.md")
     shutil.copy2(DESKTOP / "VALIDATION.md", destination / "VALIDATION.md")
@@ -71,8 +74,8 @@ def main():
     files = {p.relative_to(destination).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(destination.rglob("*")) if p.is_file()}
     (destination / "manifest.sha256.json").write_text(json.dumps(files, indent=2), encoding="utf-8")
-    print(f"Unsigned portable directory validated: {destination}")
-    print("No installer, signing or publishing was performed.")
+    print(f"Portable directory validated: {destination}")
+    print("Installer build is the next step; publishing was not performed.")
 
 
 if __name__ == "__main__":

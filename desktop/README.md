@@ -16,7 +16,7 @@ The working fallback is pinned PyWebView 6.2.1, forced to WebView2 (`edgechromiu
 
 ## Development
 
-Build host: Windows x64, Python 3.12 x64 with pip, Node/npm with the existing `frontend/node_modules`. Runtime host: Windows 10/11 x64, .NET Framework 4.8 and Microsoft Edge WebView2 Evergreen Runtime. Users of a prepared portable folder need neither Python nor Node. This bounded shell does not install OS prerequisites.
+Build host: Windows x64, Python 3.12 x64 with pip, Node/npm with the existing `frontend/node_modules`. Runtime host: Windows 10/11 x64, .NET Framework 4.8 and Microsoft Edge WebView2 Evergreen Runtime. Users of a prepared portable folder need neither Python nor Node. The portable folder does not install OS prerequisites; the installer below offers to add WebView2 when it is missing.
 
 From the repository root:
 
@@ -84,17 +84,59 @@ desktop/dist/ManimStudio/
   DESKTOP-README.md
 ```
 
-Keep the entire folder together. The starter resolves the bundled interpreter relative to itself and does not search `PATH`. Packaging copies backend resources and dependency license files without stripping them, rewrites runtime paths to relative packaged paths, and runs an isolated relocated service smoke plus a real Studio PNG preview and MP4 export before reporting success. PyAV decodes every MP4 frame to verify the actual encoder output. The smoke uses bundled tools with a restricted backend `PATH`. It uses the .NET Framework C# compiler on the build host. No signing, installer generation, publishing, update service, or file associations are implemented.
+Keep the entire folder together. The starter resolves the bundled interpreter relative to itself and does not search `PATH`. Packaging copies backend resources and dependency license files without stripping them, rewrites runtime paths to relative packaged paths, and runs an isolated relocated service smoke plus a real Studio PNG preview and MP4 export before reporting success. PyAV decodes every MP4 frame to verify the actual encoder output. The smoke uses bundled tools with a restricted backend `PATH`. It uses the .NET Framework C# compiler on the build host. `package.ps1` then builds the installer described below. Signing is optional through `MANIM_SIGN_CMD`; publishing, an update service, and file associations are not implemented.
 
-The runtime includes Manim/Pango/Cairo/PyAV wheels for template previews and MP4 encoding. External LaTeX is not bundled. Templates that require LaTeX or external media tools remain outside this bounded packaging target. A clean Windows VM acceptance test, runtime/dependency security and redistribution review, installer prerequisite handling, and unsigned executable reputation handling are release work.
+The runtime includes Manim/Pango/Cairo/PyAV wheels for template previews and MP4 encoding. External LaTeX is not bundled. Templates that require LaTeX or external media tools remain outside this bounded packaging target. A clean Windows VM acceptance test, runtime/dependency security and redistribution review are release work. Setup handles WebView2 itself; unsigned executable reputation is handled by signing, not by hiding the warning.
+
+## Windows installer (`ManimStudioSetup.exe`)
+
+`./desktop/package.ps1` writes `desktop/dist/ManimStudioSetup.exe` after the portable folder has passed its smoke test. It is built the same way as the portable starter: a C# 5 WinForms executable compiled by the .NET Framework `csc.exe`, with a deflated zip of `desktop/dist/ManimStudio` appended after it (not embedded as a resource):
+
+```text
+[stub exe][zip payload][8-byte little-endian payload length][8-byte "MSETUP01" magic]
+```
+
+`scripts/build_installer.py` stamps the version from the root `package.json` into the stub, draws a simple black rounded square with a white play triangle as an `.ico` with Pillow when the repository has none, and appends the payload. `scripts/package.py` uses the same icon for `Manim Studio.exe`.
+
+What Setup does:
+
+* Installs for the current person in `%LOCALAPPDATA%\Programs\ManimStudio`; the manifest requests `asInvoker`, so Windows never asks for an administrator password.
+* Extracts into a sibling temporary folder and swaps it in only on success, so a failed install or upgrade leaves the previous copy working. It refuses with a plain message and a Retry button while Manim Studio is running from that folder, checks free disk space first, and rejects zip-slip paths.
+* Offers Start menu and desktop shortcuts (desktop is a checkbox, on by default), writes the per-user uninstall entry, and copies itself to `Uninstall.exe`.
+* Checks the Evergreen WebView2 runtime in the registry (`HKLM` WOW6432Node and `HKCU`). When it is missing, Setup downloads Microsoft's bootstrapper, verifies its Authenticode signature and Microsoft signer subject, and runs it with `/silent /install`. Offline, the rest of the install still completes and Setup says plainly that opening it again retries the browser engine.
+* Uninstall removes only the app folder, shortcuts and registry entry. It then asks, with "keep" as the default, whether to also delete the person's videos and projects in `%LOCALAPPDATA%\ManimStudio`. AI app configurations are never touched.
+
+The installed app keeps using `%LOCALAPPDATA%\ManimStudio` for videos, projects and settings.
+
+Command-line options used by tests and quiet deployment:
+
+| Option          | Effect                                                                    |
+| --------------- | ------------------------------------------------------------------------- |
+| `/S`            | Silent install: no window, exit code only                                 |
+| `/nowebview2`   | Do not download WebView2 (used by silent installs and tests)              |
+| `/dir:<path>`   | Install elsewhere; also uses `ManimStudio-Test` and skips shortcuts       |
+| `/uninstall`    | Remove the installed copy; combine with `/S` for no UI                    |
+
+The installer and app are **unsigned**. Windows SmartScreen warns the first time someone runs them ("Windows protected your PC" → **More info** → **Run anyway**). Do not hide that warning; sign the executables when a code-signing certificate exists. `scripts/package.py` and `scripts/build_installer.py` run `MANIM_SIGN_CMD` for both executables when it is set, and print a note when it is not:
+
+```powershell
+$env:MANIM_SIGN_CMD = 'signtool sign /fd sha256 /tr http://timestamp.digicert.com /td sha256 /f C:\keys\studio.pfx /p <password> {file}'
+./desktop/package.ps1
+```
+
+`{file}` is replaced by the quoted executable path; without it, the path is appended. macOS and Linux installers are not built here, and could not be tested on this Windows workstation; source users there run `python3 run.py` or `sh start.sh`.
 
 ## Validation
 
 ```powershell
 ./desktop/.runtime/python.exe -m unittest discover -s desktop/tests -v
 python -B -m unittest discover -s desktop/tests -p test_desktop.py -k PortTests -v
+python -m unittest discover -s desktop/tests -p test_installer.py -v
+python -m unittest discover -s desktop/tests -p test_run_bootstrap.py -v
 ./desktop/dist/ManimStudio/runtime/python.exe -B ./desktop/scripts/smoke.py --app-root ./desktop/dist/ManimStudio --data-dir ./desktop/build/manual-render-smoke
 ```
+
+The installer tests compile the real stub with system Python, build a tiny fake payload, silently install it under a temporary folder with `/dir:` and `/nowebview2`, check the files and the test-only uninstall entry, install an upgrade, then silently uninstall and wait for the folder and registry entry to disappear. They also check that a zip-slip entry is refused. `/dir:` never touches the real install location, the production uninstall key, or shortcuts. The run.py tests cover the version check, requirements hash stamp, virtual-environment detection, and the Linux/macOS package-manager command choice without running pip or using the network.
 
 Tests exercise port reuse across launches, occupied-port fallback, real loopback authentication/session bootstrap, static frontend/catalog serving, host/origin rejection, WebSocket cookie auth, independent instances, single-workspace locking, graceful shutdown, owner crash, and killing an orphaned grandchild. The `PortTests` subset also runs with system Python on Windows with `psutil`, without the embedded backend dependencies. `-UiSmoke` additionally opens WebView2 and verifies React mounts and makes an authenticated catalog request, then closes. Validation outcomes and limits are recorded in `VALIDATION.md` after execution.
 

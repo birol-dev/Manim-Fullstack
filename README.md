@@ -22,8 +22,10 @@ Agents can find templates, edit saved projects, inspect storyboard images, and q
 exports. Keep the app running; use **Reload saved** to bring agent edits into an open
 project. See [the Studio guide](backend/studio/README.md) for the API and stdio setup.
 
-**Windows desktop:** see [desktop/README.md](desktop/README.md) for the launcher and
-packaging instructions. The source quick start below also serves the Studio in a browser.
+**Windows desktop:** run `ManimStudioSetup.exe` (built by `desktop/package.ps1`) to install the
+ready-to-use app for the current person, with no administrator password. See
+[desktop/README.md](desktop/README.md) for the installer, portable folder and packaging details.
+The source quick start below also serves the Studio in a browser.
 
 ![Manim Composer: code editor, render preview, and console](docs/screenshot.png)
 
@@ -46,21 +48,33 @@ packaging instructions. The source quick start below also serves the Studio in a
 
 ## Quick start
 
-You need **Python 3.11+** and **Node.js 20.19+**. On Linux, Manim also needs the Cairo and Pango headers
-(`sudo apt install build-essential pkg-config libcairo2-dev libpango1.0-dev python3-dev`); on macOS, `brew install cairo pkg-config`.
-Debian and Ubuntu call the interpreter `python3`.
+### Windows: the installer
+
+Run `ManimStudioSetup.exe`. It installs Manim Studio for the current person under
+`%LOCALAPPDATA%\Programs\ManimStudio`, adds Start menu and optional desktop shortcuts, and offers to add
+the Microsoft WebView2 runtime when it is missing. No administrator password is needed. Builds are
+unsigned for now, so Windows SmartScreen may warn the first time; see
+[desktop/README.md](desktop/README.md).
+
+### From source: any computer
+
+You need **Python 3.11+**. The first run also builds the interface, which needs **Node.js 20.19+**;
+after that, Node is only needed when the interface sources change. On Linux, Manim also needs the
+Cairo and Pango headers
+(`sudo apt install build-essential pkg-config libcairo2-dev libpango1.0-dev python3-dev`);
+on macOS, `brew install cairo pango pkg-config`. Debian and Ubuntu call the interpreter `python3`.
 
 ```bash
 git clone https://github.com/birol-dev/Manim-Fullstack.git
 cd Manim-Fullstack
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt   # includes Manim CE
-python run.py                      # or: python3 run.py
+python3 run.py                     # Windows: python run.py, or double-click start.bat
 ```
 
-`run.py` builds the frontend the first time (and again whenever its sources change), starts the server on
-<http://localhost:8000>, and opens your browser. On Windows you can double-click `start.bat` instead.
+`run.py` creates `.venv` on the first run, installs `backend/requirements.txt` into it, prints the exact
+command when Cairo/Pango are missing, builds the frontend when needed, starts the server on
+<http://localhost:8000>, and opens your browser. It never installs packages into your system Python.
+On macOS and Linux, `sh start.sh` does the same as `start.bat`. The Windows path is tested; the macOS
+and Linux paths are written but could not be tested on the Windows workstation used for this release.
 
 | Option         | Effect                                   |
 | -------------- | ---------------------------------------- |
@@ -68,6 +82,7 @@ python run.py                      # or: python3 run.py
 | `--host`       | Interface to bind (default `127.0.0.1`)  |
 | `--no-browser` | Don't open a browser window              |
 | `--build`      | Force a fresh frontend build             |
+| `--no-install` | Don't create `.venv` or install packages |
 
 **Optional extras:** a LaTeX distribution (MiKTeX or TeX Live) for `MathTex`, `Tex`, and numbered axes; FFmpeg only for
 scenes that use `add_sound`. Manim 0.19+ encodes video on its own.
