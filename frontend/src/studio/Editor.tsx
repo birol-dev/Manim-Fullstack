@@ -446,7 +446,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
               title={title || undefined}
               onChange={(event) => { if (change({ title: event.target.value })) markTouched(); }}
               className="studio-video-title"
-              style={{ width: `${Math.max(8, Math.min(24, [...title].length + 1))}ch` }}
+              style={{ width: `calc(${Math.max(8, [...title].length + 1)}ch + 26px)` }}
             />
             {remoteNote ? (
               <span className="flex items-center gap-1 text-xs text-accent" role="status">

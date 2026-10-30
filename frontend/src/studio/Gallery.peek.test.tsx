@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -6,6 +9,9 @@ import { CATALOG } from "./test/fixtures";
 import type { Route } from "./router";
 import type { SetupStatus } from "./setup";
 import type { Catalog, ExportJob, ProjectSummary } from "./types";
+
+// CSS imports are stubbed out in tests, so read the stylesheet itself.
+const homeCss = readFileSync(resolve(process.cwd(), "src/studio/home.css"), "utf8");
 
 let mockSetupStatus: SetupStatus | null = null;
 
@@ -255,6 +261,8 @@ describe("home setup and chapters", () => {
     expect(within(tray).getByRole("link", { name: /Export a video/ })).toHaveAttribute("data-done", "true");
     expect(within(tray).getByRole("link", { name: /Connect your AI/ })).toHaveAttribute("data-next", "true");
     expect(within(tray).getByRole("link", { name: /Tell us your name/ })).not.toHaveAttribute("data-done");
+    expect(within(tray).getByText("So we know what to call you.")).toBeInTheDocument();
+    expect(within(tray).queryByText("It goes on what you make.")).not.toBeInTheDocument();
   });
 
   it("hides the setup tray once every step is done", () => {
@@ -289,5 +297,19 @@ describe("home setup and chapters", () => {
     expect(screen.getByRole("heading", { name: 'Nothing matches "zebra"' })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Clear search" })).toHaveAttribute("href", "#/templates");
     expect(screen.getByRole("link", { name: "See all templates" })).toHaveAttribute("href", "#/templates");
+  });
+
+  it("lets the hero reach the window edge and settles it inside the column on wide canvases", () => {
+    const hero = /\.studio-home-hero \{([^}]*)\}/.exec(homeCss)?.[1] ?? "";
+    expect(hero).toContain("margin-right: calc(-1 * var(--home-bleed))");
+    expect(hero).toContain("overflow: hidden");
+
+    // Past the shell's 1440px column the bleed would end in mid-air, so the hero stops
+    // bleeding and every frame moves fully inside the column.
+    const wide = /@media \(min-width: 1500px\) \{([\s\S]*?)\n\}/.exec(homeCss)?.[1] ?? "";
+    expect(wide).toContain("margin-right: 0");
+    expect(wide).toMatch(/\.studio-home-frame-0 \{ left: 8px; \}/);
+    expect(wide).toMatch(/\.studio-home-frame-1 \{ right: 12px; \}/);
+    expect(wide).not.toMatch(/right: -/);
   });
 });

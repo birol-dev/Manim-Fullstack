@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +19,9 @@ import type { AIApp, SetupComponent, SetupStatus } from "./setup";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
 
 let studio: FakeStudio;
+
+// CSS imports are stubbed out in tests, so read the stylesheet itself.
+const onboardingCss = readFileSync(resolve(process.cwd(), "src/studio/onboarding.css"), "utf8");
 
 const renderer: SetupComponent = {
   id: "renderer",
@@ -88,6 +94,8 @@ describe("the welcome tour", () => {
 
     expect(screen.getByRole("heading", { name: /What should we call you\?/ })).toHaveFocus();
     expect(screen.getByText("Step 1 of 5")).toBeInTheDocument();
+    expect(screen.getByText("We'll use it to greet you. You can change it later.")).toBeInTheDocument();
+    expect(screen.queryByText(/appears on the videos you make/)).not.toBeInTheDocument();
     await waitFor(() => expect(studio.previews().length).toBeGreaterThan(0));
     expect(studio.previews()[0]).toMatchObject({ mode: "poster" });
 
@@ -112,6 +120,42 @@ describe("the welcome tour", () => {
     expect(screen.getByRole("heading", { name: /You're ready\./ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start making videos" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Skip" })).not.toBeInTheDocument();
+  });
+
+  it("paints no focus box on the question it focuses for screen readers", () => {
+    const focusRules = [...onboardingCss.matchAll(/\.studio-onboarding-question:focus(?:-visible)?[^{]*\{([^}]*)\}/g)].map((match) => match[1]);
+    expect(focusRules.length).toBeGreaterThan(0);
+    expect(focusRules.every((body) => /outline:\s*none/.test(body))).toBe(true);
+    // Keyboard controls keep their own ring.
+    expect(onboardingCss).toMatch(/\.studio-onboarding-tile:focus-visible \{[^}]*outline: 2px solid/);
+  });
+
+  it("starts the shape question with nothing chosen and marks a choice with a ring and a check", async () => {
+    const user = userEvent.setup();
+    render(<OnboardingPage />);
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    const tiles = screen.getAllByRole("radio");
+    expect(tiles).toHaveLength(4);
+    expect(tiles.every((tile) => tile.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(document.querySelector(".studio-onboarding-tile-check")).toBeNull();
+
+    const portrait = screen.getByRole("radio", { name: /Portrait/ });
+    await user.click(portrait);
+    expect(portrait).toHaveAttribute("aria-checked", "true");
+    expect(portrait.querySelector(".studio-onboarding-tile-check")).not.toBeNull();
+    const landscape = screen.getByRole("radio", { name: /Landscape/ });
+    expect(landscape).toHaveAttribute("aria-checked", "false");
+    expect(landscape.querySelector(".studio-onboarding-tile-check")).toBeNull();
+
+    const checked = /\.studio-onboarding-tile\[aria-checked="true"\][\s\S]*?\{([^}]*)\}/.exec(onboardingCss)?.[1] ?? "";
+    expect(checked).toContain("inset 0 0 0 2px var(--color-ink)");
+    expect(checked).toContain("var(--color-surface)");
+    const check = /\.studio-onboarding-tile-check \{([^}]*)\}/.exec(onboardingCss)?.[1] ?? "";
+    expect(check).toContain("position: absolute");
+
+    await waitFor(() => expect(studio.previews().at(-1)?.settings.aspect).toBe("4:5"));
+    expect(screen.getByText("Portrait · 4:5")).toBeInTheDocument();
   });
 
   it("skips ahead to the ready step without saving anything", async () => {

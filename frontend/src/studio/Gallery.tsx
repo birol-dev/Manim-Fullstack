@@ -186,7 +186,7 @@ function SetupTray({ projects, exports }: { projects: ProjectSummary[] | null; e
     { id: "video", title: "Make your first video", line: "Pick a template and make it yours.", done: (projects?.length ?? 0) > 0, href: "#/templates" },
     { id: "export", title: "Export a video", line: "Turn it into a file you can share.", done: exports?.some((job) => job.status === "done") ?? false, href: "#/exports" },
     { id: "ai", title: "Connect your AI", line: "Let your assistant make videos with you.", done: status?.ai_apps.some((app) => app.connected) ?? false, href: "#/settings/ai" },
-    { id: "name", title: "Tell us your name", line: "It goes on what you make.", done: !!brandName, href: "#/settings/profile" },
+    { id: "name", title: "Tell us your name", line: "So we know what to call you.", done: !!brandName, href: "#/settings/profile" },
   ];
   const done = steps.filter((step) => step.done).length;
   if (done === steps.length) return null;

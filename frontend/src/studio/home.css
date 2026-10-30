@@ -51,6 +51,16 @@
 :root[data-surface="studio"] .studio-home-frame-1 { right: -5%; top: 0; width: 33%; aspect-ratio: 9 / 16; z-index: 2; }
 :root[data-surface="studio"] .studio-home-frame-2 { right: 3%; bottom: 2%; width: 51%; aspect-ratio: 16 / 9; z-index: 0; }
 
+/* Past the shell's 1440px column the canvas keeps growing but the page does not, so a bleed
+   to the window edge would stop in mid-air. There the hero settles into a centred
+   composition: the frames are pulled fully inside the column (room for their tilt) and the
+   copy and the artwork stay balanced on the canvas. */
+@media (min-width: 1500px) {
+  :root[data-surface="studio"] .studio-home-hero { margin-right: 0; }
+  :root[data-surface="studio"] .studio-home-frame-0 { left: 8px; }
+  :root[data-surface="studio"] .studio-home-frame-1 { right: 12px; }
+}
+
 /* ---- Finish your setup: a grey tray of four small steps ---- */
 :root[data-surface="studio"] .studio-home-setup {
   display: flex;

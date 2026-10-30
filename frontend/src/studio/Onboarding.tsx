@@ -1,6 +1,6 @@
 /** The welcome tour: five real questions, saved as they are answered, over a live template preview. */
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowLeft, Clapperboard, Play } from "lucide-react";
+import { ArrowLeft, Check, Clapperboard, Play } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/api";
@@ -90,7 +90,7 @@ const QUESTIONS = [
 ];
 
 const HELP = [
-  "Your name appears on the videos you make. You can change it later.",
+  "We'll use it to greet you. You can change it later.",
   "Pick the shape you use most. You can change it for each video.",
   "Your videos start with this colour. Pick one, or make your own.",
   "Optional. Your AI assistant can then make videos here for you.",
@@ -342,6 +342,7 @@ export function OnboardingPage() {
               onKeyDown={(event) => onTileKeyDown(event, index)}
             >
               <ShapePicture shape={shape} />
+              {selected && <span className="studio-onboarding-tile-check" aria-hidden><Check /></span>}
               <span className="studio-onboarding-tile-copy">
                 <span className="studio-onboarding-tile-title">{shape.title}</span>
                 <span className="studio-onboarding-tile-hint">{shape.hint}</span>

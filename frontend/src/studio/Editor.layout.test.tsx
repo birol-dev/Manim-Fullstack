@@ -11,8 +11,9 @@ import { EditorPage } from "./Editor";
 import { posterQueue } from "./hooks";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
 
-// CSS imports are stubbed out in tests, so read the stylesheet itself.
+// CSS imports are stubbed out in tests, so read the stylesheets themselves.
 const editorCss = readFileSync(resolve(process.cwd(), "src/studio/editor.css"), "utf8");
+const previewCss = readFileSync(resolve(process.cwd(), "src/studio/preview.css"), "utf8");
 
 let studio: FakeStudio;
 beforeEach(() => {
@@ -88,9 +89,10 @@ it("splits from 900px with a narrow form column, leaving the height to the previ
   const width = Number(/\.studio-editor-sidebar\s*\{[^}]*width:\s*(\d+)px/.exec(laptop)?.[1]);
   expect(width).toBeGreaterThanOrEqual(340);
   expect(width).toBeLessThanOrEqual(360);
-  // A capped title ends in an ellipsis instead of a cut glyph.
-  expect(laptop).toMatch(/\.studio-video-title\s*\{[^}]*max-width:\s*152px/);
-  expect(laptop).toMatch(/\.studio-video-title\s*\{[^}]*text-overflow:\s*ellipsis/);
+  // The title follows its text and may use whatever room the row leaves; it only ellipsizes
+  // when that room runs out, and the full name stays in the tooltip.
+  expect(editorCss).toMatch(/\.studio-editor \.studio-video-title\s*\{[^}]*max-width:\s*100%/);
+  expect(editorCss).toMatch(/\.studio-editor \.studio-video-title\s*\{[^}]*text-overflow:\s*ellipsis/);
   expect(laptop).toMatch(/\.studio-editor-header\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) auto auto/);
   expect(laptop).toMatch(/\.studio-editor-identity\s*\{[^}]*grid-column:\s*auto/);
   expect(laptop).toMatch(/\.studio-title-group\s*\{[^}]*flex-wrap:\s*nowrap/);
@@ -106,4 +108,19 @@ it("keeps the full video title in the input's tooltip when the column cuts it", 
   const title = screen.getByRole("textbox", { name: "Video title" });
   expect(title).toHaveValue("Countdown timer");
   expect(title).toHaveAttribute("title", "Countdown timer");
+});
+
+it("sizes the title to its text plus its own padding, so the name is not clipped", () => {
+  open();
+  const title = screen.getByRole("textbox", { name: "Video title" });
+  // 15 characters + 1 for the caret, then the 12px of padding on each side.
+  expect(title.style.width).toBe("calc(16ch + 26px)");
+});
+
+it("separates the preview and its Play pill by tint, not a drop shadow", () => {
+  expect(previewCss).toMatch(/\.studio-preview-stage > div \{ box-shadow: none; \}/);
+  const controls = /:root\[data-surface="studio"\] \.studio-motion-controls \{([^}]*)\}/.exec(previewCss)?.[1] ?? "";
+  expect(controls).toContain("border: 1px solid");
+  expect(controls).toContain("background:");
+  expect(controls).not.toContain("box-shadow");
 });

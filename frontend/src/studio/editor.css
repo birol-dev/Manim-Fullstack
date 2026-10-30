@@ -10,8 +10,12 @@
 :root[data-surface="studio"] .studio-editor-sidebar { width: 420px; border-right: 0; border-radius: var(--radius-panel); background: var(--color-surface); }
 :root[data-surface="studio"] .studio-editor-preview { padding: 20px 24px 24px; border-radius: var(--radius-panel); background: var(--color-well); }
 
-/* The name of the video reads as a statement, not a form field, until it is focused. */
+/* The name of the video reads as a statement, not a form field, until it is focused. Its
+   width follows the text; the header's free space is there when the name is long, and the
+   ellipsis only appears when the row really is out of room. The full name stays in the
+   input's title attribute. */
 :root[data-surface="studio"] .studio-video-title { height: 38px; padding: 0 12px; border-color: transparent; border-radius: 999px; font-size: 16px; font-weight: 500; letter-spacing: -.01em; }
+:root[data-surface="studio"] .studio-editor .studio-video-title { flex: 0 1 auto; min-width: 64px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 :root[data-surface="studio"] .studio-video-title:hover { border-color: transparent; background: var(--color-raised); }
 :root[data-surface="studio"] .studio-video-title:focus-visible { background: var(--color-surface); border-color: var(--color-ink); box-shadow: 0 0 0 3px var(--color-accent-soft); }
 :root[data-surface="studio"] .studio-editor-history { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
@@ -198,8 +202,8 @@
   :root[data-surface="studio"] .studio-editor .studio-editor-header { grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; padding: 8px 14px; }
   :root[data-surface="studio"] .studio-editor .studio-editor-identity { grid-column: auto; gap: 8px; }
   :root[data-surface="studio"] .studio-editor .studio-title-group { flex-wrap: nowrap; gap: 0 8px; }
-  /* The cap cuts long titles; the ellipsis marks the cut and the full title stays in the tooltip. */
-  :root[data-surface="studio"] .studio-editor .studio-video-title { max-width: 152px; overflow: hidden; text-overflow: ellipsis; }
+  /* The title takes the room the row has and ellipsizes only when that room runs out; the
+     full title stays in the tooltip. */
   :root[data-surface="studio"] .studio-editor .studio-editor-sidebar { width: 348px; border-top: 0; border-right: 0; }
   :root[data-surface="studio"] .studio-editor .studio-editor-panel { padding-inline: 20px; }
   :root[data-surface="studio"] .studio-editor .studio-editor-preview { padding: 14px 18px 18px; }
