@@ -61,8 +61,13 @@ def test_temp_paths_printed_by_user_code_are_kept_where_they_name_nobody(tmp_pat
 
     import executor as executor_module
 
+    # The machine's temp folder can sit in the profile (Windows) or the home
+    # folder, where the "~" rule hides it anyway; a temp folder elsewhere
+    # (like /tmp) is the case this test is about.
+    fake_tmp = os.path.join(os.path.abspath(os.sep), "no-profile", "tmp")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: fake_tmp)
     executor = ManimExecutor(str(tmp_path / "ws"))
-    line = f"saved to {tempfile.gettempdir()}/out.txt"
+    line = f"saved to {fake_tmp}/out.txt"
     monkeypatch.setattr(executor_module, "_temp_dir_names_user", lambda: False)
     assert executor._redact_paths(line) == line
     monkeypatch.setattr(executor_module, "_temp_dir_names_user", lambda: True)
