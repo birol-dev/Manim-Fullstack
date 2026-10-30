@@ -1,5 +1,5 @@
 /** The studio: gallery → editor → export. Author mode (#/author) is the code editor. */
-import { lazy, Suspense, useLayoutEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Toaster } from "sonner";
 import { RotateCw } from "lucide-react";
@@ -14,10 +14,13 @@ import { Spinner } from "./components";
 import { EditorPage } from "./Editor";
 import { Gallery, GalleryLoading } from "./Gallery";
 import { useCatalog } from "./hooks";
+import { needsOnboarding } from "./preferences";
 import { useHashRoute } from "./router";
 import { StudioShell } from "./StudioShell";
 
 const AuthorApp = lazy(() => import("@/App"));
+const SettingsPage = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsPage })));
+const OnboardingPage = lazy(() => import("./Onboarding").then((module) => ({ default: module.OnboardingPage })));
 
 function Loading({ label }: { label: string }) {
   return (
@@ -29,6 +32,16 @@ function Loading({ label }: { label: string }) {
 
 function Studio({ route, routeKey, replace, push, appearance, onAppearance }: ReturnType<typeof useHashRoute> & { appearance: Appearance; onAppearance: (value: Appearance) => void }) {
   const { catalog, error, loading, retry } = useCatalog();
+
+  if (route.kind === "welcome") {
+    return <Suspense fallback={<Loading label="Getting things ready…" />}><OnboardingPage /></Suspense>;
+  }
+
+  if (route.kind === "settings") {
+    return <StudioShell route={route} catalog={catalog} push={push} replace={replace}>
+      {() => <Suspense fallback={<Loading label="Opening settings…" />}><SettingsPage section={route.section} appearance={appearance} onAppearance={onAppearance} /></Suspense>}
+    </StudioShell>;
+  }
 
   let page: ReactNode;
   const editor = route.kind === "new" || route.kind === "project";
@@ -43,12 +56,12 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
         </Button>
       </div>
     );
-  } else if (route.kind === "new" || route.kind === "project") {
+  } else if (editor) {
     page = <EditorPage key={routeKey} catalog={catalog} route={route} onProjectCreated={(id) => replace({ kind: "project", id })} />;
   }
 
   if (route.kind === "gallery" || route.kind === "templates" || route.kind === "videos" || route.kind === "exports") {
-    return <StudioShell route={route} catalog={catalog} appearance={appearance} onAppearance={onAppearance} push={push} replace={replace}>
+    return <StudioShell route={route} catalog={catalog} push={push} replace={replace}>
       {(library, exports) => catalog && !loading ? <Gallery catalog={catalog} route={route} library={library} exports={exports} /> : page}
     </StudioShell>;
   }
@@ -61,8 +74,10 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
 
 export default function StudioApp() {
   const hashRoute = useHashRoute();
+  const { route, replace } = hashRoute;
   const [appearance, setAppearance] = useState<Appearance>(readAppearance);
-  const isStudio = hashRoute.route.kind !== "author";
+  const changeAppearance = (value: Appearance) => { setAppearance(value); storeAppearance(value); };
+  const isStudio = route.kind !== "author";
   useLayoutEffect(() => {
     if (isStudio) {
       document.documentElement.dataset.surface = "studio";
@@ -74,8 +89,15 @@ export default function StudioApp() {
     }
     return () => { delete document.documentElement.dataset.surface; delete document.documentElement.dataset.theme; };
   }, [isStudio, appearance]);
-  const changeAppearance = (value: Appearance) => { setAppearance(value); storeAppearance(value); };
-  if (hashRoute.route.kind === "author") {
+  // A first launch lands on the welcome tour once the workspace has answered; an unanswered
+  // request (or a test without a preferences mock) keeps the gallery.
+  useLayoutEffect(() => {
+    if (route.kind === "gallery" && needsOnboarding()) replace({ kind: "welcome" });
+  }, [route.kind, replace]);
+  useEffect(() => {
+    if (route.kind === "welcome") document.title = "Welcome · Manim Studio";
+  }, [route.kind]);
+  if (route.kind === "author") {
     return (
       <Suspense fallback={<Loading label="Opening author mode…" />}>
         <AuthorApp />

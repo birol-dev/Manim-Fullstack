@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { resetCatalogCache } from "./api";
 import { APPEARANCE_KEY, SIDEBAR_KEY } from "./appearance";
 import { posterQueue, SEEN_EXPORTS_KEY } from "./hooks";
+import { loadPreferences, resetPreferencesForTests, setOnboardingDone } from "./preferences";
 import { parseRoute, routeHash } from "./router";
 import StudioApp from "./StudioApp";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
@@ -15,6 +16,7 @@ vi.mock("@/App", () => ({ default: () => <div>Author workspace</div> }));
 let studio: FakeStudio;
 
 beforeEach(() => {
+  resetPreferencesForTests();
   resetCatalogCache();
   posterQueue.clear();
   window.history.replaceState(null, "", "/#/");
@@ -24,6 +26,11 @@ beforeEach(() => {
 function open(hash: string) {
   window.history.replaceState(null, "", `/${hash}`);
   return render(<StudioApp />);
+}
+
+/** The page canvas; the panel's Recents repeat saved-video links on purpose. */
+function mainContent() {
+  return within(screen.getByRole("main"));
 }
 
 describe("routes", () => {
@@ -39,8 +46,25 @@ describe("routes", () => {
     expect(parseRoute("#/templates")).toEqual({ kind: "templates" });
     expect(parseRoute("#/videos")).toEqual({ kind: "videos" });
     expect(parseRoute("#/exports")).toEqual({ kind: "exports" });
+    expect(parseRoute("#/settings/ai")).toEqual({ kind: "settings", section: "ai" });
+    expect(parseRoute("#/welcome")).toEqual({ kind: "welcome" });
+    expect(routeHash({ kind: "settings", section: "ai" })).toBe("#/settings/ai");
     expect(routeHash({ kind: "templates", category: "a/b", query: "sale & party" })).toBe("#/templates/a%2Fb?q=sale+%26+party");
     expect(parseRoute("#/templates/%E0%A4%A")).toEqual({ kind: "templates", category: "%E0%A4%A" });
+  });
+
+  it("opens the welcome tour on the first launch and leaves the gallery alone once it is done", async () => {
+    studio.reply = (call) => call.path === "/api/studio/preferences" && call.method === "GET" ? { status: 200, body: { onboarding_done: false } } : null;
+    await loadPreferences(500);
+    open("#/");
+    expect(await screen.findByRole("heading", { name: "Welcome to Manim Studio" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/welcome");
+    expect(screen.queryByRole("navigation", { name: "Studio" })).not.toBeInTheDocument();
+
+    act(() => { setOnboardingDone(true); });
+    act(() => { window.location.hash = "#/"; });
+    expect(await screen.findByRole("heading", { name: "What are you making?" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/");
   });
 });
 
@@ -90,32 +114,29 @@ describe("gallery", () => {
     await waitFor(() => expect(search).toHaveFocus());
   });
 
-  it("persists all appearance choices, scopes them to Studio, and themes dialog and toast portals", async () => {
-    const user = userEvent.setup();
+  it("applies the stored appearance across Studio and its toasts, and clears it in Author", async () => {
     localStorage.setItem(APPEARANCE_KEY, "dark");
     const first = open("#/");
-    const appearance = await screen.findByRole("radiogroup", { name: "Appearance" });
+    await screen.findByRole("heading", { name: "What are you making?" });
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
-    expect(within(appearance).getByRole("radio", { name: "Dark" })).toBeChecked();
-    await user.click(screen.getByRole("button", { name: "Connect to AI" }));
-    expect((await screen.findByRole("dialog")).closest("html")).toHaveAttribute("data-theme", "dark");
     act(() => { toast("Theme preview", { id: "theme-preview" }); });
     await waitFor(() => expect(document.querySelector("[data-sonner-toaster]")).toHaveAttribute("data-sonner-theme", "dark"));
     act(() => { toast.dismiss("theme-preview"); });
-    await user.keyboard("{Escape}");
-    await user.click(within(appearance).getByRole("radio", { name: "Light" }));
+
+    first.unmount();
+    localStorage.setItem(APPEARANCE_KEY, "light");
+    const second = open("#/");
+    await screen.findByRole("heading", { name: "What are you making?" });
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(localStorage.getItem(APPEARANCE_KEY)).toBe("light");
-    first.unmount();
-    open("#/");
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-    const group = await screen.findByRole("radiogroup", { name: "Appearance" });
-    await user.click(within(group).getByRole("radio", { name: "System" }));
-    expect(document.documentElement).not.toHaveAttribute("data-theme");
-    expect(localStorage.getItem(APPEARANCE_KEY)).toBe("system");
-    await user.click(within(group).getByRole("radio", { name: "Dark" }));
-    await user.click(screen.getByRole("link", { name: "Author mode" }));
+    await userEvent.setup().click(screen.getByRole("link", { name: "Author mode" }));
     await screen.findByText("Author workspace");
+    expect(document.documentElement).not.toHaveAttribute("data-theme");
+
+    second.unmount();
+    localStorage.removeItem(APPEARANCE_KEY);
+    open("#/");
+    await screen.findByRole("heading", { name: "What are you making?" });
     expect(document.documentElement).not.toHaveAttribute("data-theme");
   });
 
@@ -124,10 +145,8 @@ describe("gallery", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
     open("#/");
-    const group = await screen.findByRole("radiogroup", { name: "Appearance" });
+    await screen.findByRole("heading", { name: "What are you making?" });
     expect(document.documentElement).not.toHaveAttribute("data-theme");
-    await user.click(within(group).getByRole("radio", { name: "Dark" }));
-    expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     await user.click(screen.getByRole("button", { name: "Collapse sidebar" }));
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
   });
@@ -200,11 +219,11 @@ describe("gallery", () => {
     await user.clear(screen.getByRole("textbox", { name: "Video name" }));
     expect(screen.getByRole("button", { name: "Save name" })).toBeDisabled();
     await user.type(screen.getByRole("textbox", { name: "Video name" }), "My renamed timer{Enter}");
-    await screen.findByRole("link", { name: /My renamed timer/ });
+    await mainContent().findByRole("link", { name: /My renamed timer/ });
     expect(studio.projects[0].title).toBe("My renamed timer");
     await user.click(screen.getByRole("button", { name: "Options for My renamed timer" }));
     await user.click(screen.getByRole("menuitem", { name: "Duplicate" }));
-    await screen.findByRole("link", { name: /My renamed timer \(copy\)/ });
+    await mainContent().findByRole("link", { name: /My renamed timer \(copy\)/ });
     expect(studio.projects[1]).toMatchObject({ title: "My renamed timer (copy)", params: { title: "Keep this", seconds: 75 }, settings: { theme: "midnight", aspect: "9:16" } });
     expect(screen.getByRole("link", { name: "Your videos" }).querySelector(".studio-nav-count")).toHaveTextContent("2");
   });
@@ -246,6 +265,16 @@ describe("gallery", () => {
     expect(document.documentElement).not.toHaveAttribute("data-surface");
   });
 
+  it("brings settings inside the shell and keeps the welcome tour outside it", async () => {
+    open("#/settings");
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Studio" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("aria-current", "page");
+    act(() => { window.location.hash = "#/welcome"; });
+    expect(await screen.findByRole("heading", { name: "Welcome to Manim Studio" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Studio" })).not.toBeInTheDocument();
+  });
+
   it("combines category and search filters and restores all designs", async () => {
     const user = userEvent.setup();
     open("#/");
@@ -274,7 +303,7 @@ describe("gallery", () => {
     try {
       studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "My own timer", seconds: 75 }, settings: { aspect: "9:16", theme: "midnight" }, created: 1, updated: 1 });
       open("#/");
-      const saved = await screen.findByRole("link", { name: /My timer/ });
+      const saved = await mainContent().findByRole("link", { name: /My timer/ });
       expect(studio.calls.some((call) => call.path === "/api/studio/projects/p9")).toBe(false);
       const observer = observers.find(({ target }) => target.contains(saved))!;
       expect(observer).toBeDefined();
@@ -290,56 +319,21 @@ describe("gallery", () => {
     studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 });
     studio.reply = (call) => call.path === "/api/studio/projects" ? { status: 200, body: [{ id: "p9", title: "My timer", template: "countdown", updated: 1, poster_url: "/media/saved.png" }] } : null;
     open("#/");
-    const saved = await screen.findByRole("link", { name: /My timer/ });
+    const saved = await mainContent().findByRole("link", { name: /My timer/ });
     expect(saved.querySelector("img")).toHaveAttribute("src", "/media/saved.png");
     expect(studio.calls.some((call) => call.path === "/api/studio/projects/p9")).toBe(false);
   });
 
-  it("fetches AI credentials only on opening, copies the HTTP configuration, and refetches on reopen", async () => {
+  it("sends Connect to AI to its own settings section", async () => {
     const user = userEvent.setup();
-    const clipboard = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-    studio.reply = (call) => call.path === "/api/studio/connection" ? {
-      status: 200, body: { available: true, url: "http://127.0.0.1:8123/mcp/", token: "test-token" },
-    } : null;
     open("#/");
-    const connect = await screen.findByRole("button", { name: "Connect to AI" });
-    expect(studio.calls.some((call) => call.path === "/api/studio/connection")).toBe(false);
+    const connect = await screen.findByRole("link", { name: "Connect to AI" });
+    expect(connect).toHaveAttribute("href", "#/settings/ai");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(connect);
-    const configuration = await screen.findByRole("textbox", { name: "MCP configuration" });
-    expect(JSON.parse(configuration.textContent!)).toEqual({ mcpServers: { "manim-studio": {
-      url: "http://127.0.0.1:8123/mcp/", headers: { Authorization: "Bearer test•••" },
-    } } });
-    await user.click(screen.getByRole("button", { name: "Copy configuration" }));
-    expect(JSON.parse(clipboard.mock.calls[0][0])).toEqual({ mcpServers: { "manim-studio": {
-      url: "http://127.0.0.1:8123/mcp/", headers: { Authorization: "Bearer test-token" },
-    } } });
-    await user.click(screen.getByRole("button", { name: "Show token" }));
-    expect(configuration).toHaveTextContent("Bearer test-token");
-    await user.click(screen.getByRole("button", { name: "Hide token" }));
-    expect(configuration).not.toHaveTextContent("test-token");
-    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
-    expect(screen.getByText(/Keep Manim Studio open/)).toBeInTheDocument();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("textbox", { name: "MCP configuration" })).not.toBeInTheDocument();
-    await user.click(connect);
-    await screen.findByRole("textbox", { name: "MCP configuration" });
-    expect(studio.calls.filter((call) => call.path === "/api/studio/connection")).toHaveLength(2);
-  });
-
-  it("handles unavailable AI connections and retries connection errors", async () => {
-    const user = userEvent.setup();
-    let failed = true;
-    studio.reply = (call) => call.path === "/api/studio/connection"
-      ? failed ? { status: 503, body: { detail: "Still starting." } } : { status: 200, body: { available: false } }
-      : null;
-    open("#/");
-    await user.click(await screen.findByRole("button", { name: "Connect to AI" }));
-    const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText("Still starting.")).toBeInTheDocument();
-    failed = false;
-    await user.click(within(dialog).getByRole("button", { name: "Try again" }));
-    expect(await within(dialog).findByText(/AI connections aren't available/)).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Copy configuration" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Connect to AI" })).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/settings/ai");
+    expect(screen.getByRole("link", { name: "Connect to AI" })).toHaveAttribute("aria-current", "page");
   });
 
   it("makes saved-video load failures visible and retryable", async () => {
@@ -351,7 +345,7 @@ describe("gallery", () => {
     expect(await screen.findByText(/Couldn't load your videos/)).toBeInTheDocument();
     failed = false;
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("link", { name: /My timer/ })).toBeInTheDocument();
+    expect(await mainContent().findByRole("link", { name: /My timer/ })).toBeInTheDocument();
     expect(screen.queryByText(/Couldn't load your videos/)).not.toBeInTheDocument();
   });
 
@@ -362,7 +356,7 @@ describe("gallery", () => {
     await user.click(await screen.findByRole("button", { name: "Options for My timer" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(screen.queryByRole("link", { name: /My timer/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(mainContent().queryByRole("link", { name: /My timer/ })).not.toBeInTheDocument());
     expect(studio.projects).toHaveLength(0);
   });
   it("shows a card per design with a poster, and filters them", async () => {
@@ -464,7 +458,7 @@ describe("gallery", () => {
   it("lists saved videos and links to author mode", async () => {
     studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: Date.now() / 1000 });
     open("#/");
-    const saved = await screen.findByRole("link", { name: /My timer/ });
+    const saved = await mainContent().findByRole("link", { name: /My timer/ });
     expect(saved).toHaveAttribute("href", "#/project/p9");
     expect(saved.closest("ul")).toHaveClass("studio-template-grid");
     expect(screen.getByRole("link", { name: /Author mode/ })).toHaveAttribute("href", "#/author");

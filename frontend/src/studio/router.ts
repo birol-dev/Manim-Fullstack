@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 
-/** Hash routes: the gallery, an editor (new from a card, or a saved project), and the code IDE. */
+/** Hash routes: the library, its pages, an editor, settings, the welcome tour and the code IDE. */
 export type Route =
   | { kind: "gallery" }
   | { kind: "templates"; category?: string; query?: string }
   | { kind: "videos" }
   | { kind: "exports" }
+  | { kind: "settings"; section?: string }
+  | { kind: "welcome" }
   | { kind: "new"; template: string; preset: string }
   | { kind: "project"; id: string }
   | { kind: "author" };
@@ -29,6 +31,8 @@ export function parseRoute(hash: string): Route {
   }
   if (head === "videos") return { kind: "videos" };
   if (head === "exports") return { kind: "exports" };
+  if (head === "settings") return { kind: "settings", ...(rest[0] ? { section: decode(rest[0]) } : {}) };
+  if (head === "welcome") return { kind: "welcome" };
   if (head === "author") return { kind: "author" };
   if (head === "new" && rest[0]) return { kind: "new", template: decode(rest[0]), preset: decode(rest[1]) };
   if (head === "project" && rest[0]) return { kind: "project", id: decode(rest[0]) };
@@ -45,6 +49,10 @@ export function routeHash(route: Route): string {
       return "#/videos";
     case "exports":
       return "#/exports";
+    case "settings":
+      return `#/settings${route.section ? `/${encodeURIComponent(route.section)}` : ""}`;
+    case "welcome":
+      return "#/welcome";
     case "author":
       return "#/author";
     case "new":

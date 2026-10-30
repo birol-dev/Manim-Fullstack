@@ -1,11 +1,28 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetCatalogCache } from "./api";
 import { APPEARANCE_KEY, CATEGORIES_KEY, readAppearance, readCategoriesOpen, readCollapsed, setAppearance, setCollapsed, SIDEBAR_KEY } from "./appearance";
 import { readRecentColors, RECENT_COLORS_KEY, rememberColor } from "./color";
-import { loadPreferences, PREFERENCE_FLUSH_MS, readPreference, resetPreferencesForTests } from "./preferences";
+import {
+  flushPreferences,
+  loadPreferences,
+  needsOnboarding,
+  PREFERENCE_FLUSH_MS,
+  readBrandColor,
+  readBrandName,
+  readDefaultFormat,
+  readDefaultTheme,
+  readOnboardingDone,
+  readPreference,
+  resetPreferencesForTests,
+  setBrandColor,
+  setBrandName,
+  setDefaultFormat,
+  setDefaultTheme,
+  setOnboardingDone,
+} from "./preferences";
 import StudioApp from "./StudioApp";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
 
@@ -91,7 +108,7 @@ describe("workspace preferences", () => {
     }
   });
 
-  it("restores the theme, collapsed sidebar and categories from the workspace with empty storage", async () => {
+  it("restores the theme and collapsed panel from the workspace with empty storage", async () => {
     const user = userEvent.setup();
     servePreferences({
       appearance: "dark",
@@ -99,6 +116,7 @@ describe("workspace preferences", () => {
       template_categories_open: false,
       recent_colors: ["#123456"],
       seen_exports: ["e1"],
+      onboarding_done: true,
     });
 
     await loadPreferences(500);
@@ -108,19 +126,59 @@ describe("workspace preferences", () => {
     const view = render(<StudioApp />);
     expect(document.documentElement).toHaveAttribute("data-theme", "dark");
     expect(await screen.findByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
-    const appearance = await screen.findByRole("radiogroup", { name: "Appearance" });
-    expect(within(appearance).getByRole("radio", { name: "Dark" })).toBeChecked();
+    expect(screen.queryByRole("searchbox", { name: "Search designs" })).not.toBeInTheDocument();
     expect(readCategoriesOpen()).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Expand sidebar" }));
-    const toggle = await screen.findByRole("button", { name: "Expand template categories" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("group", { name: "Template categories" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("searchbox", { name: "Search designs" })).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "Template categories" })).toBeInTheDocument();
     expect(localStorage.getItem(SIDEBAR_KEY)).toBe("false");
     view.unmount();
   });
 
+  it("reads and writes the onboarding, brand and default-video choices", async () => {
+    servePreferences({
+      onboarding_done: false,
+      brand_name: "  Server Brand  ",
+      brand_color: "#00ff00",
+      default_format: "mp4",
+      default_theme: "clean",
+    });
+    await loadPreferences(500);
+    expect(readOnboardingDone()).toBe(false);
+    expect(readBrandName()).toBe("Server Brand");
+    expect(readBrandColor()).toBe("#00FF00");
+    expect(readDefaultFormat()).toBe("mp4");
+    expect(readDefaultTheme()).toBe("clean");
+
+    setOnboardingDone(true);
+    setBrandName("Acme Studio");
+    setBrandColor("#ff3366");
+    setDefaultFormat("gif");
+    setDefaultTheme("midnight");
+    expect(readOnboardingDone()).toBe(true);
+    expect(readBrandName()).toBe("Acme Studio");
+    expect(readBrandColor()).toBe("#FF3366");
+    expect(readDefaultFormat()).toBe("gif");
+    expect(readDefaultTheme()).toBe("midnight");
+
+    setBrandName("x".repeat(120));
+    expect(readBrandName()).toHaveLength(80);
+
+    await flushPreferences();
+    const patch = studio.calls.find((call) => call.method === "PATCH" && call.path === "/api/studio/preferences");
+    expect(patch?.body).toMatchObject({
+      onboarding_done: true,
+      brand_name: "x".repeat(80),
+      brand_color: "#FF3366",
+      default_format: "gif",
+      default_theme: "midnight",
+    });
+  });
+
   it("falls back to defaults when neither the workspace nor the cache has a value", async () => {
+    // Until the workspace answers (a test without a preferences mock), the gallery stays put.
+    expect(needsOnboarding()).toBe(false);
     servePreferences({});
     await loadPreferences(500);
     expect(readAppearance()).toBe("system");
@@ -128,5 +186,12 @@ describe("workspace preferences", () => {
     expect(readCategoriesOpen()).toBeNull();
     expect(readRecentColors()).toEqual([]);
     expect(readPreference("seen_exports")).toBeUndefined();
+    // A real answer with no onboarding key starts the tour, until it writes `true`.
+    expect(needsOnboarding()).toBe(true);
+    expect(readOnboardingDone()).toBe(false);
+    expect(readBrandName()).toBe("");
+    expect(readBrandColor()).toBeNull();
+    expect(readDefaultFormat()).toBeNull();
+    expect(readDefaultTheme()).toBeNull();
   });
 });

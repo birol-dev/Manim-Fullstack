@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@fontsource-variable/inter";
 import "@fontsource-variable/jetbrains-mono";
+import "@fontsource-variable/newsreader";
 import "./index.css";
 import { loadPreferences } from "./studio/preferences.ts";
 import StudioApp from "./studio/StudioApp.tsx";

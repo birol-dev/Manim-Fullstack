@@ -231,40 +231,52 @@
   overflow: hidden;
 }
 
-/* Studio owns its palette at the root so portals inherit it too. Author keeps @theme. */
+/*
+ * Studio owns its palette at the root so portals inherit it too. Author keeps @theme.
+ * The "quiet gallery": a monochrome frame; template posters and motion previews supply the
+ * colour. Only ink is an accent, and errors/status keep their own hues.
+ */
 :root[data-surface="studio"], :root[data-surface="studio"][data-theme="light"] {
   color-scheme: light;
-  --color-canvas: #f6f5f2;
+  --color-canvas: #f4f4f4;
   --color-surface: #ffffff;
-  --color-raised: #f1f0ec;
-  --color-overlay: #f8f7f5;
-  --color-well: #eceae5;
-  --color-line: #e4e2dd;
-  --color-line-strong: #d3d0c9;
-  --color-fg: #18181b;
-  --color-fg-muted: #5f5e66;
-  /* Slightly darker than the starting palette for small text on warm fills. */
-  --color-fg-subtle: #696872;
-  --color-accent: #3d5afe;
-  --color-accent-hover: #3049df;
+  --color-raised: #ededeb;
+  --color-overlay: #ffffff;
+  --color-well: #ebebe8;
+  --color-line: #e5e5e2;
+  --color-line-strong: #d4d4d0;
+  --color-hairline: var(--color-line);
+  --color-fg: #111111;
+  --color-fg-muted: #5f5f5f;
+  --color-fg-subtle: #6b6b6b;
+  --color-accent: #111111;
+  --color-accent-hover: #000000;
   --color-accent-fg: #ffffff;
-  --color-accent-soft: rgb(61 90 254 / 0.1);
-  --color-ink: #18181b;
-  --color-ink-hover: #303036;
+  --color-accent-soft: rgb(17 17 17 / 0.06);
+  --color-ink: #111111;
+  --color-ink-hover: #2a2a2a;
   --color-ink-fg: #ffffff;
-  --color-success: #18753e;
-  --color-warning: #8d5800;
-  --color-danger: #bb3020;
-  --color-success-soft: rgb(31 157 85 / 0.1);
-  --color-warning-soft: rgb(184 110 0 / 0.1);
-  --color-danger-soft: rgb(217 63 43 / 0.1);
-  --radius-card: 14px;
-  --radius-control: 10px;
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.12);
-  --shadow-float: 0 2px 4px rgb(0 0 0 / 0.04), 0 24px 48px -12px rgb(0 0 0 / 0.18);
-  --shadow-poster: 0 2px 4px rgb(0 0 0 / 0.06), 0 8px 16px -6px rgb(0 0 0 / 0.2);
+  --color-success: #1b7a44;
+  --color-warning: #8a5a00;
+  --color-danger: #b3261e;
+  --color-success-soft: rgb(27 122 68 / 0.1);
+  --color-warning-soft: rgb(138 90 0 / 0.1);
+  --color-danger-soft: rgb(179 38 30 / 0.08);
+  --font-display: "Newsreader Variable", Newsreader, Georgia, "Times New Roman", serif;
+  --studio-chapter: #262626;
+  --studio-chapter-surface: #303030;
+  --studio-chapter-raised: #3a3a3a;
+  --studio-chapter-line: #3f3f3f;
+  --studio-display-fade: #b6b6b6;
+  --radius-card: 28px;
+  --radius-panel: 28px;
+  --radius-inner: 10px;
+  --radius-control: 999px;
+  --shadow-card: none;
+  --shadow-poster: none;
+  --shadow-float: 0 2px 8px rgb(0 0 0 / 0.05), 0 24px 48px -16px rgb(0 0 0 / 0.18);
   --shadow-popover: var(--shadow-float);
-  --color-scrim: rgb(24 24 27 / 0.36);
+  --color-scrim: rgb(17 17 17 / 0.32);
   --layer-content: 0;
   --layer-scrim: 100;
   --layer-dialog: 101;
@@ -275,64 +287,111 @@
 @media (prefers-color-scheme: dark) {
   :root[data-surface="studio"]:not([data-theme]) {
     color-scheme: dark;
-    --color-canvas: #111113;
-    --color-surface: #18181b;
-    --color-raised: #1f1f23;
-    --color-overlay: #27272c;
-    --color-well: #232328;
-    --color-line: #2a2a30;
-    --color-line-strong: #3a3a42;
-    --color-fg: #f2f2f4;
-    --color-fg-muted: #a6a6b0;
-    --color-fg-subtle: #9696a1;
-    --color-accent: #7b8cff;
-    --color-accent-hover: #99a6ff;
-    --color-accent-fg: #111113;
-    --color-accent-soft: rgb(123 140 255 / 0.14);
-    --color-ink: #f2f2f4;
-    --color-ink-hover: #d9d9e0;
-    --color-ink-fg: #111113;
-    --color-success: #6bcc90;
-    --color-warning: #e5b35b;
-    --color-danger: #ff8979;
-    --color-success-soft: rgb(107 204 144 / 0.12);
-    --color-warning-soft: rgb(229 179 91 / 0.12);
-    --color-danger-soft: rgb(255 137 121 / 0.12);
-    --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.5);
-    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.6);
-    --shadow-poster: 0 0 0 1px rgb(255 255 255 / 0.05), 0 8px 16px -6px rgb(0 0 0 / 0.5);
+    --color-canvas: #141414;
+    --color-surface: #1c1c1c;
+    --color-raised: #242424;
+    --color-overlay: #242424;
+    --color-well: #101010;
+    --color-line: #2c2c2c;
+    --color-line-strong: #3a3a3a;
+    --color-fg: #f2f2f2;
+    --color-fg-muted: #b4b4b4;
+    --color-fg-subtle: #9a9a9a;
+    --color-accent: #f2f2f2;
+    --color-accent-hover: #ffffff;
+    --color-accent-fg: #111111;
+    --color-accent-soft: rgb(242 242 242 / 0.08);
+    --color-ink: #f2f2f2;
+    --color-ink-hover: #ffffff;
+    --color-ink-fg: #111111;
+    --color-success: #7bd8a0;
+    --color-warning: #f0c36b;
+    --color-danger: #ff8a80;
+    --color-success-soft: rgb(123 216 160 / 0.12);
+    --color-warning-soft: rgb(240 195 107 / 0.12);
+    --color-danger-soft: rgb(255 138 128 / 0.12);
+    --studio-chapter: #000000;
+    --studio-chapter-surface: #141414;
+    --studio-chapter-raised: #1c1c1c;
+    --studio-chapter-line: #2c2c2c;
+    --studio-display-fade: #6f6f6f;
+    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.04), 0 24px 48px -16px rgb(0 0 0 / 0.7);
     --color-scrim: rgb(0 0 0 / 0.62);
   }
 }
 
 /* Explicit choice wins over the OS, including in portalled UI. */
 :root[data-surface="studio"][data-theme="dark"] {
-    color-scheme: dark;
-    --color-canvas: #111113;
-    --color-surface: #18181b;
-    --color-raised: #1f1f23;
-    --color-overlay: #27272c;
-    --color-well: #232328;
-    --color-line: #2a2a30;
-    --color-line-strong: #3a3a42;
-    --color-fg: #f2f2f4;
-    --color-fg-muted: #a6a6b0;
-    --color-fg-subtle: #9696a1;
-    --color-accent: #7b8cff;
-    --color-accent-hover: #99a6ff;
-    --color-accent-fg: #111113;
-    --color-accent-soft: rgb(123 140 255 / 0.14);
-    --color-ink: #f2f2f4;
-    --color-ink-hover: #d9d9e0;
-    --color-ink-fg: #111113;
-    --color-success: #6bcc90;
-    --color-warning: #e5b35b;
-    --color-danger: #ff8979;
-    --color-success-soft: rgb(107 204 144 / 0.12);
-    --color-warning-soft: rgb(229 179 91 / 0.12);
-    --color-danger-soft: rgb(255 137 121 / 0.12);
-    --shadow-card: 0 0 0 1px rgb(255 255 255 / 0.04), 0 8px 24px -8px rgb(0 0 0 / 0.5);
-    --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.6);
-    --shadow-poster: 0 0 0 1px rgb(255 255 255 / 0.05), 0 8px 16px -6px rgb(0 0 0 / 0.5);
-    --color-scrim: rgb(0 0 0 / 0.62);
+  color-scheme: dark;
+  --color-canvas: #141414;
+  --color-surface: #1c1c1c;
+  --color-raised: #242424;
+  --color-overlay: #242424;
+  --color-well: #101010;
+  --color-line: #2c2c2c;
+  --color-line-strong: #3a3a3a;
+  --color-fg: #f2f2f2;
+  --color-fg-muted: #b4b4b4;
+  --color-fg-subtle: #9a9a9a;
+  --color-accent: #f2f2f2;
+  --color-accent-hover: #ffffff;
+  --color-accent-fg: #111111;
+  --color-accent-soft: rgb(242 242 242 / 0.08);
+  --color-ink: #f2f2f2;
+  --color-ink-hover: #ffffff;
+  --color-ink-fg: #111111;
+  --color-success: #7bd8a0;
+  --color-warning: #f0c36b;
+  --color-danger: #ff8a80;
+  --color-success-soft: rgb(123 216 160 / 0.12);
+  --color-warning-soft: rgb(240 195 107 / 0.12);
+  --color-danger-soft: rgb(255 138 128 / 0.12);
+  --studio-chapter: #000000;
+  --studio-chapter-surface: #141414;
+  --studio-chapter-raised: #1c1c1c;
+  --studio-chapter-line: #2c2c2c;
+  --studio-display-fade: #6f6f6f;
+  --shadow-float: 0 0 0 1px rgb(255 255 255 / 0.04), 0 24px 48px -16px rgb(0 0 0 / 0.7);
+  --color-scrim: rgb(0 0 0 / 0.62);
 }
+
+/* Big statements: one thin serif, tight tracking, size over weight. */
+:root[data-surface="studio"] .studio-display { font-family: var(--font-display); font-size: clamp(2.75rem, 1.8rem + 3.2vw, 6rem); font-weight: 250; line-height: .98; letter-spacing: -.035em; text-wrap: balance; }
+:root[data-surface="studio"] .studio-display-fade { color: var(--studio-display-fade); }
+
+/* A numbered full-width line marks a section without drawing a box around it. */
+:root[data-surface="studio"] .studio-index-line { display: flex; align-items: center; gap: 16px; color: var(--color-fg-subtle); font-size: 11px; font-weight: 500; letter-spacing: .14em; line-height: 1; }
+:root[data-surface="studio"] .studio-index-line::after { content: ""; flex: 1; height: 1px; background: var(--color-line); }
+
+/* A charcoal chapter: the background swap flips every token inside it. */
+:root[data-surface="studio"] .studio-chapter-dark {
+  color-scheme: dark;
+  --color-canvas: var(--studio-chapter);
+  --color-surface: var(--studio-chapter-surface);
+  --color-raised: var(--studio-chapter-raised);
+  --color-overlay: var(--studio-chapter-surface);
+  --color-well: var(--studio-chapter-surface);
+  --color-line: var(--studio-chapter-line);
+  --color-line-strong: #4a4a4a;
+  --color-fg: #f2f2f2;
+  --color-fg-muted: #b4b4b4;
+  --color-fg-subtle: #9a9a9a;
+  --color-accent: #f2f2f2;
+  --color-accent-hover: #ffffff;
+  --color-accent-fg: #111111;
+  --color-accent-soft: rgb(255 255 255 / 0.08);
+  --color-ink: #f2f2f2;
+  --color-ink-hover: #ffffff;
+  --color-ink-fg: #111111;
+  --studio-display-fade: #6f6f6f;
+  background: var(--studio-chapter);
+  color: var(--color-fg);
+}
+
+/* The empty state: a grey picture of the content, a plain title and one line of why. */
+:root[data-surface="studio"] .studio-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 64px 24px; text-align: center; color: var(--color-fg-muted); }
+:root[data-surface="studio"] .studio-empty-picture { display: grid; place-items: center; width: 120px; height: 120px; overflow: hidden; border-radius: 24px; background: var(--color-raised); color: var(--color-fg-subtle); }
+:root[data-surface="studio"] .studio-empty-picture svg { width: 40px; height: 40px; }
+:root[data-surface="studio"] .studio-empty > :is(h2, .studio-empty-title) { color: var(--color-fg); font-size: 16px; font-weight: 500; line-height: 1.3; }
+:root[data-surface="studio"] .studio-empty > :is(p, .studio-empty-line) { max-width: 42ch; color: var(--color-fg-muted); font-size: 14px; line-height: 1.5; }
+:root[data-surface="studio"] .studio-empty-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; margin-top: 4px; }
