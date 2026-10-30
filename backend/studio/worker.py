@@ -103,6 +103,7 @@ class _Child:
         from manim import tempconfig
 
         from studio.formats import frame_size
+        from studio.compat import output_config, written_movie
         from studio.kit import runtime
 
         rid = request.get("id")
@@ -122,16 +123,14 @@ class _Child:
                 "pixel_height": height,
                 "frame_width": frame_width,
                 "frame_height": frame_height,
-                "save_last_frame": mode != "motion",
-                "write_to_movie": mode == "motion",
+                **output_config(still=mode != "motion",
+                                transparent=mode != "motion" and background.get("kind") == "transparent"),
                 "frame_rate": 15,
-                "format": "mp4",
                 "output_file": os.path.splitext(os.path.basename(out))[0],
                 "disable_caching": True,
                 "media_dir": request.get("media_dir") or os.path.join(os.path.dirname(out), "_media"),
                 "verbosity": "ERROR",
                 "progress_bar": "none",
-                "transparent": mode != "motion" and background.get("kind") == "transparent",
             }
             for stale in (out, os.path.splitext(out)[0] + ".json"):
                 if os.path.exists(stale):
@@ -142,7 +141,7 @@ class _Child:
                     scene = cls()
                     scene.render()
                     if mode == "motion":
-                        shutil.copyfile(scene.renderer.file_writer.movie_file_path, out)
+                        shutil.copyfile(written_movie(scene.renderer.file_writer), out)
             finally:
                 runtime.set_job(None)
         except (Exception, SystemExit) as exc:

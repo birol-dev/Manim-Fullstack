@@ -29,6 +29,18 @@ def test_frame_estimate_waits_for_measured_throughput(monkeypatch):
     assert estimate.update(100, 100, 15) is None
 
 
+def test_find_output_accepts_the_versioned_gif_name(tmp_path):
+    """Manim 0.22 suffixes a default-named GIF with its version."""
+    videos = tmp_path / "videos" / "runner" / "854x480 15fps"
+    segments = videos / "partial_movie_files" / "StudioRender"
+    segments.mkdir(parents=True)
+    (segments / "StudioRender_1.mp4").write_bytes(b"segment")
+    (videos / "Unrelated.gif").write_bytes(b"GIF89a")
+    gif = videos / "StudioRender_ManimCE_v0.22.1.gif"
+    gif.write_bytes(b"GIF89a")
+    assert exports.find_output(str(tmp_path)) == str(gif)
+
+
 @pytest.mark.parametrize("fmt", ["mp4", "gif", "webm", "mov"])
 def test_streamed_frames_reach_record_monotonically(tmp_path, monkeypatch, fmt):
     """No Manim/ffmpeg process needed: realistic bars and split JSON share a pipe.
@@ -372,6 +384,63 @@ def test_batched_wait_counts_encoded_frames_not_queued_frames(runner_module, mon
     assert events[-1]["phase"] == "finishing" and not writer.finished
     writer.finish()
     assert writer.finished
+
+
+def test_segment_encoders_count_repeat_only_after_encoding(runner_module):
+    """0.22 uses concurrent per-segment encoders, not writer.write_frame."""
+    class Encoder:
+        def __init__(self):
+            self.written = []
+
+        def write_frame(self, frame, *, repeat=1):
+            if frame == "bad":
+                raise ValueError("encoding failed")
+            self.written.append(repeat)
+
+    class Writer:
+        def _create_segment_encoder(self, target):
+            return Encoder()
+
+        def finish(self):
+            pass
+
+    writer = Writer()
+    events = []
+    progress = runner_module["FrameProgress"](writer, 30, events.append)
+    first = writer._create_segment_encoder("first.webm")
+    second = writer._create_segment_encoder("second.webm")
+    assert progress.frames == 0  # creating/queueing a segment is not encoding it
+    progress.last_sent = 0
+    threads = [threading.Thread(target=encoder.write_frame, args=("pixels",), kwargs={"repeat": 15})
+               for encoder in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert first.written == second.written == [1] * 15
+    assert progress.frames == 30
+    assert [e["rendered_frames"] for e in events] == sorted(e["rendered_frames"] for e in events)
+    assert events[-1] == {"phase": "finishing", "rendered_frames": 30, "total_frames": 30}
+    with pytest.raises(ValueError, match="encoding failed"):
+        first.write_frame("bad", repeat=8)
+    assert progress.frames == 30
+
+
+def test_finishing_waits_for_outstanding_segment_frames(runner_module):
+    class Writer:
+        def write_frame(self, frame):
+            pass
+
+        def finish(self):
+            assert events[-1]["phase"] == "drawing"
+            self.write_frame("last frame")
+
+    writer = Writer()
+    events = []
+    progress = runner_module["FrameProgress"](writer, 1, events.append)
+    writer.finish()
+    assert progress.frames == 1
+    assert events[-1] == {"phase": "finishing", "rendered_frames": 1, "total_frames": 1}
 
 
 @pytest.mark.parametrize("fps, expected", [(15, 60), (30, 120), (60, 240)])

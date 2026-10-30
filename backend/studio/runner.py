@@ -12,6 +12,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from studio.kit import runtime  # noqa: E402
+from studio.compat import observe_encoded_frames, output_config  # noqa: E402
 from studio.registry import get_template  # noqa: E402
 from manim import tempconfig  # noqa: E402
 from manim.renderer.cairo_renderer import CairoRenderer  # noqa: E402
@@ -65,7 +67,7 @@ class TimingRenderer(CairoRenderer):
 
 
 def measure_scene(template):
-    with tempconfig({"dry_run": True, "progress_bar": "none", "save_last_frame": False}):
+    with tempconfig({**output_config(dry_run=True), "progress_bar": "none"}):
         renderer = TimingRenderer()
         scene = template(renderer=renderer)
         scene.render()
@@ -79,16 +81,12 @@ class FrameProgress:
         self.total, self.send = total, send
         self.frames = 0
         self.last_sent = 0.0
+        self._lock = threading.Lock()  # 0.22 can encode several segments concurrently
         self.finish = writer.finish
         # Manim >=0.19 queues frames to a background encoder. Counting queue.put
         # would report a long frozen wait complete while its frames still encode.
         # Observe the actual encoder instead, splitting its batches into frames.
-        if hasattr(writer, "encode_and_write_frame"):
-            self.write_frame = writer.encode_and_write_frame
-            writer.encode_and_write_frame = self.write_batch
-        else:  # Manim 0.18 streams frames directly into ffmpeg
-            self.write_frame = writer.write_frame
-            writer.write_frame = self.write
+        observe_encoded_frames(writer, self)
         writer.finish = self.finishing
         self.emit("drawing")
 
@@ -107,15 +105,21 @@ class FrameProgress:
             self.completed(1)
 
     def completed(self, count):
-        self.frames += count
-        if self.frames >= self.total:
-            self.emit("finishing")
-        elif time.monotonic() - self.last_sent >= 0.2:
-            self.emit("drawing")
+        with self._lock:
+            self.frames += count
+            if self.frames >= self.total:
+                self.emit("finishing")
+            elif time.monotonic() - self.last_sent >= 0.2:
+                self.emit("drawing")
 
     def finishing(self, *args, **kwargs):
         # finish() combines partial movies, encodes GIF/WebM/MOV and muxes sound.
-        self.emit("finishing")
+        # 0.22 can reach finish() with segment workers still encoding. Their
+        # completed() calls announce finishing after the last encoded frame;
+        # announcing it now would freeze the queue's progress below total.
+        with self._lock:
+            if self.frames >= self.total:
+                self.emit("finishing")
         return self.finish(*args, **kwargs)
 
 _job = runtime.current_job()

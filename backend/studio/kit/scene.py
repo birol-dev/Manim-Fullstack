@@ -85,10 +85,7 @@ class StudioScene(Scene):
         self._poster_done = False
         self._particle_clearances = []
         from ..audio_render import install_sound
-        if not config.dry_run and config.write_to_movie and config.format != "gif":
-            install_sound(self)
-        else:
-            self._sound_cues = []
+        install_sound(self)
         fonts.register_bundled()
         self.bg = self._background()
         if self.bg is not None:

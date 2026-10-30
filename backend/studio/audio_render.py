@@ -1,4 +1,4 @@
-"""Attach audio after Manim finishes its silent movie. No Manim imports.
+"""Attach audio after Manim finishes its silent movie. No eager Manim imports.
 
 Manim 0.18 hard-codes CLI ffmpeg/AAC in its sound writer (including WebM).
 Studio instead copies the finished video stream and encodes only our PCM mix.
@@ -16,6 +16,7 @@ import tempfile
 import wave
 
 from .audio import mixed_chunks, read_pcm, synthesize
+from .compat import movie_has_sound, written_movie
 from .sound import EFFECTS, SAMPLE_RATE
 
 
@@ -29,15 +30,15 @@ def record_cue(scene, name: str, offset=0.0):
 
 def install_sound(scene):
     scene._sound_cues = []
-    if scene.mode not in ("video", "motion") or scene.is_peek:
+    if scene.mode not in ("video", "motion") or scene.is_peek or not movie_has_sound(scene):
         return
-    # The caller already excluded dry runs, stills, peeks and GIFs.
+    # The output helper excluded dry runs, stills and GIFs before touching finish.
     writer = scene.renderer.file_writer
     finish = writer.finish
 
     def finish_with_sound(*args, **kwargs):
         result = finish(*args, **kwargs)
-        path = getattr(writer, "movie_file_path", None)
+        path = written_movie(writer)
         if path and Path(path).suffix.lower() in (".mp4", ".webm", ".mov") and Path(path).is_file():
             sound = scene.s.sound
             if (sound.effects and sound.effects_volume and scene._sound_cues) or (

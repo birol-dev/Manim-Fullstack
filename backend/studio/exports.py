@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .errors import BusyError, NotFoundError, StudioError
+from .compat import output_cli_args
 from .storage import STUDIO_DIR, utc_now
 
 BACKEND_DIR = os.path.dirname(STUDIO_DIR)
@@ -143,11 +144,7 @@ class ManimVideoRunner:
     @staticmethod
     def args(job: VideoJob) -> list:
         extra = ["-r", f"{job.width},{job.height}", "--fps", str(job.fps), "--media_dir", job.media_dir,
-                 "--disable_caching", "--progress_bar=none"]
-        if job.format in ("gif", "webm", "mov"):
-            extra += ["--format", job.format]
-        if job.transparent:
-            extra.append("--transparent")
+                 "--disable_caching", *output_cli_args(job.format, job.transparent)]
         return extra
 
     async def _run(self, job: VideoJob, on_progress, on_log) -> str:
@@ -222,13 +219,18 @@ class ManimVideoRunner:
 
 
 def find_output(media_dir: str) -> Optional[str]:
-    """Newest StudioRender.* video (or gif) under *media_dir*, ignoring partial movie files."""
+    """Newest StudioRender.* video (or gif) under *media_dir*, ignoring partial movie files.
+
+    Manim 0.22 versions a default-named GIF ("StudioRender_ManimCE_v0.22.1.gif"),
+    so a plain stem check would miss the one artifact this run did write.
+    """
     best = None
     for dirpath, dirnames, filenames in os.walk(media_dir):
         dirnames[:] = [d for d in dirnames if d != "partial_movie_files"]
         for name in filenames:
             stem, ext = os.path.splitext(name)
-            if stem == SCENE_NAME and ext.lower() in (".mp4", ".mov", ".webm", ".gif"):
+            named = stem == SCENE_NAME or stem.startswith(f"{SCENE_NAME}_ManimCE_")
+            if named and ext.lower() in (".mp4", ".mov", ".webm", ".gif"):
                 path = os.path.join(dirpath, name)
                 mtime = os.path.getmtime(path)
                 if best is None or mtime > best[0]:

@@ -34,6 +34,7 @@ def render_preview(template, params, settings, mode, out, short=360, assets_dir=
     from manim import tempconfig
 
     from studio.kit import runtime
+    from studio.compat import output_config
 
     _, _, s = validate_job(template, params, settings)
     w, h = pixel_size(s.aspect, short)
@@ -41,10 +42,10 @@ def render_preview(template, params, settings, mode, out, short=360, assets_dir=
     cls = importlib.import_module(f"studio.templates.{template}.scene").Template
     runtime.set_job({"template": template, "params": params, "settings": settings, "mode": mode,
                      "assets_dir": assets_dir, "output": out})
-    cfg = {"pixel_width": w, "pixel_height": h, "frame_width": fw, "frame_height": fh, "save_last_frame": True,
-           "write_to_movie": False, "media_dir": media_dir or os.path.join(os.path.dirname(out), "_media"),
-           "disable_caching": True, "verbosity": "ERROR", "progress_bar": "none",
-           "transparent": s.background.kind == "transparent"}
+    cfg = {"pixel_width": w, "pixel_height": h, "frame_width": fw, "frame_height": fh,
+           **output_config(still=True, transparent=s.background.kind == "transparent"),
+           "media_dir": media_dir or os.path.join(os.path.dirname(out), "_media"),
+           "disable_caching": True, "verbosity": "ERROR", "progress_bar": "none"}
     started = time.perf_counter()
     try:
         with tempconfig(cfg):
@@ -55,6 +56,7 @@ def render_preview(template, params, settings, mode, out, short=360, assets_dir=
 
 
 def render_video(template, params, settings, out_dir, quality="720p", fmt="mp4", assets_dir=None):
+    from studio.compat import output_cli_args
     _, _, s = validate_job(template, params, settings)
     q = QUALITIES[quality]
     w, h = pixel_size(s.aspect, q["short"])
@@ -65,11 +67,8 @@ def render_video(template, params, settings, out_dir, quality="720p", fmt="mp4",
         json.dump({"template": template, "params": params, "settings": settings, "mode": "video",
                    "assets_dir": assets_dir}, f)
     cmd = [sys.executable, "-m", "manim", "-r", f"{w},{h}", "--fps", str(fps), "--disable_caching",
-           "--media_dir", os.path.join(out_dir, "_video_media"), "-v", "WARNING", "--progress_bar", "none"]
-    if fmt != "mp4":
-        cmd += ["--format", fmt]
-    if s.background.kind == "transparent":
-        cmd.append("--transparent")
+           "--media_dir", os.path.join(out_dir, "_video_media"), "-v", "WARNING",
+           *output_cli_args(fmt, s.background.kind == "transparent")]
     cmd += [RUNNER, "StudioRender"]
     started = time.perf_counter()
     proc = subprocess.run(cmd, env={**os.environ, "COMPOSER_JOB": job_path}, capture_output=True, text=True)
