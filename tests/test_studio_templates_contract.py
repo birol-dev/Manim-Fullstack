@@ -27,7 +27,7 @@ KNOWN_WIDGETS = {"text", "textarea", "number", "integer", "duration", "choice", 
 
 
 def test_templates_are_installed():
-    assert "countdown" in TEMPLATE_IDS
+    assert {"countdown", "lower_third", "before_after", "slideshow", "chart"} <= set(TEMPLATE_IDS)
 
 
 @pytest.mark.parametrize("template_id", TEMPLATE_IDS)
