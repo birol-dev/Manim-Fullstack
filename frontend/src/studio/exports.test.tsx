@@ -30,7 +30,7 @@ const base: ExportJob = {
   duration: 9,
 };
 
-type TestJob = Partial<ExportJob> & { width?: number; height?: number; finished?: number | string; request?: ExportRequest };
+type TestJob = Partial<ExportJob> & { width?: number; height?: number; request?: ExportRequest };
 
 const job = (overrides: TestJob = {}) => ({ ...base, created: Math.floor(Date.now() / 1000), ...overrides }) as ExportJob;
 
@@ -535,6 +535,67 @@ it("shows a helpful empty exports state", () => {
   expect(screen.getByRole("heading", { name: "Nothing exported yet" })).toBeInTheDocument();
   expect(screen.getByText("Finished videos land here, ready to share.")).toBeInTheDocument();
   expect(screen.getByRole("link", { name: "Make a video" })).toHaveAttribute("href", "#/templates");
+});
+
+it("groups a list into one collapsible row and keeps single exports in their own groups", async () => {
+  const user = userEvent.setup();
+  const at = (days: number, hour = 12) => {
+    const now = new Date();
+    return Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate() - days, hour).getTime() / 1000);
+  };
+  const listed = (batch: Partial<ExportJob>) => job({
+    batch_id: "b1", batch_title: "Announcement — 3 videos", batch_total: 3, ...batch,
+  });
+  renderPage([
+    listed({ id: "b1", title: "Summer fair", created: at(0, 9) }),
+    listed({ id: "b2", title: "Bake sale", created: at(0, 10) }),
+    listed({ id: "b3", title: "Book fair", status: "failed", url: null, created: at(0, 11) }),
+    job({ id: "solo", title: "A single video", created: at(0, 8) }),
+  ]);
+
+  expect(screen.getByRole("heading", { name: "Lists" })).toBeInTheDocument();
+  expect(screen.getByText("Announcement — 3 videos")).toBeInTheDocument();
+  expect(screen.getByText("2 of 3 done")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Announcement — 3 videos progress" }))
+    .toHaveAttribute("aria-valuenow", "67");
+  expect(screen.queryByText("Summer fair")).not.toBeInTheDocument();
+  expect(screen.getByText("A single video")).toBeInTheDocument();  // a solo export is unchanged
+
+  await user.click(screen.getByRole("button", { name: "Announcement — 3 videos" }));
+  expect(screen.getByRole("button", { name: "Announcement — 3 videos" })).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByText("Summer fair")).toBeInTheDocument();
+  expect(screen.getByText("Book fair")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+});
+
+it("shows a batch folder, cancels the list and starts its failed rows again", async () => {
+  const user = userEvent.setup();
+  const studio = installFakeStudio();
+  studio.reply = (call) => {
+    if (call.path === "/api/studio/host") return { status: 200, body: { reveal: true, copy_file: false } };
+    if (call.path === "/api/studio/batches/b1/cancel") return { status: 200, body: { id: "b1", counts: {}, cancelled: 1 } };
+    if (call.path === "/api/studio/batches/b1/retry") return { status: 200, body: { id: "b1", counts: {}, retried: ["e9"] } };
+    if (call.method === "POST" && call.path === "/api/studio/exports/e1/reveal") return { status: 204, body: null };
+    return null;
+  };
+  const batch = (override: Partial<ExportJob>) => job({
+    batch_id: "b1", batch_title: "Products — 2 videos", batch_total: 2, ...override,
+  });
+  const { retry } = renderPage([
+    batch({ id: "e1", title: "Mug", status: "done" }),
+    batch({ id: "e2", title: "Tote", status: "failed", url: null }),
+    batch({ id: "e3", title: "Cap", status: "rendering", progress: 30, url: null }),
+  ]);
+  const reveal = await screen.findByRole("button", { name: "Show folder" });
+  await user.click(reveal);
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/exports/e1/reveal")).toBe(true));
+
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/batches/b1/cancel")).toBe(true));
+  expect(retry).toHaveBeenCalled();
+
+  await user.click(screen.getByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/batches/b1/retry")).toBe(true));
 });
 
 it("puts active exports above the finished ones", () => {

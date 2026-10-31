@@ -1,7 +1,7 @@
 /** Export dialog (make a file from the video) and the list of recent exports. */
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowRight, Check, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, Play, RotateCw, Trash2, XCircle } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, Play, RotateCw, Trash2, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,7 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { apiUrl, requestJson } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-import { cancelExport, copyExportFile, friendlyError, getExport, getHostCapabilities, previewProblem, revealExport, startExport, type ExportRequest, type HostCapabilities } from "./api";
+import { cancelBatch, cancelExport, copyExportFile, friendlyError, getExport, getHostCapabilities, previewProblem, retryBatch, revealExport, startExport, type ExportRequest, type HostCapabilities } from "./api";
 import { Spinner } from "./components";
 import { ActionMenu } from "./ProjectMenu";
 import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
@@ -654,7 +654,93 @@ export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact
 type ExportDayGroup = { key: "today" | "yesterday" | "earlier"; label: string; jobs: ExportJob[] };
 
 const DAY_MS = 86_400_000;
-const exportTime = (job: ExportJob) => toDate((job as ExportJob & { finished?: number | string | null }).finished ?? job.created)?.getTime() ?? 0;
+const exportTime = (job: ExportJob) => toDate(job.finished ?? job.created)?.getTime() ?? 0;
+
+type ExportBatchGroup = { id: string; title: string; total: number; jobs: ExportJob[] };
+
+/** One group per batch, newest first; exports without a batch are left to their own rows. */
+function groupBatchExports(jobs: ExportJob[]): ExportBatchGroup[] {
+  const groups = new Map<string, ExportJob[]>();
+  for (const job of jobs) {
+    if (!job.batch_id) continue;
+    const batch = groups.get(job.batch_id) ?? [];
+    batch.push(job);
+    groups.set(job.batch_id, batch);
+  }
+  return [...groups.entries()].map(([id, batch]) => ({
+    id,
+    title: batch.find((job) => job.batch_title)?.batch_title || "Videos from a list",
+    total: Math.max(batch.length, ...batch.map((job) => job.batch_total ?? 0)),
+    jobs: [...batch].sort((a, b) => exportTime(b) - exportTime(a)),
+  }));
+}
+
+/** A whole list as one collapsible row; expanding shows the same rows as everywhere else. */
+function BatchGroupRow({ batch, onView, onRefresh }: {
+  batch: ExportBatchGroup;
+  onView?: (job: ExportJob) => void;
+  onRefresh?: () => void;
+}) {
+  const capabilities = useHostCapabilities();
+  const [open, setOpen] = useState(false);
+  const [working, setWorking] = useState<"cancel" | "retry" | null>(null);
+  const done = batch.jobs.filter((job) => job.status === "done").length;
+  const failed = batch.jobs.filter((job) => job.status === "failed").length;
+  const active = batch.jobs.filter((job) => ACTIVE_EXPORT.has(job.status));
+  const firstDone = batch.jobs.find((job) => job.status === "done");
+  const percent = batch.total > 0 ? Math.round((done / batch.total) * 100) : 0;
+  const cancel = async () => {
+    if (working) return;
+    setWorking("cancel");
+    try {
+      await cancelBatch(batch.id);
+      onRefresh?.();
+      toast.success("Stopped this list");
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't stop this list."));
+    } finally {
+      setWorking(null);
+    }
+  };
+  const retry = async () => {
+    if (working) return;
+    setWorking("retry");
+    try {
+      const result = await retryBatch(batch.id);
+      onRefresh?.();
+      toast.success(result.retried?.length ? `Making ${result.retried.length} again` : "Nothing left to make again");
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't start these again."));
+    } finally {
+      setWorking(null);
+    }
+  };
+  return <li className="studio-batch-row border-b border-line py-4 last:border-0">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <button type="button" className="flex min-w-0 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+        aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <ChevronDown aria-hidden className={cn("size-4 shrink-0 text-fg-subtle transition-transform", open && "rotate-180")} />
+        <span className="truncate text-sm font-medium text-fg">{batch.title}</span>
+      </button>
+      <span className="text-xs tabular-nums text-fg-muted">{done} of {batch.total} done</span>
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        {capabilities?.reveal && firstDone && <Button variant="secondary" size="sm" onClick={() => showInFolder(firstDone.id)}>
+          <FolderOpen /> Show folder
+        </Button>}
+        {active.length > 0 && <Button variant="danger-ghost" size="sm" onClick={cancel} disabled={working === "cancel"}>
+          {working === "cancel" ? <Spinner /> : <XCircle />} Cancel
+        </Button>}
+        {failed > 0 && <Button variant="secondary" size="sm" onClick={retry} disabled={working === "retry"}>
+          {working === "retry" ? <Spinner /> : <RotateCw />} Try again
+        </Button>}
+      </div>
+    </div>
+    <Progress value={percent} aria-label={`${batch.title} progress`} className="mt-2 h-1" />
+    {open && <ul className="studio-exports-list studio-exports-panel-list pl-6">
+      {batch.jobs.map((job) => <ExportRow key={job.id} job={job} onView={onView} onRefresh={onRefresh} compact />)}
+    </ul>}
+  </li>;
+}
 
 /** Newest first, grouped by the local day the file was finished (or created). */
 function groupExportsByDay(jobs: ExportJob[], now = new Date()): ExportDayGroup[] {
@@ -675,9 +761,12 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
   const [viewing, setViewing] = useState<ExportJob | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const visible = jobs.filter((job) => !hidden.has(job.id));
+  // A list is one row; single exports keep the "Making now" and day groups they always had.
+  const batches = grouped ? groupBatchExports(visible) : [];
+  const single = grouped ? visible.filter((job) => !job.batch_id) : visible;
   // Active jobs sit above the day groups: they are the only thing that needs an answer now.
-  const active = grouped ? visible.filter((job) => ACTIVE_EXPORT.has(job.status)) : [];
-  const finished = grouped ? visible.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
+  const active = grouped ? single.filter((job) => ACTIVE_EXPORT.has(job.status)) : [];
+  const finished = grouped ? single.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
   const forget = (job: ExportJob) => {
     setHidden((current) => new Set(current).add(job.id));
     onRefresh?.();
@@ -689,6 +778,12 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
         {active.length > 0 && <section className="studio-export-day" aria-labelledby="studio-export-day-making">
           <h2 id="studio-export-day-making" className="studio-export-day-label">Making now</h2>
           <ul className="studio-exports-list">{active.map(row)}</ul>
+        </section>}
+        {batches.length > 0 && <section className="studio-export-day" aria-labelledby="studio-export-day-lists">
+          <h2 id="studio-export-day-lists" className="studio-export-day-label">Lists</h2>
+          <ul className="studio-exports-list">
+            {batches.map((batch) => <BatchGroupRow key={batch.id} batch={batch} onView={setViewing} onRefresh={onRefresh} />)}
+          </ul>
         </section>}
         {groupExportsByDay(finished).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>
           <h2 id={`studio-export-day-${group.key}`} className="studio-export-day-label">{group.label}</h2>

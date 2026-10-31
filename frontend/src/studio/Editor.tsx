@@ -1,6 +1,6 @@
 /** The editor: a form on the left, the live preview on the right, export on top. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, Film, FolderDown, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, Film, FolderDown, Layers, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -24,7 +24,7 @@ import { ASPECTS, initialSettings, isPortrait } from "./options";
 import { readBrandKit, readDefaultFormat, readDefaultTheme } from "./preferences";
 import { stableKey } from "./preview";
 import { PreviewPanel, type PreviewView } from "./PreviewPanel";
-import type { Route } from "./router";
+import { navigate, type Route } from "./router";
 import { fieldPaths, fieldsOf, initialParams } from "./schemaForm";
 import type { Aspect, Catalog, FieldError, Params, PreviewRequest, Project, RenderSettings, TemplateInfo, Theme } from "./types";
 
@@ -127,7 +127,7 @@ export function EditorPage({ catalog, route, onProjectCreated }: EditorPageProps
       projectId: null,
       updated: null,
     };
-    return <EditorBody catalog={catalog} template={template} initial={initial} onProjectCreated={onProjectCreated} />;
+    return <EditorBody catalog={catalog} template={template} initial={initial} newPreset={opened.preset} onProjectCreated={onProjectCreated} />;
   }
   return <ProjectLoader catalog={catalog} id={opened.id} onProjectCreated={onProjectCreated} />;
 }
@@ -177,7 +177,7 @@ function ProjectLoader({ catalog, id, onProjectCreated }: { catalog: Catalog; id
       />
     );
   }
-  return <EditorBody catalog={catalog} template={state.template} initial={state.initial} onProjectCreated={onProjectCreated} />;
+  return <EditorBody catalog={catalog} template={state.template} initial={state.initial} newPreset="" onProjectCreated={onProjectCreated} />;
 }
 
 function SaveIndicator({ status, hasProject, onRetry }: { status: SaveStatus; hasProject: boolean; onRetry: () => void }) {
@@ -225,10 +225,12 @@ interface EditorBodyProps {
   catalog: Catalog;
   template: TemplateInfo;
   initial: InitialState;
+  /** The card this new video started from, so "Make many" can use its text. */
+  newPreset: string;
   onProjectCreated: (id: string) => void;
 }
 
-function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBodyProps) {
+function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }: EditorBodyProps) {
   const { snapshot: { title, params, settings }, change, travel, history, canUndo, canRedo } = useEditorHistory({ title: initial.title, params: initial.params, settings: initial.settings });
   const [initialProjectId] = useState(initial.projectId);
   const [hasProject, setHasProject] = useState(!!initial.projectId);
@@ -274,6 +276,7 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     editVersion.current += 1;
   };
   const saver = useRef<Autosaver | null>(null);
+  const manyAfterSave = useRef(false);
   // `updated` of the version on screen: a newer one on the server was saved by someone else.
   const knownUpdate = useRef(initial.updated);
   const createdRef = useRef(onProjectCreated);
@@ -291,12 +294,17 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
       update: (id, snapshot, keepalive) =>
         updateProject(id, { title: snapshot.title, params: snapshot.params, settings: snapshot.settings }, keepalive).then(remember),
       onStatus: (status, error) => {
+        if (status === "error") manyAfterSave.current = false;
         setSaveStatus(status);
         setSaveError(status === "error" ? friendlyError(error, "Couldn't save this video.") : null);
       },
       onCreated: (project) => {
         setHasProject(true);
         createdRef.current(project.id);
+        if (manyAfterSave.current) {
+          manyAfterSave.current = false;
+          navigate({ kind: "many-project", id: project.id });
+        }
       },
     });
     saver.current = autosaver;
@@ -324,6 +332,23 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
     const next = { ...history.current.settings, ...patch };
     if (patch.aspect && !isPortrait(patch.aspect)) next.safe_zone = false;
     if (change({ settings: next })) markTouched();
+  };
+
+  const makeMany = () => {
+    const saved = saver.current?.id ?? initialProjectId;
+    if (saved) {
+      saver.current?.flush();
+      navigate({ kind: "many-project", id: saved });
+      return;
+    }
+    // Keep the words and look on screen: save once, then open the list maker on that project.
+    if (!saver.current) {
+      navigate({ kind: "many", template: template.id, preset: newPreset });
+      return;
+    }
+    manyAfterSave.current = true;
+    saver.current.change({ title: title.trim() || template.title, template: template.id, params, settings });
+    saver.current.flush();
   };
 
   const restore = (direction: "undo" | "redo") => {
@@ -473,6 +498,9 @@ function EditorBody({ catalog, template, initial, onProjectCreated }: EditorBody
               {exportActivity && <span className="studio-export-activity" aria-hidden />}
             </Button>
           </Tooltip>
+          <Button variant="secondary" size="md" onClick={makeMany} title="Make one video per row of a list" className="px-4">
+            <Layers /> Make many
+          </Button>
           <Button variant="primary" size="md" onClick={() => setExportOpen(true)} title={`Export (${shortcut}E)`} className="px-4">
             <Download /> Export
           </Button>

@@ -10,6 +10,8 @@ export type Route =
   | { kind: "welcome" }
   | { kind: "new"; template: string; preset: string }
   | { kind: "project"; id: string }
+  | { kind: "many"; template: string; preset: string }
+  | { kind: "many-project"; id: string }
   | { kind: "author" };
 
 function decode(part: string | undefined): string {
@@ -36,6 +38,10 @@ export function parseRoute(hash: string): Route {
   if (head === "author") return { kind: "author" };
   if (head === "new" && rest[0]) return { kind: "new", template: decode(rest[0]), preset: decode(rest[1]) };
   if (head === "project" && rest[0]) return { kind: "project", id: decode(rest[0]) };
+  if (head === "many" && rest[0] === "project") {
+    return rest[1] ? { kind: "many-project", id: decode(rest[1]) } : { kind: "gallery" };
+  }
+  if (head === "many" && rest[0]) return { kind: "many", template: decode(rest[0]), preset: decode(rest[1]) };
   return { kind: "gallery" };
 }
 
@@ -59,6 +65,10 @@ export function routeHash(route: Route): string {
       return `#/new/${encodeURIComponent(route.template)}/${encodeURIComponent(route.preset)}`;
     case "project":
       return `#/project/${encodeURIComponent(route.id)}`;
+    case "many":
+      return `#/many/${encodeURIComponent(route.template)}${route.preset ? `/${encodeURIComponent(route.preset)}` : ""}`;
+    case "many-project":
+      return `#/many/project/${encodeURIComponent(route.id)}`;
     default:
       return "#/";
   }

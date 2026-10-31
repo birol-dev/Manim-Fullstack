@@ -157,6 +157,36 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
 
     @server.tool()
     @_tool_errors
+    async def make_many(template: str, ctx: Context, rows: list[list[str]], mapping: dict[str, int],
+                        preset: str = "", params: dict | None = None, settings: dict | None = None,
+                        title_column: int | None = None,
+                        format: Literal["mp4", "png", "gif", "webm", "mov"] = "mp4",
+                        quality: Literal["draft", "720p", "1080p", "1080p60", "4k"] = "1080p") -> dict:
+        """Make one video per row of a list, from a spreadsheet the person brings. `rows` are
+        cell lists without the header row (up to 200 rows, 40 columns); `mapping` maps a
+        template field to its column index, e.g. {"headline": 0, "big_text": 1}. Only the
+        template's simple top-level text, number and color fields can be filled; everything
+        else keeps the preset's or template's own text. `title_column` names each video (and
+        its file); omit it to use the design's title plus the row number. Start from a preset
+        with `preset`, or send `params`/`settings` yourself. Rows that fail the template's
+        own validation are skipped and returned in `row_errors`; the rest are queued. Returns
+        {batch_id, export_ids, row_errors, batch}; poll `get_export` for each id, or read
+        `list_exports` and group by `batch_id`. Read `guide("many")` first."""
+        info = await service.template_info(template)
+        cards = {card["id"]: card for card in info.get("presets") or []}
+        if preset and preset not in cards:
+            raise ToolError(f"Unknown preset {preset!r} for {template}; use one of: "
+                            + (", ".join(cards) or "none (this template has no presets)") + ".")
+        card = cards.get(preset) or {}
+        merged_params = {**(info.get("defaults") or {}), **(card.get("params") or {}), **(params or {})}
+        merged_settings = {**(card.get("settings") or {}), **(settings or {})}
+        result = await service.start_batch(template, params=merged_params, settings=merged_settings,
+                                           mapping=mapping, rows=rows, title_column=title_column,
+                                           format=format, quality=quality)
+        return {**result, "app_url": f"{origin(ctx)}/#/exports"}
+
+    @server.tool()
+    @_tool_errors
     async def list_projects() -> list[dict]:
         """Saved projects, most recently updated first. Returns id, title, template, created, updated
         and poster_url. Use it to find a project id the person mentions by name."""
@@ -414,6 +444,12 @@ class RestBridge:
 
     async def start_export(self, template, params, settings, **fields):
         return await self.request("POST", "/exports", json={"template": template, "params": params, "settings": settings, **fields})
+
+    async def start_batch(self, template, params, settings, mapping, rows, title_column=None,
+                          format="mp4", quality="1080p"):
+        return await self.request("POST", "/batches", json={
+            "template": template, "params": params, "settings": settings, "mapping": mapping,
+            "rows": rows, "title_column": title_column, "format": format, "quality": quality})
 
     async def list_exports(self):
         return await self.request("GET", "/exports")

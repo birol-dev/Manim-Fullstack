@@ -341,7 +341,7 @@ class ExportManager:
                 if record.get("status") == "done":
                     filename = record.get("filename") or ""
                     if os.path.basename(filename) != filename or not os.path.isfile(
-                            os.path.join(self.exports_dir, filename)):
+                            self._record_path(record)):
                         changed = True
                         continue  # the file was deleted
                 self._records[record["id"]] = record
@@ -381,12 +381,27 @@ class ExportManager:
         if not filename or os.path.basename(filename) != filename:
             return True
         root = os.path.realpath(self.exports_dir)
-        path = os.path.realpath(os.path.join(root, filename))
+        path = os.path.realpath(self._record_path(record))
         try:
             inside = path != root and os.path.commonpath([root, path]) == root
         except ValueError:
             inside = False
         return not (inside and os.path.isfile(path))
+
+    def _own_folder(self, record: dict) -> Optional[str]:
+        """A batch record's own folder, or None for the exports folder itself."""
+        folder = record.get("folder")
+        if (isinstance(folder, str) and folder and folder not in (".", "..")
+                and os.path.basename(folder) == folder):
+            return os.path.join(self.exports_dir, folder)
+        return None
+
+    def _record_dir(self, record: dict) -> str:
+        """The folder a record's file lives in (a batch's own folder, else the exports folder)."""
+        return self._own_folder(record) or self.exports_dir
+
+    def _record_path(self, record: dict) -> str:
+        return os.path.join(self._record_dir(record), record.get("filename") or "")
 
     def _save_locked(self) -> None:
         records = sorted(self._records.values(), key=lambda r: (r.get("created", ""), r.get("_queued", 0)),
@@ -407,13 +422,20 @@ class ExportManager:
             logger.warning("studio: could not write the export index (%s)", exc)
 
     # -- public API ----------------------------------------------------------------
-    def start(self, record: dict, job: dict) -> dict:
+    def start(self, record: dict, job: dict, check_limit: bool = True) -> dict:
         """Queue an export. *record* holds the public fields (template, title, format, quality,
-        width, height, fps, ...); *job* the render job (template, params, settings, assets_dir)."""
+        width, height, fps, ...); *job* the render job (template, params, settings, assets_dir).
+
+        A batch queues its rows in one go (``check_limit=False``): the queue still renders one
+        video at a time, so the limit that protects single exports must not split a list. A
+        running list's rows do not count against that limit either: one person's export must
+        never be refused because a list they started is still working through its rows.
+        """
         self._ensure_loaded()
         with self._lock:
-            active = sum(1 for r in self._records.values() if r.get("status") in ACTIVE)
-            if active >= self.max_active:
+            active = sum(1 for r in self._records.values()
+                         if r.get("status") in ACTIVE and not r.get("batch_id"))
+            if check_limit and active >= self.max_active:
                 raise BusyError(f"{active} exports are already waiting. Try again when some have finished.")
             export_id = secrets.token_hex(6)
             while export_id in self._records:
@@ -448,8 +470,8 @@ class ExportManager:
             record = self._get_locked(export_id)
             filename = record.get("filename")
             finished = record.get("status") == "done"
+            path = os.path.realpath(self._record_path(record)) if isinstance(filename, str) and filename else ""
         root = os.path.realpath(self.exports_dir)
-        path = os.path.realpath(os.path.join(root, filename)) if isinstance(filename, str) and filename else ""
         try:
             inside = bool(path) and path != root and os.path.commonpath([root, path]) == root
         except ValueError:
@@ -495,11 +517,17 @@ class ExportManager:
             filename = record.get("filename")
             if filename and os.path.basename(filename) == filename:
                 try:
-                    os.unlink(os.path.join(self.exports_dir, filename))
+                    os.unlink(self._record_path(record))
                 except FileNotFoundError:
                     pass
                 except OSError as exc:
                     raise StudioError(f"The file could not be deleted ({exc.strerror or exc}).") from exc
+                own_folder = self._own_folder(record)
+                if own_folder:
+                    try:
+                        os.rmdir(own_folder)  # only succeeds once the list's last file is gone
+                    except OSError:
+                        pass
             self._records.pop(export_id, None)
             self._save_locked()
             return public(record)
@@ -603,9 +631,10 @@ class ExportManager:
         return max(base, 120 + 4 * float(seconds) * scale)
 
     def _publish(self, record: dict, src: str, ext: str) -> str:
-        os.makedirs(self.exports_dir, exist_ok=True)
+        folder = self._record_dir(record)
+        os.makedirs(folder, exist_ok=True)
         name = f"{record['_slug']}-{record['id']}{ext.lower()}"
-        dest = os.path.join(self.exports_dir, name)
+        dest = os.path.join(folder, name)
         if os.path.exists(dest):  # ids are unique: never replace another export's file
             raise FileExistsError(f"An export file named {name} already exists.")
         shutil.move(src, dest)
@@ -623,7 +652,7 @@ class ExportManager:
             record.setdefault("_log", deque(maxlen=40))
             record.update(status="rendering", progress=0, message="Getting ready", time_left=None,
                           started=utc_now())
-            record.setdefault("_slug", record.get("template") or "video")
+            record.setdefault("_slug", record.get("file_stem") or record.get("template") or "video")
             self._save_locked()
         job = record["_job"]
         job_dir = os.path.join(self.work_dir, export_id)

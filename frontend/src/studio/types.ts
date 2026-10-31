@@ -210,6 +210,79 @@ export interface ExportJob {
   duration?: number | null;
   error?: string | null;
   created: number | string;
+  finished?: number | string | null;
+  /** Set on every export a "Make many" list queued; the Exports page groups by it. */
+  batch_id?: string | null;
+  batch_title?: string | null;
+  batch_total?: number | null;
+  /** The batch's own subfolder under the exports folder. */
+  folder?: string | null;
+}
+
+export type BatchFieldKind = "text" | "number" | "color";
+
+/** A simple top-level template field a spreadsheet column can fill. */
+export interface BatchField {
+  field: string;
+  label: string;
+  kind: BatchFieldKind;
+  max_length?: number | null;
+  required?: boolean;
+}
+
+export interface BatchCellProblem {
+  field: string;
+  label: string;
+  message: string;
+}
+
+/** One row that cannot be made, in plain words; the rest of the list still runs. */
+export interface BatchRowProblem {
+  row: number;
+  title: string;
+  errors: BatchCellProblem[];
+}
+
+export interface ParsedBatch {
+  headers: string[];
+  rows: string[][];
+  fields: BatchField[];
+  suggested_mapping: Record<string, number>;
+  suggested_title_column?: number | null;
+  row_errors?: BatchRowProblem[];
+  valid_rows?: number;
+}
+
+export interface BatchCounts {
+  queued: number;
+  rendering: number;
+  done: number;
+  failed: number;
+  cancelled: number;
+}
+
+export interface BatchSummary {
+  id: string;
+  name: string;
+  template: string;
+  title: string;
+  created: number | string;
+  total: number;
+  folder?: string | null;
+  format?: string | null;
+  quality?: string | null;
+  row_errors?: BatchRowProblem[];
+  counts: BatchCounts;
+  cancelled?: number;
+  retried?: string[];
+  skipped?: string[];
+}
+
+export interface BatchCreated {
+  batch_id: string;
+  export_ids: string[];
+  row_errors: BatchRowProblem[];
+  batch: BatchSummary;
 }
 
 export interface ProjectSummary {

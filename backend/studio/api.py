@@ -267,6 +267,53 @@ async def post_setup_update_install(request: Request):
     return result
 
 
+@router.post("/batches/parse")
+@_errors
+async def post_batch_parse(request: Request):
+    """Read a list (a file or pasted text) and suggest which column fills which field.
+
+    Sending ``rows`` and ``mapping`` instead checks those rows again and returns the same
+    per-row problems a batch would skip, without creating anything.
+    """
+    body = await _body(request, ("template", "filename", "data", "text", "rows", "mapping",
+                                 "params", "settings", "title_column"))
+    fields = {key: value for key, value in body.items() if key != "template"}
+    return await get_service().parse_batch(body.get("template"), **fields)
+
+
+@router.post("/batches", status_code=202)
+@_errors
+async def post_batch(request: Request):
+    """Queue one export per usable row; rows with problems come back in ``row_errors``."""
+    body = await _body(request, ("template", "params", "settings", "mapping", "rows",
+                                 "title_column", "format", "quality"))
+    return await get_service().start_batch(
+        body.get("template"), params=body.get("params"), settings=body.get("settings"),
+        mapping=body.get("mapping"), rows=body.get("rows"), title_column=body.get("title_column"),
+        format=body.get("format", "mp4"), quality=body.get("quality", "1080p"))
+
+
+@router.get("/batches/{batch_id}")
+@_errors
+async def get_batch(batch_id: str):
+    """A batch's name, totals and how many of its exports are in each state."""
+    return await get_service().get_batch(batch_id)
+
+
+@router.post("/batches/{batch_id}/cancel")
+@_errors
+async def post_batch_cancel(batch_id: str):
+    """Cancel the batch's queued and running exports; finished ones stay."""
+    return await get_service().cancel_batch(batch_id)
+
+
+@router.post("/batches/{batch_id}/retry")
+@_errors
+async def post_batch_retry(batch_id: str):
+    """Queue the batch's failed rows again, keeping them in the same batch."""
+    return await get_service().retry_batch(batch_id)
+
+
 @router.get("/peeks/{key}.mp4")
 @_errors
 async def get_peek(key: str):

@@ -12,5 +12,7 @@ manim>=0.19.0,<0.23
 pillow<13
 # QR codes in studio templates (pure Python, no dependencies).
 segno>=1.6
+# Reading .xlsx lists for "Make many" (pure Python).
+openpyxl>=3.1,<4
 # Agent tools and the local stdio bridge.
 mcp>=2.3,<3

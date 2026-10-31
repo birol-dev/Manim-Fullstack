@@ -40,7 +40,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import host, peeks, preferences, registry, setup_components
+from . import batches, host, peeks, preferences, registry, setup_components
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -68,6 +68,7 @@ EXPORT_QUALITIES = ("draft", "720p", "1080p", "1080p60", "4k")
 MIN_SHORT, MAX_SHORT = 120, 1080
 MAX_INPUT_BYTES = 256 * 1024  # params + settings of one preview, export or project
 MAX_TITLE = 120
+MAX_WAITING_EXPORTS = 600  # every waiting row of every list, so any number of lists stay bounded
 KEY_VERSION = 2
 PROJECT_ID = re.compile(r"^[0-9a-f]{16}$")
 ICON_NAME = re.compile(r"^[a-z0-9]+(?:[-_][a-z0-9]+)*$")
@@ -123,6 +124,7 @@ class StudioService:
         self.assets_dir = os.path.abspath(assets_dir or os.path.join(workspace, "assets"))
         self.app_root = app_root or os.path.dirname(workspace)
         self.studio_dir = os.path.join(workspace, "studio")
+        self._batch_store = batches.BatchStore(workspace)
         self.projects_dir = os.path.join(self.studio_dir, "projects")
         self.tmp_dir = os.path.join(self.studio_dir, "tmp")
         self.index_path = os.path.join(self.studio_dir, "exports.json")
@@ -586,6 +588,20 @@ class StudioService:
         if not os.path.isfile(out):
             raise RenderError("The poster finished without writing an image.")
 
+    def _export_record(self, spec, params: dict, settings: dict, render_settings, format: str,
+                       quality: str, title) -> tuple:
+        """(record, job) shared by one export and one row of a batch."""
+        q = QUALITIES[quality]
+        width, height = pixel_size(render_settings.aspect, q["short"])
+        transparent = render_settings.background.kind == "transparent"
+        fmt = "mov" if (transparent and format == "mp4") else format  # MP4 can't hold transparency
+        record = {"template": spec.id, "title": title or spec.meta.title, "format": fmt, "quality": quality,
+                  "aspect": render_settings.aspect, "width": width, "height": height,
+                  "fps": spec.meta.export_fps or q["fps"], "transparent": transparent,
+                  "_slug": slugify(title, fallback=spec.id) if title else slugify(spec.id, fallback="video")}
+        job = {"template": spec.id, "params": params, "settings": settings, "assets_dir": self.assets_dir}
+        return record, job
+
     def start_export_sync(self, template, params=None, settings=None, format: str = "mp4",
                           quality: str = "1080p", title=None) -> dict:
         errors = []
@@ -599,15 +615,7 @@ class StudioService:
         spec, params, settings, render_settings = self._validate(template, params, settings)
         if format not in ("gif", "png"):
             self._validate_audio(render_settings)
-        q = QUALITIES[quality]
-        width, height = pixel_size(render_settings.aspect, q["short"])
-        transparent = render_settings.background.kind == "transparent"
-        fmt = "mov" if (transparent and format == "mp4") else format  # MP4 can't hold transparency
-        record = {"template": spec.id, "title": title or spec.meta.title, "format": fmt, "quality": quality,
-                  "aspect": render_settings.aspect, "width": width, "height": height,
-                  "fps": spec.meta.export_fps or q["fps"], "transparent": transparent,
-                  "_slug": slugify(title, fallback=spec.id) if title else slugify(spec.id, fallback="video")}
-        job = {"template": spec.id, "params": params, "settings": settings, "assets_dir": self.assets_dir}
+        record, job = self._export_record(spec, params, settings, render_settings, format, quality, title)
         return self._export_manager().start(record, job)
 
     async def start_export(self, template, params=None, settings=None, format: str = "mp4",
@@ -660,6 +668,232 @@ class StudioService:
                                        format=request.get("format") or "mp4",
                                        quality=request.get("quality") or "1080p",
                                        title=request.get("title"))
+
+    # -- make many: one export per row of a list ---------------------------------------------
+    def _batch_spec(self, template, params, settings) -> tuple:
+        """(spec, params, settings, render settings when the design's own text is complete)."""
+        spec = self._spec(template)
+        params, settings = self._object("params", params), self._object("settings", settings)
+        self._check_size(params, settings)
+        render_settings = None
+        try:
+            _, _, _, render_settings = self._validate(template, params, settings)
+        except TemplateError as exc:
+            # Rows may fill required fields the design's own text leaves empty. Only a
+            # problem in the shared settings stops the whole list.
+            problems = [item for item in exc.errors
+                        if str(item.get("field", "")).startswith("settings")]
+            if problems:
+                raise TemplateError(str(exc), problems) from None
+        return spec, params, settings, render_settings
+
+    @staticmethod
+    def _batch_rows(rows) -> tuple:
+        if not isinstance(rows, list) or not rows:
+            raise batches.BatchError("Your list has no rows yet. Choose a file or paste your list.")
+        if len(rows) > batches.MAX_ROWS:
+            raise batches.BatchError(f"Your list has {len(rows)} rows. The most you can make at once is "
+                                     f"{batches.MAX_ROWS}. Split it into smaller lists.")
+        cleaned = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)):
+                raise batches.BatchError("Each row of the list must be a list of cells.")
+            cleaned.append([batches.clean_cell(cell) for cell in row])
+        width = max((len(row) for row in cleaned), default=0)
+        if width > batches.MAX_COLUMNS:
+            raise batches.BatchError(f"Your list has {width} columns. The most you can use at once is "
+                                     f"{batches.MAX_COLUMNS}.")
+        return [row + [""] * (width - len(row)) for row in cleaned], width
+
+    @staticmethod
+    def _batch_mapping(mapping, fields: list, width: int) -> dict:
+        if mapping is None:
+            mapping = {}
+        if not isinstance(mapping, dict):
+            raise batches.BatchError("The column matches aren't valid.")
+        known = {field["field"] for field in fields}
+        for name, index in mapping.items():
+            if name not in known:
+                raise batches.BatchError(f"{name} can't be filled from a list.")
+            if index is None or index == -1:
+                continue
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0 or index >= width:
+                raise batches.BatchError("Choose a column for each field, or keep the design's own text.")
+        return {name: index for name, index in mapping.items() if isinstance(index, int) and index >= 0}
+
+    @staticmethod
+    def _batch_title_column(title_column, width: int) -> Optional[int]:
+        if title_column in (None, -1, ""):
+            return None
+        if (isinstance(title_column, bool) or not isinstance(title_column, int)
+                or title_column < 0 or title_column >= width):
+            raise batches.BatchError("Choose a column to name each video.")
+        return title_column
+
+    def _batch_validate(self, spec, params: dict, settings: dict, fields: list, mapping: dict,
+                        rows: list, title_column) -> tuple:
+        """(valid rows, per-row plain errors); one bad row never stops the others."""
+        valid, row_errors = [], []
+        for number, row in enumerate(rows, start=1):
+            values = batches.row_params(params, fields, mapping, row)
+            title = batches.row_title(row, title_column)
+            try:
+                _, row_params, row_settings, render_settings = self._validate(spec.id, values, settings)
+            except TemplateError as exc:
+                row_errors.append({"row": number, "title": title,
+                                   "errors": batches.plain_errors(exc.errors, fields)})
+                continue
+            valid.append({"row": number, "title": title, "params": row_params, "settings": row_settings,
+                          "render_settings": render_settings})
+        return valid, row_errors
+
+    def parse_batch_sync(self, template, *, data=None, text=None, filename: str = "", rows=None,
+                         mapping=None, params=None, settings=None, title_column=None) -> dict:
+        """Read a list (or check rows again) and suggest which column fills which field."""
+        spec = self._spec(template)
+        fields = batches.mappable_fields(spec.params_model.model_json_schema())
+        if rows is not None:
+            rows, width = self._batch_rows(rows)
+            headers = [f"Column {index + 1}" for index in range(width)]
+        elif data is not None:
+            headers, rows = batches.parse_bytes(batches.decode_upload(data), str(filename or ""))
+        elif isinstance(text, str):
+            headers, rows = batches.parse_text(text, str(filename or ""))
+        else:
+            raise batches.BatchError("Choose a CSV, TSV or .xlsx file, or paste your list.")
+        suggested = batches.suggest_mapping(fields, headers)
+        result = {"headers": headers, "rows": rows, "fields": fields, "suggested_mapping": suggested,
+                  "suggested_title_column": batches.suggest_title_column(fields, headers, suggested)}
+        if mapping is not None:
+            params, settings = self._object("params", params), self._object("settings", settings)
+            self._check_size(params, settings)
+            mapping = self._batch_mapping(mapping, fields, len(rows[0]) if rows else 0)
+            title_column = self._batch_title_column(title_column, len(rows[0]) if rows else 0)
+            valid, row_errors = self._batch_validate(spec, params, settings, fields, mapping, rows, title_column)
+            result.update(row_errors=row_errors, valid_rows=len(valid))
+        return result
+
+    async def parse_batch(self, template, **fields) -> dict:
+        return await asyncio.to_thread(lambda: self.parse_batch_sync(template, **fields))
+
+    def start_batch_sync(self, template, params=None, settings=None, mapping=None, rows=None,
+                         title_column=None, format: str = "mp4", quality: str = "1080p") -> dict:
+        """Queue one export per usable row and return the batch with its per-row problems."""
+        errors = []
+        if format not in EXPORT_FORMATS:
+            errors.append({"field": "format", "message": f"Use one of {', '.join(EXPORT_FORMATS)}."})
+        if quality not in EXPORT_QUALITIES:
+            errors.append({"field": "quality", "message": f"Use one of {', '.join(EXPORT_QUALITIES)}."})
+        if errors:
+            raise TemplateError("Invalid export settings.", errors)
+        spec, params, settings, render_settings = self._batch_spec(template, params, settings)
+        fields = batches.mappable_fields(spec.params_model.model_json_schema())
+        rows, width = self._batch_rows(rows)
+        mapping = self._batch_mapping(mapping, fields, width)
+        title_column = self._batch_title_column(title_column, width)
+        valid, row_errors = self._batch_validate(spec, params, settings, fields, mapping, rows, title_column)
+        if not valid:
+            first = next((item for item in row_errors if item.get("errors")), None)
+            problem = first["errors"][0] if first else None
+            sentence = "None of these rows can be made yet."
+            if first and problem:
+                sentence += f" Row {first['row']} · {problem['label']}: {problem['message']}"
+            raise batches.BatchError(sentence)
+        if format not in ("gif", "png"):
+            audio_settings = render_settings or valid[0]["render_settings"]
+            if audio_settings is not None:
+                self._validate_audio(audio_settings)
+        count = len(valid)
+        waiting = sum(1 for record in self._export_manager().list() if record.get("status") in ACTIVE)
+        if waiting + count > MAX_WAITING_EXPORTS:
+            raise batches.BatchError(f"You already have {waiting} video{'s' if waiting != 1 else ''} waiting. "
+                                     "Try again when some have finished.")
+        batch_id = self._batch_store.new_id()
+        name = f"{spec.meta.title} — {count} video{'s' if count != 1 else ''}"
+        folder = batches.folder_name(name, batch_id)
+        record = batches.new_record(batch_id, name, spec.id, spec.meta.title, count, folder, format, quality,
+                                    row_errors)
+        export_ids = []
+        manager = self._export_manager()
+        for entry in valid:
+            title = self._title(entry["title"] or f"{spec.meta.title} {entry['row']}",
+                                default=f"{spec.meta.title} {entry['row']}")
+            export, job = self._export_record(spec, entry["params"], entry["settings"],
+                                              entry["render_settings"], format, quality, title)
+            export.update(batch_id=batch_id, batch_title=name, batch_total=count, folder=folder,
+                          file_stem=batches.safe_file_stem(title, fallback=f"{spec.id}-{entry['row']}"))
+            export["_slug"] = export["file_stem"]
+            export_ids.append(manager.start(export, job, check_limit=False)["id"])
+        self._batch_store.add(record)
+        return {"batch_id": batch_id, "export_ids": export_ids, "row_errors": row_errors,
+                "batch": self.get_batch_sync(batch_id)}
+
+    async def start_batch(self, template, **fields) -> dict:
+        return await asyncio.to_thread(lambda: self.start_batch_sync(template, **fields))
+
+    def get_batch_sync(self, batch_id: str) -> dict:
+        record = self._batch_store.get(batch_id)
+        records = [item for item in self._export_manager().list() if item.get("batch_id") == batch_id]
+        if record is None:
+            if not records:
+                raise NotFoundError("That list isn't here anymore.")
+            first = records[0]
+            record = {"id": batch_id, "name": first.get("batch_title") or "Your list",
+                      "template": first.get("template"), "title": first.get("batch_title") or "Your list",
+                      "created": min((item.get("created", "") for item in records), default=""),
+                      "total": first.get("batch_total") or len(records),
+                      "folder": first.get("folder"), "format": first.get("format"),
+                      "quality": first.get("quality"), "row_errors": []}
+        return {**record, "counts": batches.counts(records)}
+
+    async def get_batch(self, batch_id: str) -> dict:
+        return await asyncio.to_thread(self.get_batch_sync, batch_id)
+
+    def cancel_batch_sync(self, batch_id: str) -> dict:
+        batch = self.get_batch_sync(batch_id)
+        manager = self._export_manager()
+        cancelled = 0
+        for record in manager.list():
+            if record.get("batch_id") == batch_id and record.get("status") in ACTIVE:
+                manager.cancel(record["id"])
+                cancelled += 1
+        return {**self.get_batch_sync(batch_id), "cancelled": cancelled}
+
+    async def cancel_batch(self, batch_id: str) -> dict:
+        return await asyncio.to_thread(self.cancel_batch_sync, batch_id)
+
+    def retry_batch_sync(self, batch_id: str) -> dict:
+        batch = self.get_batch_sync(batch_id)
+        manager = self._export_manager()
+        retried, skipped = [], []
+        for record in manager.list():
+            if record.get("batch_id") != batch_id or record.get("status") != "failed":
+                continue
+            request = record.get("request")
+            if not isinstance(request, dict) or not isinstance(request.get("template"), str):
+                skipped.append(record["id"])
+                continue
+            try:
+                spec, params, settings, render_settings = self._validate(
+                    request["template"], request.get("params"), request.get("settings"))
+            except TemplateError:
+                skipped.append(record["id"])
+                continue
+            title = self._title(request.get("title") or record.get("title") or spec.meta.title)
+            export, job = self._export_record(spec, params, settings, render_settings,
+                                              record.get("format") or "mp4",
+                                              record.get("quality") or "1080p", title)
+            export.update(batch_id=batch_id, batch_title=record.get("batch_title") or batch["name"],
+                          batch_total=record.get("batch_total") or batch["total"],
+                          folder=record.get("folder") or batch.get("folder"),
+                          file_stem=batches.safe_file_stem(title, fallback=spec.id))
+            export["_slug"] = export["file_stem"]
+            retried.append(manager.start(export, job, check_limit=False)["id"])
+            manager.remove(record["id"])  # the failed row is replaced, not repeated in the group
+        return {**self.get_batch_sync(batch_id), "retried": retried, "skipped": skipped}
+
+    async def retry_batch(self, batch_id: str) -> dict:
+        return await asyncio.to_thread(self.retry_batch_sync, batch_id)
 
     # -- the finished file on this computer ------------------------------------------------
     def host_capabilities(self) -> dict:

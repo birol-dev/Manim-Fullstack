@@ -16,6 +16,9 @@ import type {
   Project,
   ProjectSummary,
   RenderSettings,
+  BatchCreated,
+  BatchSummary,
+  ParsedBatch,
 } from "./types";
 
 /** What the studio says when the server can't be reached (the shared message names the code app). */
@@ -143,6 +146,38 @@ export const listExports = () => requestJson<ExportJob[]>("/api/studio/exports")
 export const getExport = (id: string) => requestJson<ExportJob>(`/api/studio/exports/${encodeURIComponent(id)}`);
 export const cancelExport = (id: string) =>
   requestJson<ExportJob>(`/api/studio/exports/${encodeURIComponent(id)}`, { method: "DELETE" });
+
+export interface ParseBatchRequest {
+  template: string;
+  filename?: string;
+  data?: string;
+  text?: string;
+  /** Check these rows again instead of reading a file (the third step's problems). */
+  rows?: string[][];
+  mapping?: Record<string, number>;
+  params?: Params;
+  settings?: Partial<RenderSettings>;
+  title_column?: number | null;
+}
+
+export interface StartBatchRequest {
+  template: string;
+  params: Params;
+  settings: Partial<RenderSettings>;
+  mapping: Record<string, number>;
+  rows: string[][];
+  title_column: number | null;
+  format: ExportFormat;
+  quality: ExportQuality;
+}
+
+export const parseBatch = (body: ParseBatchRequest) => postJson<ParsedBatch>("/api/studio/batches/parse", body);
+export const startBatch = (body: StartBatchRequest) => postJson<BatchCreated>("/api/studio/batches", body);
+export const getBatch = (id: string) => requestJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}`);
+export const cancelBatch = (id: string) =>
+  postJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}/cancel`);
+export const retryBatch = (id: string) =>
+  postJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}/retry`);
 
 export interface HostCapabilities {
   reveal: boolean;

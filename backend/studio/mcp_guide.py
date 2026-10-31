@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from .sound import EFFECTS, TRACKS
 
-TOPICS = ("start", "templates", "writing", "platforms", "look", "sound", "export", "troubleshooting")
+TOPICS = ("start", "templates", "writing", "platforms", "look", "sound", "export", "many", "troubleshooting")
 
 SUMMARIES = {
     "start": "The workflow, from the goal to the download link.",
@@ -23,6 +23,7 @@ SUMMARIES = {
     "look": "Themes, backgrounds, energy, ending and brand colours.",
     "sound": "Effects, bundled music, uploads, volume and fading.",
     "export": "Formats, qualities, transparency, render times, retries.",
+    "many": "One video per row of a list: make_many, columns and skipped rows.",
     "troubleshooting": "What to do when a tool returns an error.",
 }
 
@@ -177,6 +178,9 @@ person watches the project in the app and downloads the exported file at the end
     queues a job; poll `get_export(export_id)` until `status` is `done`, then give the
     person `download_url`, the `project_id` and the `app_url` from `create_project`.
     If it failed, read `error`, fix the input, export again (or `retry_export`).
+
+Many videos at once (a class list, a product list) use `make_many`; read
+`guide("many")` for the column mapping and the row limits.
 
 Good work needs no extra flourishes: one clear message, legible text, one look, sound
 that suits the room, and the right shape for where it plays.
@@ -466,6 +470,63 @@ Finished files live in the app's `workspace/media/studio/exports/` folder and ar
 project itself is saved separately, so exporting twice does not change it."""
 
 
+def _render_many(catalog: dict) -> str:
+    templates = "\n".join(f"- **{t['id']}** — {t['summary']}" for t in catalog.get("templates", []))
+    return f"""# One video per row of a list
+
+When the person has a spreadsheet (30 names, 20 products), do not call `create_project` and
+`export_project` in a loop. `make_many` reads the rows, fills the template's fields from the
+columns, and queues one export per usable row.
+
+## Step by step
+
+1. **Choose the template and a starting look.** `get_template(template)` returns its schema,
+   presets and defaults. Start from a preset (`make_many(..., preset="...")`) so the words
+   around the mapped fields already read well, or send `params` and `settings` yourself.
+2. **Find the fillable fields.** Only the template's simple top-level `text`, `number` and
+   `color` fields can be filled from a list. Lists (`details`, `options`, table rows),
+   pictures, icons, toggles and fixed choices keep the design's own values. The `fields`
+   array from the Studio's Make many page lists them for a person; for an agent,
+   `get_template(...)["schema"]["properties"]` and its `x-widget` values show the same.
+3. **Map a column to a field by index.** `mapping` is `{{"headline": 0, "big_text": 1}}`:
+   the field name points at a column index in every row. `rows` are cell lists without the
+   header row:
+
+   ```json
+   {{
+     "template": "announcement",
+     "preset": "event-invite",
+     "rows": [["Summer fair", "14.06", "Come along"], ["Bake sale", "21.06", "Open to all"]],
+     "mapping": {{"headline": 0, "big_text": 1, "call_to_action": 2}},
+     "title_column": 0,
+     "format": "mp4",
+     "quality": "1080p"
+   }}
+   ```
+
+   An empty cell keeps the design's own value; it never blanks a field. A title column names
+   each video and its file. Without one, videos are named after the design and their row.
+4. **Respect the limits.** At most 200 rows and 40 columns. Keep every cell plain text; the
+   template's normal validation still applies. Dates should be written the way a person says
+   them ("14 June 2026"), not as spreadsheet serial numbers.
+5. **Read the result.** `make_many` answers `{{batch_id, export_ids, row_errors, batch}}`.
+   Rows that fail validation are skipped and named in `row_errors` with their row number,
+   field and a plain message; the other rows are already queued. Show the person which rows
+   were skipped and why, rather than silently dropping them.
+6. **Wait and deliver.** Poll `get_export(export_id)` for each id until it is `done`, or call
+   `list_exports()` and use the records carrying that `batch_id`. Finished files sit in one
+   subfolder named after the batch. Give the person each `download_url`, or the app's
+   Exports page at `app_url`.
+
+Mistakes wait for a fix, not for a loop: correct the mapped values or the row text and call
+`make_many` again with just the bad rows. `retry_export` repeats one failed job from its
+stored request. A batch's own cancel and retry actions are in the app.
+
+## Templates that work well for lists
+
+{templates}"""
+
+
 def _render_troubleshooting(_catalog: dict) -> str:
     return """# Troubleshooting
 
@@ -518,6 +579,7 @@ _RENDERERS = {
     "look": _render_look,
     "sound": _render_sound,
     "export": _render_export,
+    "many": _render_many,
     "troubleshooting": _render_troubleshooting,
 }
 
@@ -752,10 +814,11 @@ def register_guidance(server, service) -> None:
 
     @server.tool(title="Guide", description=(
         "Read the Manim Studio guide before making anything. Topics: start (the workflow), templates, "
-        "writing, platforms, look, sound, export, troubleshooting. Returns markdown."))
+        "writing, platforms, look, sound, export, many (one video per list row), troubleshooting. "
+        "Returns markdown."))
     async def guide(topic: str = "start") -> str:
         """Guidance for making a good video: start, templates, writing, platforms, look, sound,
-        export or troubleshooting. Unknown topics list the topics."""
+        export, many or troubleshooting. Unknown topics list the topics."""
         return await topic_markdown(service, topic)
 
     @server.prompt(name="make_video", title="Make a video",

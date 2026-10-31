@@ -21,6 +21,7 @@ import { StudioShell } from "./StudioShell";
 const AuthorApp = lazy(() => import("@/App"));
 const SettingsPage = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsPage })));
 const OnboardingPage = lazy(() => import("./Onboarding").then((module) => ({ default: module.OnboardingPage })));
+const MakeManyPage = lazy(() => import("./MakeMany").then((module) => ({ default: module.MakeManyPage })));
 
 function Loading({ label }: { label: string }) {
   return (
@@ -45,7 +46,8 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
 
   let page: ReactNode;
   const editor = route.kind === "new" || route.kind === "project";
-  if (loading || (!catalog && !error)) page = editor ? <Loading label="Loading designs…" /> : <GalleryLoading />;
+  const many = route.kind === "many" || route.kind === "many-project";
+  if (loading || (!catalog && !error)) page = editor || many ? <Loading label="Loading designs…" /> : <GalleryLoading />;
   else if (!catalog) {
     page = (
       <div role="alert" className="studio-page-state">
@@ -58,6 +60,8 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
     );
   } else if (editor) {
     page = <EditorPage key={routeKey} catalog={catalog} route={route} onProjectCreated={(id) => replace({ kind: "project", id })} />;
+  } else if (many) {
+    page = <Suspense fallback={<Loading label="Opening your list…" />}><MakeManyPage key={routeKey} catalog={catalog} route={route} /></Suspense>;
   }
 
   if (route.kind === "gallery" || route.kind === "templates" || route.kind === "videos" || route.kind === "exports") {
@@ -66,7 +70,7 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
     </StudioShell>;
   }
   return (
-    <div className="h-full overflow-hidden">
+    <div className={many ? "h-full overflow-y-auto" : "h-full overflow-hidden"}>
       {page}
     </div>
   );

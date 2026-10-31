@@ -24,3 +24,26 @@ describe("settings and welcome routes", () => {
     expect(routeHash({ kind: "welcome" })).toBe("#/welcome");
   });
 });
+
+describe("make many routes", () => {
+  it("parses a template card and a saved project", () => {
+    expect(parseRoute("#/many/announcement/weekend-sale"))
+      .toEqual({ kind: "many", template: "announcement", preset: "weekend-sale" });
+    expect(parseRoute("#/many/announcement")).toEqual({ kind: "many", template: "announcement", preset: "" });
+    expect(parseRoute("#/many/project/0123456789abcdef"))
+      .toEqual({ kind: "many-project", id: "0123456789abcdef" });
+    expect(parseRoute("#/many/project")).toEqual({ kind: "gallery" });
+    expect(parseRoute("#/many/a%2Fb/c%20d")).toEqual({ kind: "many", template: "a/b", preset: "c d" });
+  });
+
+  it("builds the same hashes", () => {
+    const routes: Route[] = [
+      { kind: "many", template: "announcement", preset: "weekend-sale" },
+      { kind: "many", template: "a/b", preset: "c d" },
+      { kind: "many-project", id: "0123456789abcdef" },
+    ];
+    for (const route of routes) expect(parseRoute(routeHash(route))).toEqual(route);
+    expect(routeHash({ kind: "many", template: "countdown", preset: "" })).toBe("#/many/countdown");
+    expect(routeHash({ kind: "many-project", id: "abc" })).toBe("#/many/project/abc");
+  });
+});
