@@ -35,6 +35,7 @@ static class Program
                                 "Manim Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return ExitCodes.Failed;
         }
+        if (options.Update) return Updater.Run(options);
         if (options.Uninstall)
         {
             // The installed Uninstall.exe cannot delete its own folder while running.
@@ -55,6 +56,12 @@ static class Program
                 argument.Equals("/silent", StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    public static bool TryPid(string text, out int pid)
+    {
+        pid = 0;
+        return Int32.TryParse(text.Trim(), out pid) && pid > 0;
+    }
 }
 
 static class ExitCodes
@@ -69,6 +76,10 @@ static class Messages
 {
     public const string AppRunning =
         "Manim Studio is still running, or an AI app is using it. Close them, then choose Retry.";
+    public const string UpdateBlocked =
+        "Manim Studio was still open after a minute, so the update was not installed. " +
+        "Close it and try again.";
+    public const string UpdateInstalled = "Manim Studio was updated.";
 }
 
 sealed class Options
@@ -77,8 +88,12 @@ sealed class Options
     public bool Uninstall;
     public bool NoWebView2;
     public bool FromTemp;
+    public bool Update;
+    public bool Relaunch;
+    public int WaitPid;
     public bool DesktopShortcut = true;
     public string Directory;
+    public string ResultDirectory;
 
     public static Options Parse(string[] args)
     {
@@ -91,16 +106,27 @@ sealed class Options
             else if (lowered == "/uninstall") options.Uninstall = true;
             else if (lowered == "/nowebview2") options.NoWebView2 = true;
             else if (lowered == "/fromtemp") options.FromTemp = true;
+            else if (lowered == "/update") options.Update = true;
+            else if (lowered == "/relaunch") options.Relaunch = true;
+            else if (lowered.StartsWith("/waitpid:")) Program.TryPid(argument.Substring(9), out options.WaitPid);
+            else if (lowered.StartsWith("/waitpid=")) Program.TryPid(argument.Substring(9), out options.WaitPid);
+            else if (lowered.StartsWith("/resultdir:")) options.ResultDirectory = argument.Substring(11);
+            else if (lowered.StartsWith("/resultdir=")) options.ResultDirectory = argument.Substring(11);
             else if (lowered.StartsWith("/dir:")) options.Directory = argument.Substring(5);
             else if (lowered.StartsWith("/dir=")) options.Directory = argument.Substring(5);
             else if (lowered == "/dir" && index + 1 < args.Length) options.Directory = args[++index];
         }
         if (options.Directory != null)
             options.Directory = Path.GetFullPath(options.Directory.Trim('"'));
+        if (options.ResultDirectory != null)
+            options.ResultDirectory = Path.GetFullPath(options.ResultDirectory.Trim('"'));
         return options;
     }
 
     public string InstallDir { get { return Directory ?? Paths.DefaultInstallDir; } }
+
+    // Tests pass /dir: and /resultdir: so the real data folder is never touched either.
+    public string ResultFolder { get { return ResultDirectory ?? Paths.DataDir; } }
 
     // Tests pass /dir:, so they must not touch the real uninstall entry.
     public string UninstallKeyName
@@ -260,7 +286,8 @@ static class Installer
                 TryDeleteDirectory(staging);
             }
 
-            if (options.Directory == null)
+            // An update replaces files only; it never adds back a shortcut the person removed.
+            if (options.Directory == null && !options.Update)
             {
                 status("Adding shortcuts...");
                 string exe = Path.Combine(target, Paths.AppExe);
@@ -396,6 +423,142 @@ static class Installer
         try { if (File.Exists(path)) File.Delete(path); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+    }
+}
+
+static class Updater
+{
+    public const int WaitSeconds = 60;
+
+    // /update installs over the existing copy after the old app has closed. The
+    // installer itself broke away from the app's job, so it survives that close.
+    public static int Run(Options options)
+    {
+        Stopwatch watch = Stopwatch.StartNew();
+        WaitForProcess(options.WaitPid, Remaining(watch));
+        while (Processes.IsRunningFrom(options.InstallDir) && Remaining(watch) > 0)
+            Thread.Sleep(250);
+        if (Processes.IsRunningFrom(options.InstallDir))
+        {
+            Results.Write(options, false, Program.StudioVersion, Messages.UpdateBlocked);
+            if (options.Relaunch) Relaunch(options.InstallDir);
+            return ExitCodes.AppRunning;
+        }
+
+        InstallResult result = Installer.Install(options, delegate { });
+        Results.Write(options, result.Success, Program.StudioVersion,
+                      result.Success ? Messages.UpdateInstalled : result.Message);
+        if (result.Success) SelfDelete();
+        if (options.Relaunch) Relaunch(options.InstallDir);
+        return result.Success ? ExitCodes.Ok : result.ExitCode;
+    }
+
+    static int Remaining(Stopwatch watch)
+    {
+        int left = WaitSeconds * 1000 - (int)watch.ElapsedMilliseconds;
+        return left > 0 ? left : 0;
+    }
+
+    static void WaitForProcess(int pid, int milliseconds)
+    {
+        if (pid <= 0 || milliseconds <= 0) return;
+        try
+        {
+            using (Process process = Process.GetProcessById(pid))
+                process.WaitForExit(milliseconds);
+        }
+        catch (ArgumentException)
+        {
+            // The shell already closed.
+        }
+    }
+
+    // The installer is outside the app's Job, so a plain shell start is outside it too.
+    static void Relaunch(string installDir)
+    {
+        try
+        {
+            string exe = Path.Combine(installDir, Paths.AppExe);
+            if (!File.Exists(exe)) return;
+            ProcessStartInfo info = new ProcessStartInfo(exe);
+            info.WorkingDirectory = installDir;
+            info.UseShellExecute = true;
+            Process.Start(info);
+        }
+        catch (Exception)
+        {
+            // The person can open the app from the Start menu.
+        }
+    }
+
+    // Only the copy under <data>\studio\updates\ is ours to remove; never a file
+    // the person downloaded somewhere else.
+    static void SelfDelete()
+    {
+        try
+        {
+            string path = Path.GetFullPath(Application.ExecutablePath);
+            string marker = Path.DirectorySeparatorChar + "studio" + Path.DirectorySeparatorChar +
+                            "updates" + Path.DirectorySeparatorChar;
+            if (path.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0) return;
+            ProcessStartInfo info = new ProcessStartInfo("cmd.exe",
+                "/c ping -n 3 127.0.0.1 >nul & del /f /q \"" + path + "\"");
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.WindowStyle = ProcessWindowStyle.Hidden;
+            Process process = Process.Start(info);
+            if (process != null) process.Dispose();
+        }
+        catch (Exception)
+        {
+            // A leftover installer in the updates folder is harmless.
+        }
+    }
+}
+
+static class Results
+{
+    // The app reads this once and shows a failed update in plain words.
+    public static string PathFor(Options options)
+    {
+        return Path.Combine(options.ResultFolder, "update-result.json");
+    }
+
+    public static void Write(Options options, bool ok, string version, string message)
+    {
+        string target = PathFor(options);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            string json = "{\"ok\":" + (ok ? "true" : "false") +
+                          ",\"version\":" + Quote(version) +
+                          ",\"message\":" + Quote(message) + "}";
+            using (StreamWriter writer = new StreamWriter(temporary, false, new UTF8Encoding(false)))
+                writer.Write(json);
+            if (File.Exists(target)) File.Delete(target);
+            File.Move(temporary, target);
+        }
+        catch (Exception)
+        {
+            // The app then simply keeps the update state it had.
+        }
+    }
+
+    static string Quote(string value)
+    {
+        StringBuilder result = new StringBuilder("\"");
+        foreach (char ch in value ?? "")
+        {
+            if (ch == '"') result.Append("\\\"");
+            else if (ch == '\\') result.Append("\\\\");
+            else if (ch == '\n') result.Append("\\n");
+            else if (ch == '\r') result.Append("\\r");
+            else if (ch == '\t') result.Append("\\t");
+            else if (ch < ' ') result.Append("\\u").Append(((int)ch).ToString("x4"));
+            else result.Append(ch);
+        }
+        return result.Append('"').ToString();
     }
 }
 

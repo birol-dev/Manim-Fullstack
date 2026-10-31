@@ -44,6 +44,92 @@ jobs:
           name: backend-coverage
           path: coverage.xml
 
+  source-bootstrap:
+    name: Source bootstrap (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Cairo and Pango
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y build-essential pkg-config libcairo2-dev libpango1.0-dev
+          else
+            brew install cairo pango pkg-config
+          fi
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Build the frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # Proves a real checkout starts and renders on macOS and Linux, not only on Windows.
+      - name: Start from source and render one poster
+        run: |
+          python run.py --no-browser --port 8123 > studio.log 2>&1 &
+          studio_pid=$!
+          trap 'kill "$studio_pid" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import json
+          import time
+          import urllib.request
+
+          base = "http://127.0.0.1:8123"
+          deadline = time.time() + 240
+          while True:
+              try:
+                  with urllib.request.urlopen(base + "/api/studio/catalog", timeout=5) as response:
+                      catalog = json.load(response)
+                  break
+              except Exception:
+                  if time.time() > deadline:
+                      raise
+                  time.sleep(2)
+
+          template = catalog["templates"][0]
+          preset = template["presets"][0]
+          body = json.dumps({"template": template["id"], "params": preset.get("params", {}),
+                             "settings": {}, "mode": "poster"}).encode("utf-8")
+          request = urllib.request.Request(base + "/api/studio/preview", data=body,
+                                           headers={"Content-Type": "application/json"})
+          with urllib.request.urlopen(request, timeout=300) as response:
+              result = json.load(response)
+          if not result.get("url"):
+              raise SystemExit(f"Preview returned no file: {result}")
+          print("Rendered poster:", result["url"])
+          PY
+          kill "$studio_pid"
+          wait "$studio_pid" || true
+          trap - EXIT
+
+      - name: Show the app log when something failed
+        if: failure()
+        run: tail -n 200 studio.log || true
+
   frontend:
     name: Frontend (Node 20)
     runs-on: ubuntu-latest

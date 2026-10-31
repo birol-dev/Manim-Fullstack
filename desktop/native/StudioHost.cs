@@ -46,7 +46,8 @@ class StudioHost
             job = CreateJobObject(IntPtr.Zero, null);
             if (job == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
             var limits = new ExtendedLimits();
-            limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE; handle never inherited
+            // KILL_ON_JOB_CLOSE plus BREAKAWAY_OK: an update installer may leave the job.
+            limits.Basic.Flags = 0x2000 | 0x0800; // handle never inherited
             if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf(limits))) throw new System.ComponentModel.Win32Exception();
             var info = new ProcessStartInfo(python, "-B \"" + script + "\" --app-root \"" + root.TrimEnd('\\') + "\"");
             info.UseShellExecute = false;

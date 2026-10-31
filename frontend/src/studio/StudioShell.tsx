@@ -8,6 +8,7 @@ import { readCollapsed, setCollapsed as storeCollapsed } from "./appearance";
 import { useExportActivity, useExports } from "./hooks";
 import { timeAgo, toDate } from "./options";
 import { routeHash, type Route, type useHashRoute } from "./router";
+import { useUpdateStatus } from "./setup";
 import type { Catalog, ProjectSummary } from "./types";
 import { useLibrary, type Library } from "./useLibrary";
 import "./shell.css";
@@ -29,6 +30,7 @@ interface Counts {
   projects: number | null;
   exports: number | null;
   activity: boolean;
+  update: boolean;
 }
 
 interface PanelProps {
@@ -121,20 +123,24 @@ interface RailProps extends NavProps {
 }
 
 /** The permanent destinations: everything a person might want, always in the same place. */
-function Rail({ route, collapsed, onNavigate, onExpand, projects, exports, activity }: RailProps) {
-  const link = (target: Route, label: string, icon: ReactNode, active: boolean, count?: number | null, dot = false) => (
-    <Tooltip key={label} content={label} side="right">
-      <a href={routeHash(target)} className="studio-rail-link" aria-label={label} aria-current={active ? "page" : undefined} aria-description={dot ? "An export is running or ready to open." : undefined} onClick={onNavigate}>
+function Rail({ route, collapsed, onNavigate, onExpand, projects, exports, activity, update }: RailProps) {
+  const link = (target: Route, label: string, icon: ReactNode, active: boolean, count?: number | null, dot = false, updateDot = false) => {
+    const description = [dot ? "An export is running or ready to open." : "", updateDot ? "An update is ready to install." : ""]
+      .filter(Boolean).join(" ") || undefined;
+    return <Tooltip key={label} content={label} side="right">
+      <a href={routeHash(target)} className="studio-rail-link" aria-label={label} aria-current={active ? "page" : undefined} aria-description={description} onClick={onNavigate}>
         <span className="studio-rail-icon">
           {icon}
           {count != null && <span className="studio-nav-count" aria-hidden>{count}</span>}
           {dot && <span className="studio-export-activity" aria-hidden />}
+          {updateDot && <span className="studio-update-dot" aria-hidden />}
         </span>
         <span className="studio-rail-label">{label}</span>
         {dot && <span className="sr-only">An export is running or ready to open.</span>}
+        {updateDot && <span className="sr-only">An update is ready to install.</span>}
       </a>
-    </Tooltip>
-  );
+    </Tooltip>;
+  };
   return <nav className="studio-rail-nav" aria-label="Studio">
     <a href="#/" className="studio-rail-logo" aria-label="Manim Studio home" onClick={onNavigate}>
       <span className="studio-brand-mark"><Play aria-hidden fill="currentColor" /></span>
@@ -148,21 +154,24 @@ function Rail({ route, collapsed, onNavigate, onExpand, projects, exports, activ
     {link({ kind: "exports" }, "Exports", <FolderDown />, route.kind === "exports", exports, activity)}
     <div className="studio-rail-spacer" />
     {link({ kind: "settings", section: "ai" }, "Connect to AI", <Plug />, route.kind === "settings" && route.section === "ai")}
-    {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai")}
+    {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai", undefined, false, update)}
     <a href="#/author" className="studio-rail-link" aria-label="Author mode" onClick={onNavigate}><span className="studio-rail-icon"><Code2 aria-hidden /></span><span className="studio-rail-label">Author mode</span></a>
   </nav>;
 }
 
 /** The same destinations as the rail, laid out in rows for the phone drawer. */
-function DrawerNav({ route, onNavigate, projects, exports, activity }: NavProps) {
-  const link = (target: Route, label: string, icon: ReactNode, active: boolean, count?: number | null, dot = false) => (
-    <a key={label} href={routeHash(target)} className="studio-drawer-link" aria-label={label} aria-current={active ? "page" : undefined} aria-description={dot ? "An export is running or ready to open." : undefined} onClick={onNavigate}>
-      <span className="studio-rail-icon">{icon}{dot && <span className="studio-export-activity" aria-hidden />}</span>
+function DrawerNav({ route, onNavigate, projects, exports, activity, update }: NavProps) {
+  const link = (target: Route, label: string, icon: ReactNode, active: boolean, count?: number | null, dot = false, updateDot = false) => {
+    const description = [dot ? "An export is running or ready to open." : "", updateDot ? "An update is ready to install." : ""]
+      .filter(Boolean).join(" ") || undefined;
+    return <a key={label} href={routeHash(target)} className="studio-drawer-link" aria-label={label} aria-current={active ? "page" : undefined} aria-description={description} onClick={onNavigate}>
+      <span className="studio-rail-icon">{icon}{dot && <span className="studio-export-activity" aria-hidden />}{updateDot && <span className="studio-update-dot" aria-hidden />}</span>
       <span>{label}</span>
       {count != null && <span className="studio-nav-count" aria-hidden>{count}</span>}
       {dot && <span className="sr-only">An export is running or ready to open.</span>}
-    </a>
-  );
+      {updateDot && <span className="sr-only">An update is ready to install.</span>}
+    </a>;
+  };
   return <nav className="studio-drawer-nav" aria-label="Studio">
     {link({ kind: "gallery" }, "Home", <Home />, route.kind === "gallery")}
     {link({ kind: "templates" }, "Templates", <LayoutGrid />, route.kind === "templates")}
@@ -170,7 +179,7 @@ function DrawerNav({ route, onNavigate, projects, exports, activity }: NavProps)
     {link({ kind: "exports" }, "Exports", <FolderDown />, route.kind === "exports", exports, activity)}
     <div className="studio-nav-divider" />
     {link({ kind: "settings", section: "ai" }, "Connect to AI", <Plug />, route.kind === "settings" && route.section === "ai")}
-    {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai")}
+    {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai", undefined, false, update)}
     {link({ kind: "author" }, "Author mode", <Code2 />, false)}
   </nav>;
 }
@@ -179,6 +188,8 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
   const library = useLibrary();
   const exports = useExports(true, library.revision);
   const { activity, markSeen } = useExportActivity(route.kind === "exports", library.revision);
+  const { status: updateStatus } = useUpdateStatus();
+  const updateAvailable = !!updateStatus && ["available", "downloading", "ready"].includes(updateStatus.state);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [mobile, setMobile] = useState(() => window.matchMedia("(max-width: 899px)").matches);
   const [drawer, setDrawer] = useState(false);
@@ -247,7 +258,7 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
     const next: Route = { kind: "templates", ...(route.kind === "templates" && route.category ? { category: route.category } : {}), ...(query ? { query } : {}) };
     if (route.kind === "templates") replace(next); else push(next);
   };
-  const counts: Counts = { projects: library.projects?.length ?? null, exports: exports.jobs?.length ?? null, activity };
+  const counts: Counts = { projects: library.projects?.length ?? null, exports: exports.jobs?.length ?? null, activity, update: updateAvailable };
 
   return <div className="studio-shell">
     <a href="#studio-main" className="studio-skip-link" onClick={(event) => { event.preventDefault(); mainRef.current?.focus(); }}>Skip to content</a>

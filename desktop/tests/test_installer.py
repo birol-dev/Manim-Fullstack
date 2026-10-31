@@ -6,6 +6,7 @@ argument switches to the test uninstall key and skips shortcuts, so the real app
 from __future__ import annotations
 
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -59,7 +60,7 @@ class InstallerTests(unittest.TestCase):
     def tearDown(self):
         remove_test_key()
 
-    def make_installer(self, folder: Path, marker: str = "first") -> Path:
+    def make_installer(self, folder: Path, marker: str = "first", version: str = "9.9.9") -> Path:
         payload = folder / "payload"
         (payload / "runtime").mkdir(parents=True, exist_ok=True)
         (payload / "Manim Studio.exe").write_bytes(b"fake host " + marker.encode())
@@ -68,7 +69,7 @@ class InstallerTests(unittest.TestCase):
         (payload / "runtime" / "padding.bin").write_bytes(os.urandom(2 * 1024 * 1024))
         (payload / "LICENSE").write_text("MIT License", encoding="utf-8")
         installer = folder / "ManimStudioSetup.exe"
-        build_installer.build(payload, installer, version="9.9.9", sign=False)
+        build_installer.build(payload, installer, version=version, sign=False)
         with zipfile.ZipFile(io.BytesIO(build_installer.read_payload(installer))) as archive:
             self.assertIn("Manim Studio.exe", archive.namelist())
             self.assertIn("runtime/python.exe", archive.namelist())
@@ -157,6 +158,34 @@ class InstallerTests(unittest.TestCase):
             finally:
                 running.kill()
                 running.wait(timeout=30)
+
+    def test_update_installs_in_place_and_writes_a_result(self):
+        with tempfile.TemporaryDirectory(prefix="studio-installer-update-") as temporary:
+            folder = Path(temporary)
+            first = self.make_installer(folder, marker="before", version="9.9.9")
+            target = folder / "installed"
+            completed = subprocess.run([str(first), "/S", "/nowebview2", "/dir:" + str(target)],
+                                       capture_output=True, text=True, timeout=180)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual((target / "Manim Studio.exe").read_bytes(), b"fake host before")
+
+            result_dir = folder / "result"
+            upgraded = self.make_installer(folder, marker="after", version="9.9.10")
+            completed = subprocess.run([str(upgraded), "/S", "/update", "/nowebview2",
+                                        "/dir:" + str(target), "/resultdir:" + str(result_dir)],
+                                       capture_output=True, text=True, timeout=180)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            # The same folder now holds the newer copy; nothing was left beside it.
+            self.assertEqual((target / "Manim Studio.exe").read_bytes(), b"fake host after")
+            self.assertEqual(sorted(path.name for path in folder.iterdir() if path.name.startswith(".manim-studio-")), [])
+
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, TEST_KEY) as key:
+                self.assertEqual(winreg.QueryValueEx(key, "DisplayVersion")[0], "9.9.10")
+
+            report = json.loads((result_dir / "update-result.json").read_text(encoding="utf-8"))
+            self.assertEqual(report, {"ok": True, "version": "9.9.10",
+                                      "message": "Manim Studio was updated."})
 
     def test_zip_slip_is_refused(self):
         with tempfile.TemporaryDirectory(prefix="studio-installer-slip-") as temporary:

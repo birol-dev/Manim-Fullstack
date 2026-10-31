@@ -20,8 +20,8 @@ import urllib.request
 DESKTOP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DESKTOP))
 from launcher import AGENT_HOST_MARKER, HANDOVER_REQUEST, Backend, WorkspaceLock, configure_logging, smoke
-from sidecar import bind_socket
-from win_job import Job
+from sidecar import SHUTDOWN_EXIT_CODE, bind_socket
+from win_job import CREATE_BREAKAWAY_FROM_JOB, Job
 import psutil
 
 
@@ -117,6 +117,44 @@ class WindowsTreeTests(unittest.TestCase):
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+
+    def test_update_installer_outlives_the_job(self):
+        """The update installer runs with CREATE_BREAKAWAY_FROM_JOB; closing the job must not kill it."""
+        with tempfile.TemporaryDirectory(prefix="studio-breakaway-") as temporary:
+            pidfile = Path(temporary) / "pid.json"
+            # Wait for the assignment first, then start the installer-like child outside the job.
+            code = ("import sys,subprocess,json,pathlib,time; "
+                    "sys.stdin.readline(); "
+                    "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'],"
+                    "creationflags={}); "
+                    "pathlib.Path(sys.argv[1]).write_text(json.dumps(p.pid)); "
+                    "time.sleep(120)").format(CREATE_BREAKAWAY_FROM_JOB)
+            parent = subprocess.Popen([sys.executable, "-c", code, str(pidfile)], stdin=subprocess.PIPE,
+                                       creationflags=subprocess.CREATE_NO_WINDOW)
+            job = Job()
+            child_pid = None
+            try:
+                job.assign(parent.pid)
+                parent.stdin.write(b"start\n")
+                parent.stdin.flush()
+                wait_until(pidfile.exists, timeout=30)
+                child_pid = json.loads(pidfile.read_text())
+                self.assertTrue(psutil.pid_exists(child_pid))
+                job.close()
+                wait_until(lambda: not psutil.pid_exists(parent.pid), timeout=15)
+                self.assertTrue(psutil.pid_exists(child_pid), "the breakaway child was killed with the job")
+            finally:
+                job.close()
+                if parent.stdin and not parent.stdin.closed:
+                    parent.stdin.close()
+                if parent.poll() is None:
+                    parent.kill()
+                    parent.wait()
+                if child_pid:
+                    try:
+                        psutil.Process(child_pid).kill()
+                    except psutil.NoSuchProcess:
+                        pass
 
     def test_workspace_lock_releases(self):
         with tempfile.TemporaryDirectory(prefix="studio-lock-") as temporary:
@@ -263,6 +301,23 @@ class BackendTests(unittest.TestCase):
 
     def test_token_never_in_log(self):
         self.assertNotIn(self.backend.token, (self.data / "logs/desktop.log").read_text(encoding="utf-8"))
+
+    def test_update_shutdown_request_exits_the_service(self):
+        """The exact POST api._close_desktop_app sends must end the service by itself."""
+        with tempfile.TemporaryDirectory(prefix="studio-shutdown-") as temporary:
+            backend = Backend(DESKTOP.parent, Path(temporary)).start()
+            try:
+                request = urllib.request.Request(
+                    backend.url + "/__desktop__/shutdown", method="POST",
+                    headers={"Authorization": f"Bearer {backend.token}", "Origin": backend.url})
+                with backend.http.open(request, timeout=3) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(json.load(response), {"stopping": True})
+                # stdin stays open (the launcher keeps it for the session), so this only
+                # finishes if a requested shutdown releases the process on its own.
+                self.assertEqual(backend.process.wait(timeout=30), SHUTDOWN_EXIT_CODE)
+            finally:
+                backend.stop()
 
 
 class PackagingTests(unittest.TestCase):

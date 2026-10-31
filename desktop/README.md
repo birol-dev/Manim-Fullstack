@@ -84,7 +84,7 @@ desktop/dist/ManimStudio/
   DESKTOP-README.md
 ```
 
-Keep the entire folder together. The starter resolves the bundled interpreter relative to itself and does not search `PATH`. Packaging copies backend resources and dependency license files without stripping them, rewrites runtime paths to relative packaged paths, and runs an isolated relocated service smoke plus a real Studio PNG preview and MP4 export before reporting success. PyAV decodes every MP4 frame to verify the actual encoder output. The smoke uses bundled tools with a restricted backend `PATH`. It uses the .NET Framework C# compiler on the build host. `package.ps1` then builds the installer described below. Signing is optional through `MANIM_SIGN_CMD`; publishing, an update service, and file associations are not implemented.
+Keep the entire folder together. The starter resolves the bundled interpreter relative to itself and does not search `PATH`. Packaging copies backend resources and dependency license files without stripping them, rewrites runtime paths to relative packaged paths, and runs an isolated relocated service smoke plus a real Studio PNG preview and MP4 export before reporting success. PyAV decodes every MP4 frame to verify the actual encoder output. The smoke uses bundled tools with a restricted backend `PATH`. It uses the .NET Framework C# compiler on the build host. `package.ps1` then builds the installer described below. Signing is optional through `MANIM_SIGN_CMD`. `.github/workflows/release.yml` publishes both installer assets on a version tag; in-app updates are described below. File associations are not implemented.
 
 The runtime includes Manim/Pango/Cairo/PyAV wheels for template previews and MP4 encoding. External LaTeX is not bundled. Templates that require LaTeX or external media tools remain outside this bounded packaging target. A clean Windows VM acceptance test, runtime/dependency security and redistribution review are release work. Setup handles WebView2 itself; unsigned executable reputation is handled by signing, not by hiding the warning.
 
@@ -116,6 +116,40 @@ Command-line options used by tests and quiet deployment:
 | `/nowebview2`   | Do not download WebView2 (used by silent installs and tests)              |
 | `/dir:<path>`   | Install elsewhere; also uses `ManimStudio-Test` and skips shortcuts       |
 | `/uninstall`    | Remove the installed copy; combine with `/S` for no UI                    |
+| `/update`       | Install over the existing copy after the old app has closed               |
+| `/waitpid:<pid>`| Wait up to 60 s for that process to exit (the app's shell)                |
+| `/relaunch`     | Start the installed app again after the attempt, outside any Job          |
+| `/resultdir:<path>` | Where to write `update-result.json` (tests; defaults to the data folder) |
+
+## Automatic updates
+
+`backend/studio/updates.py` checks the project's newest GitHub release at most once a
+day, in a background thread, and only while About → Check for updates automatically
+is on (`update_check` in the workspace preferences, on by default). The check sends
+one GET with a User-Agent and a five second timeout; it sends nothing about the
+person. Drafts and prereleases are skipped, a release counts only when it carries
+both `ManimStudioSetup.exe` and `ManimStudioSetup.exe.sha256`, and an older version
+is never offered. Offline or rate-limited is a quiet "couldn't check" state.
+
+Downloading happens only after the person asks. The installer is written to
+`<workspace>/studio/updates/` through a temporary file, must match the release's
+SHA-256, is limited to 1 GB, and a mismatch deletes it. Only one installer is kept,
+and the installer removes itself after a successful update.
+
+**The digest comes from the same release, so it proves the download arrived intact,
+not who published it.** When the running `Manim Studio.exe` has a valid Authenticode
+signature, the downloaded installer must also be validly signed with the same
+subject; that check uses `Get-AuthenticodeSignature` through PowerShell with a fixed
+command and the path in the environment. An unsigned copy skips this extra check,
+which is why signing the release is still the real identity guarantee.
+
+Installing starts the verified installer with `/S /update /relaunch /waitpid:<shell
+pid>`, then closes the app through its normal shutdown route. An export that is
+queued or rendering is never interrupted: the route answers 409 with "An export is
+still running. It can finish first." Both Windows Jobs (the shell's and the native
+starter's) carry `JOB_OBJECT_LIMIT_BREAKAWAY_OK`, and the installer is started with
+`CREATE_BREAKAWAY_FROM_JOB`, so it outlives the Job that is closed as the app exits.
+`desktop/tests/test_desktop.py` proves that with a real Job.
 
 The installer and app are **unsigned**. Windows SmartScreen warns the first time someone runs them ("Windows protected your PC" → **More info** → **Run anyway**). Do not hide that warning; sign the executables when a code-signing certificate exists. `scripts/package.py` and `scripts/build_installer.py` run `MANIM_SIGN_CMD` for both executables when it is set, and print a note when it is not:
 
@@ -136,7 +170,7 @@ python -m unittest discover -s desktop/tests -p test_run_bootstrap.py -v
 ./desktop/dist/ManimStudio/runtime/python.exe -B ./desktop/scripts/smoke.py --app-root ./desktop/dist/ManimStudio --data-dir ./desktop/build/manual-render-smoke
 ```
 
-The installer tests compile the real stub with system Python, build a tiny fake payload, silently install it under a temporary folder with `/dir:` and `/nowebview2`, check the files and the test-only uninstall entry, install an upgrade, then silently uninstall and wait for the folder and registry entry to disappear. They also check that a zip-slip entry is refused. `/dir:` never touches the real install location, the production uninstall key, or shortcuts. The run.py tests cover the version check, requirements hash stamp, virtual-environment detection, and the Linux/macOS package-manager command choice without running pip or using the network.
+The installer tests compile the real stub with system Python, build a tiny fake payload, silently install it under a temporary folder with `/dir:` and `/nowebview2`, check the files and the test-only uninstall entry, install an upgrade, then silently uninstall and wait for the folder and registry entry to disappear. They also check that a zip-slip entry is refused and that `/update` replaces one fake version with another in place, writing `update-result.json` under `/resultdir:`. `/dir:` and `/resultdir:` never touch the real install location, data folder, production uninstall key, or shortcuts. The desktop tests start a real Job, let a child break away with `CREATE_BREAKAWAY_FROM_JOB`, close the Job, and check that the child is still alive. The run.py tests cover the version check, requirements hash stamp, virtual-environment detection, and the Linux/macOS package-manager command choice without running pip or using the network.
 
 Tests exercise port reuse across launches, occupied-port fallback, real loopback authentication/session bootstrap, static frontend/catalog serving, host/origin rejection, WebSocket cookie auth, independent instances, single-workspace locking, graceful shutdown, owner crash, and killing an orphaned grandchild. The `PortTests` subset also runs with system Python on Windows with `psutil`, without the embedded backend dependencies. `-UiSmoke` additionally opens WebView2 and verifies React mounts and makes an authenticated catalog request, then closes. Validation outcomes and limits are recorded in `VALIDATION.md` after execution.
 

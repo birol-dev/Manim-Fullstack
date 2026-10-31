@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $line = Get-Content backend/studio/version.py | Select-String '^APP_VERSION = "([^"]+)"'
+          if (-not $line) { throw "backend/studio/version.py has no APP_VERSION." }
+          $version = $line.Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match APP_VERSION $version."
+          }
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      # prepare.py builds the Vite bundle from these, and never installs packages itself.
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # package.py refuses to package missing or stale gallery assets.
+      - name: Verify the baked gallery assets
+        shell: pwsh
+        run: |
+          python -c "from backend.studio.bake_posters import check_baked; from backend.studio.peeks import check_baked as check_peeks; from backend.studio.service import StudioService; service = StudioService(); problems = check_baked(service) + check_peeks(service); service.shutdown_sync(); raise SystemExit(('Missing or stale gallery assets: ' + ', '.join(problems)) if problems else 0)"
+
+      - name: Build the portable app and installer
+        shell: pwsh
+        run: ./desktop/package.ps1
+
+      - name: Write the installer checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash desktop/dist/ManimStudioSetup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText("$PWD/desktop/dist/ManimStudioSetup.exe.sha256", $hash)
+
+      - name: Create the GitHub release with both assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            "desktop/dist/ManimStudioSetup.exe" `
+            "desktop/dist/ManimStudioSetup.exe.sha256" `
+            --title "Manim Studio $env:GITHUB_REF_NAME" `
+            --notes "Windows x64 installer. The SHA-256 of ManimStudioSetup.exe is in the .sha256 file next to it." `
+            --verify-tag

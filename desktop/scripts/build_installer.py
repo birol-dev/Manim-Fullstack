@@ -8,13 +8,12 @@ zip of dist/ManimStudio appended to it:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
+import re
 import shutil
 import struct
 import subprocess
-import sys
 import zipfile
 
 DESKTOP = Path(__file__).resolve().parents[1]
@@ -51,7 +50,12 @@ MANIFEST = """<?xml version="1.0" encoding="utf-8"?>
 
 
 def project_version() -> str:
-    return json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+    """The one app version, read from backend/studio/version.py."""
+    source = (ROOT / "backend/studio/version.py").read_text(encoding="utf-8")
+    match = re.search(r'^APP_VERSION\s*=\s*"([^"]+)"', source, re.MULTILINE)
+    if match is None:
+        raise RuntimeError("backend/studio/version.py has no APP_VERSION.")
+    return match.group(1)
 
 
 def compiler_path() -> Path:
@@ -192,7 +196,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build ManimStudioSetup.exe from desktop/dist/ManimStudio.")
     parser.add_argument("--payload", type=Path, default=PAYLOAD_DIR, help="Packaged app folder to include.")
     parser.add_argument("--output", type=Path, default=OUTPUT, help="Where to write the setup executable.")
-    parser.add_argument("--version", default=None, help="DisplayVersion; defaults to the root package.json version.")
+    parser.add_argument("--version", default=None, help="DisplayVersion; defaults to backend/studio/version.py.")
     parser.add_argument("--no-sign", action="store_true", help="Skip MANIM_SIGN_CMD even when it is set.")
     args = parser.parse_args()
     result = build(args.payload, args.output, args.version, sign=not args.no_sign)

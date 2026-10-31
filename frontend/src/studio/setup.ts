@@ -29,16 +29,51 @@ export interface AIApp {
 export interface SetupStatus {
   platform: "windows" | "macos" | "linux";
   mode: "desktop" | "source";
+  version?: string;
   components: SetupComponent[];
   ai_apps: AIApp[];
   data_folder: string;
 }
 
+export type UpdateState = "idle" | "checking" | "available" | "downloading" | "ready" | "failed" | "unavailable";
+
+export interface UpdateStatus {
+  state: UpdateState;
+  version: string | null;
+  notes: string;
+  progress: number | null;
+  detail: string | null;
+  /** A failed update that happened while the app was closed; shown once. */
+  message?: string | null;
+}
+
 export const getSetupStatus = () => requestJson<SetupStatus>("/api/studio/setup/status");
+export const getUpdateStatus = () => requestJson<UpdateStatus>("/api/studio/setup/update");
+export const checkForUpdate = () => postJson<UpdateStatus>("/api/studio/setup/update/check", {});
+export const downloadUpdate = () => postJson<UpdateStatus>("/api/studio/setup/update/download", {});
+export const installUpdate = () => postJson<UpdateStatus>("/api/studio/setup/update/install", {});
 export const connectAIApp = (id: string) => postJson<AIApp>(`/api/studio/setup/ai-apps/${encodeURIComponent(id)}/connect`, {});
 export const disconnectAIApp = (id: string) => requestJson<AIApp>(`/api/studio/setup/ai-apps/${encodeURIComponent(id)}/connect`, { method: "DELETE" });
 export const installComponent = (id: string) => postJson<SetupComponent>(`/api/studio/setup/components/${encodeURIComponent(id)}/install`, {});
 export const revealDataFolder = () => requestJson<void>("/api/studio/setup/reveal-data-folder", { method: "POST" });
+
+/** The update state; it polls only while a check or download is running. */
+export function useUpdateStatus() {
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const refresh = useCallback(() => getUpdateStatus().then(
+    (next) => { setStatus(next); setError(null); return next; },
+    (failure) => { setError(failure); return null; },
+  ), []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  const busy = status?.state === "checking" || status?.state === "downloading";
+  useEffect(() => {
+    if (!busy) return;
+    const timer = window.setInterval(() => { void refresh(); }, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy, refresh]);
+  return { status, error, refresh, setStatus };
+}
 
 /** Polls while something is installing, so progress moves without any refresh button. */
 export function useSetupStatus() {

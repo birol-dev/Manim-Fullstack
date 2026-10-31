@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from sidecar import SHUTDOWN_EXIT_CODE
 from win_job import Job
 
 SHELL_DIR = Path(__file__).resolve().parent
@@ -332,8 +333,14 @@ def main():
             def monitor():
                 deadline = time.monotonic() + 60
                 while not stop.wait(0.5):
-                    if backend.process.poll() is not None:
-                        logging.error("Local service stopped unexpectedly")
+                    code = backend.process.poll()
+                    if code == SHUTDOWN_EXIT_CODE:
+                        # An update asked the service to stop; close without an error box.
+                        logging.info("Local service stopped as requested")
+                        window.destroy()
+                        return
+                    if code is not None:
+                        logging.error("Local service stopped unexpectedly (exit code %s)", code)
                         ctypes.windll.user32.MessageBoxW(None, "Studio's local service stopped. Reopen Studio to restart it.", "Manim Studio", 0x10)
                         window.destroy()
                         return

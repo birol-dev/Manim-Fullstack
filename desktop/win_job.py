@@ -5,6 +5,11 @@ import ctypes
 from ctypes import wintypes
 import os
 
+# The installer must outlive the app's job; both jobs allow a child to break away.
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x0800
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
 
 class Job:
     def __init__(self):
@@ -44,7 +49,8 @@ class Job:
         if not self.handle:
             raise ctypes.WinError(ctypes.get_last_error())
         limits = Extended()
-        limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        limits.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK)
         if not self.api.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
             error = ctypes.WinError(ctypes.get_last_error())
             self.close()

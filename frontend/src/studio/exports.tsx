@@ -747,7 +747,7 @@ export function ExportsPage({ exports: { jobs, error, cancel, retry } }: { expor
         </div>
         : <>
           <div className="studio-exports-summary">
-            <p className="studio-exports-answer" role="status">{active > 0 ? `Making ${active === 1 ? "your video" : `${active} videos`}…` : ready > 0 ? "Your videos are ready." : "Nothing to share yet."}</p>
+            <p className="text-[13px] leading-relaxed text-fg-subtle" role="status">{active > 0 ? `Making ${active === 1 ? "your video" : `${active} videos`}…` : ready > 0 ? "Your videos are ready." : "Nothing to share yet."}</p>
             <p className="studio-exports-hint">{jobs.length} {jobs.length === 1 ? "file" : "files"} · newest first</p>
           </div>
           <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} grouped />
