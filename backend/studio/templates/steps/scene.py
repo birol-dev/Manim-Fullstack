@@ -26,7 +26,8 @@ from .schema import META, Params
 class Template(StudioScene):
     Params = Params
     META = META
-    logo_region = "bottom-right"
+    logo_region = "top-right"
+    logo_height = 5
 
     # -- entry -----------------------------------------------------------------
     def build(self):

@@ -42,10 +42,19 @@ class Template(StudioScene):
     Params = Params
     META = META
     logo_region = "top-right"
+    logo_height = 7
+    logo_reserved_layouts = {
+        "16:9": ("bold", "poster"),
+        "9:16": ("bold", "poster"),
+        "1:1": ("bold", "split", "poster"),
+        "4:5": ("bold", "split", "poster"),
+    }
 
     # -- entry -----------------------------------------------------------------
     def build(self):
         p, lay = self.p, self.layout
+        if p.layout in self.logo_reserved_layouts.get(self.s.aspect, ()):
+            self.reserve_logo_band()
         bg = self.s.background
         self.pal = B.Palette(self.theme, p.accent, bg.color if bg.kind in ("solid", "gradient") and bg.color else None)
         self.u = lay.unit
@@ -680,7 +689,7 @@ class Template(StudioScene):
             self._stack([big, qr, cta], [0, u * 4.5, u * 4.5], ST, align="center", max_extra=u * 4)
 
         deco = None
-        if self.decorate:
+        if self.decorate and self.brand_logo is None:
             deco = B.dot_grid(fw * 1.05, fh * 1.05, step=u * 6, radius=u * 0.55, color=pal.line, opacity=0.9)
 
         # -- beats

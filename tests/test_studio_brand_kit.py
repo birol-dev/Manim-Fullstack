@@ -121,4 +121,5 @@ def test_every_template_declares_a_valid_logo_region(template_id):
     path = os.path.join(registry.TEMPLATES_DIR, template_id, "scene.py")
     with open(path, encoding="utf-8") as source:
         region = _assigned(ast.parse(source.read()), "Template", "logo_region")
-    assert region in _regions(), f"{template_id} needs its own logo_region"
+    corners = set(region.values()) if isinstance(region, dict) else {region}
+    assert corners <= _regions(), f"{template_id} needs its own logo_region"

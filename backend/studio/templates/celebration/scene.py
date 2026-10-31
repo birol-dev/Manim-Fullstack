@@ -54,10 +54,14 @@ CONFETTI_Z = -1
 class Template(StudioScene):
     Params = Params
     META = META
-    logo_region = "bottom-left"
+    logo_region = {"16:9": "bottom-right", "9:16": "bottom-left", "1:1": "top-left", "4:5": "top-left"}
+    logo_height = 5
+    logo_reserved_aspects = ("16:9", "4:5")
 
     # ------------------------------------------------------------------ setup
     def build(self):
+        if self.s.aspect in self.logo_reserved_aspects:
+            self.reserve_logo_band()
         self.flavor = FLAVORS[self.p.occasion]
         self._palette()
         if self.bg is not None:
@@ -322,6 +326,11 @@ class Template(StudioScene):
         group.set_z_index(-8)
         return group
 
+    @property
+    def _particle_pad(self) -> float:
+        """Confetti and sparkles keep a wider ring clear when a brand logo shares the corner."""
+        return 0.22 if self.brand_logo is not None else 0.10
+
     def _sparkles(self, hero, t_birth, step):
         box = self._decoration_box
         D, c = hero.D, hero.center
@@ -369,7 +378,7 @@ class Template(StudioScene):
 
         live = fx.Live(self.clock, factory)
         live.set_z_index(3)
-        return self.keep_particles_clear(live, self._particle_foreground)
+        return self.keep_particles_clear(live, self._particle_foreground, padding=self._particle_pad)
 
     def _ripples(self, hero, t0, until):
         D, c = hero.D, hero.center
@@ -392,7 +401,7 @@ class Template(StudioScene):
 
         live = fx.Live(self.clock, factory)
         live.set_z_index(-6)
-        return self.keep_particles_clear(live, self._particle_foreground)
+        return self.keep_particles_clear(live, self._particle_foreground, padding=self._particle_pad)
 
     # ------------------------------------------------------------------ animation
     @staticmethod
@@ -428,7 +437,7 @@ class Template(StudioScene):
         party = fx.Party(self.clock, start, colors=self.accents, frame_w=lay.frame_width, frame_h=lay.frame_height,
                          mode=mode, origin=tuple(hero.center[:2]), count=count, seed=seed, size=0.27)
         party.set_z_index(CONFETTI_Z)  # over the hero disc, under all foreground families
-        return self.keep_particles_clear(party, self._particle_foreground)
+        return self.keep_particles_clear(party, self._particle_foreground, padding=self._particle_pad)
 
     def _intro(self, parts):
         m, th, lay = self.motion, self.theme, self.layout
@@ -439,6 +448,8 @@ class Template(StudioScene):
         self._particle_foreground = [line for group in
                                      (t.headline, t.name, t.label, t.message, t.signoff) if group is not None
                                      for line in group.lines]
+        if self.brand_logo is not None:
+            self._particle_foreground.append(self.brand_logo)
         self._particle_foreground += [mob for mob in (t.counter, hero.icon, hero.badge,
                                                        getattr(t, "wave", None)) if mob is not None]
         # The hero's circular disc/border encloses the icon/photo. Using its

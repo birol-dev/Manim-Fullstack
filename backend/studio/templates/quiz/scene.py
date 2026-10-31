@@ -38,9 +38,12 @@ class Template(StudioScene):
     Params = Params
     META = META
     logo_region = "bottom-left"
+    logo_reserved_aspects = ("16:9", "9:16", "1:1", "4:5")
 
     # -- build ----------------------------------------------------------------------
     def build(self):
+        if self.s.aspect in self.logo_reserved_aspects:
+            self.reserve_logo_band()  # the explanation panel fills the bottom zone otherwise
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion
         bg = (self.s.background.color or theme.bg) if self.s.background.kind in ("solid", "gradient") else theme.bg
         pal = H.palette(theme, bg)

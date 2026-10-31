@@ -169,9 +169,13 @@ def star_row(count: int, radius: float, gap: float, gold: str, empty: str) -> VG
 class Template(StudioScene):
     Params = Params
     META = META
-    logo_region = "top-right"
+    logo_region = {"16:9": "top-right", "9:16": "bottom-left", "1:1": "top-right", "4:5": "top-right"}
+    logo_height = {"16:9": 7, "9:16": 5, "1:1": 5, "4:5": 5}
+    logo_reserved_aspects = ("1:1", "4:5")
 
     def build(self):
+        if self.s.aspect in self.logo_reserved_aspects:
+            self.reserve_logo_band()
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion
         u = lay.unit
         stage = lay.safe

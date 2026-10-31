@@ -80,10 +80,14 @@ def _solve(budget: float, flex: list) -> list:
 class Template(StudioScene):
     Params = Params
     META = META
-    logo_region = "bottom-right"
+    logo_region = "top-right"
+    logo_height = {"16:9": 5, "9:16": 7, "1:1": 5, "4:5": 5}
+    logo_reserved_aspects = ("16:9", "9:16", "1:1", "4:5")
 
     # ------------------------------------------------------------------ build
     def build(self):
+        if self.s.aspect in self.logo_reserved_aspects:
+            self.reserve_logo_band()
         p, theme = self.p, self.theme
         self.u = self.layout.unit
         self.specs = [StatSpec(s, i, self.s.locale) for i, s in enumerate(p.stats)]

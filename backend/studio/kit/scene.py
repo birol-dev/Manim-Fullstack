@@ -34,6 +34,7 @@ from .fx import ClearanceCamera
 MAX_STORYBOARD_FRAMES = 12
 LOGO_REGIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
 LOGO_HEIGHT = 7  # percent of the frame's short side
+LOGO_MIN_HEIGHT = 5  # a crowded template may shrink its logo this far, never further
 LOGO_MAX_WIDTH = 0.42  # share of the safe area, so an unusually wide logo stays in its corner
 LOGO_Z = 20  # above template surfaces and text (templates use up to 10)
 
@@ -70,8 +71,12 @@ class Theme:
 class StudioScene(Scene):
     Params = None  # the template's Params model; set by each template's scene.py
     META = None  # the template's TemplateMeta
-    # Where the brand kit's logo goes. Templates pick a corner that stays clear of their content.
+    # Where the brand kit's logo goes: a corner, or a dict of corner per aspect. Templates
+    # pick a corner that stays clear of their content in every shape they support.
     logo_region = "bottom-right"
+    # The logo's height (percent of the short side), or a dict per aspect. A crowded template
+    # may ask for less, down to LOGO_MIN_HEIGHT.
+    logo_height = LOGO_HEIGHT
 
     def __init__(self, renderer=None, camera_class=ClearanceCamera, **kwargs):
         super().__init__(renderer=renderer, camera_class=camera_class, **kwargs)
@@ -125,7 +130,7 @@ class StudioScene(Scene):
             if path is None:
                 logger.warning("Brand logo %r is missing; skipping it.", name)
                 return None
-            height = LOGO_HEIGHT * self.layout.unit
+            height = self._logo_option("logo_height", LOGO_HEIGHT) * self.layout.unit
             if path.lower().endswith(".svg"):
                 logo = media.svg_logo(path, height=height)
             else:
@@ -138,7 +143,9 @@ class StudioScene(Scene):
         except Exception as exc:  # noqa: BLE001 - a bad upload must never fail the render
             logger.warning("Brand logo %r could not be read (%s); skipping it.", name, exc)
             return None
-        region = self.logo_region if self.logo_region in LOGO_REGIONS else "bottom-right"
+        region = self._logo_option("logo_region", "bottom-right")
+        if region not in LOGO_REGIONS:
+            region = "bottom-right"
         pad, safe = self.layout.unit * 2, self.layout.safe
         x = safe.left + pad + logo.width / 2 if region.endswith("left") else \
             safe.right - pad - logo.width / 2
@@ -146,6 +153,28 @@ class StudioScene(Scene):
             safe.bottom + pad + logo.height / 2
         logo.move_to([x, y, 0]).set_z_index(LOGO_Z)
         return logo
+
+    def _logo_option(self, name, default):
+        """A logo setting for this aspect: a plain value, or a dict keyed by aspect."""
+        value = getattr(self, name, default)
+        return value.get(self.s.aspect, default) if isinstance(value, dict) else value
+
+    def reserve_logo_band(self, padding: float = 0.0):
+        """When a brand logo is set, keep template content out of its band.
+
+        Shrinks the layout's safe area on the logo's side by the logo's own height
+        and padding, so a crowded layout can make room without changing a render
+        that has no logo. A template calls this at the start of ``build()``; without
+        a logo it does nothing.
+        """
+        logo = getattr(self, "brand_logo", None)
+        if logo is None:
+            return
+        band = logo.height + 3 * self.layout.unit * 2 + padding
+        if logo.get_center()[1] >= 0:
+            self.layout.top -= band
+        else:
+            self.layout.bottom += band
 
     # -- helpers for templates -------------------------------------------------
     def asset(self, name):
