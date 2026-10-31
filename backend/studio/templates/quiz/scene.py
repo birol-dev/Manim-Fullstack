@@ -23,7 +23,7 @@ from studio.kit import Counter, StudioScene, ease_in_out, ease_out, fit_text, la
 
 from . import helpers as H
 from .planner import plan_layout
-from .schema import META, Params
+from .schema import META, Params, label_for
 
 LETTERS = "ABCD"
 OPTION_WEIGHT = "SEMIBOLD"
@@ -44,36 +44,69 @@ class Template(StudioScene):
     def build(self):
         if self.s.aspect in self.logo_reserved_aspects:
             self.reserve_logo_band()  # the explanation panel fills the bottom zone otherwise
+        if self.mode == "storyboard":
+            # The contact sheet only needs the settled frame after each play. Skipping the
+            # in-between frames keeps a 12-question quiz's duration estimate fast, while
+            # renderer.time still advances by every run_time exactly as the video does.
+            # The renderer restores _original_skipping_status before every play.
+            self.renderer._original_skipping_status = True
+            self.renderer.skip_animations = True
+        self._decor = ()
+        questions = self._question_list()
+        # A storyboard captures one image per play. A long quiz has too many plays for the
+        # preview worker's time budget, so keep an even sample of them. One question keeps
+        # its original contact sheet; only multi-question quizzes are sampled.
+        self._capture_limit = None if len(questions) == 1 else 12
+        self._capture_every, self._captured_plays = 1, 0
+        for index, item in enumerate(questions, start=1):
+            self._question(item, index=index, total=len(questions))
+            if index < len(questions):
+                self._between_questions()
+        self.target_length = self.elapsed + (self.motion.exit if self.s.ending == "fade" else 0.0)
+
+    def _question_list(self):
+        """Question 1 from the original fields, then every further question in order."""
+        p = self.p
+        first = SimpleNamespace(question=p.question, options=[o.text for o in p.options],
+                                correct=p.correct, explanation=p.explanation)
+        return [first] + [SimpleNamespace(question=q.question, options=[o.text for o in q.options],
+                                          correct=q.correct, explanation=q.explanation)
+                          for q in p.questions]
+
+    def _question(self, item, *, index: int, total: int):
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion
         bg = (self.s.background.color or theme.bg) if self.s.background.kind in ("solid", "gradient") else theme.bg
         pal = H.palette(theme, bg)
         R = lay.safe
         think = int(p.think_seconds)
-        correct = int(p.correct) - 1
-        options = [o.text for o in p.options]
-        question_text = theme.display(" ".join(p.question.split()))
-        explanation = " ".join(p.explanation.split())
+        correct = int(item.correct) - 1
+        options = item.options
+        label_text = label_for(index, total, p.label)
+        question_text = theme.display(" ".join(item.question.split()))
+        explanation = " ".join(item.explanation.split())
 
         plan = plan_layout(lay, R, theme, question=question_text, options=options, explanation=explanation,
-                             has_label=bool(p.label))
+                             has_label=bool(label_text))
         separate_explanation = bool(explanation and plan.overflow > 0)
         if separate_explanation:
             # Long answers need the thinking screen's height. Give the explanation
             # its own reveal screen rather than pushing answers below the frame.
             plan = plan_layout(lay, R, theme, question=question_text, options=options, explanation="",
-                               has_label=bool(p.label))
+                               has_label=bool(label_text))
         cx = float(R.center[0])
 
-        self._decorate(pal)
+        if not self._decor:
+            self._decor = self._decorate(pal)
 
         # label pill on top; the timer ring lives in the bottom zone (the explanation takes it over later)
         pill = None
-        if p.label:
-            pill = self._pill(theme.display(" ".join(p.label.split())), pal, R)
+        if label_text:
+            pill = self._pill(theme.display(" ".join(label_text.split())), pal, R)
             pill.move_to([cx, plan.head_y, 0])
         ring_center = np.array([cx, plan.bottom_y, 0.0])
 
-        question = fit_text(question_text, width=plan.q_width, size=plan.q_size, min_size=plan.q_size, max_lines=8,
+        question = fit_text(question_text, width=plan.q_width, size=plan.q_size, min_size=plan.q_size,
+                            max_lines=max(8, plan.q_lines),
                             font=theme.font, weight=theme.display_weight, color=theme.text, line_spacing=1.0)
         question.move_to([cx, plan.q_center_y, 0])
 
@@ -145,11 +178,15 @@ class Template(StudioScene):
         if panel is not None:
             if separate_explanation:
                 self.wait(0.8)
-                self.play(*[FadeOut(obj) for obj in [question, *[c.group for c in cards], pill]
-                            if obj is not None], run_time=m.exit)
+                leaving = [obj for obj in [question, *[c.group for c in cards], pill] if obj is not None]
+                if self.mode == "storyboard":
+                    self.wait(m.exit)
+                else:
+                    self.play(*[FadeOut(obj) for obj in leaving], run_time=m.exit)
                 # Individual card animations can leave glyphs as scene roots.
                 # Start the explanation page with just its panel, badge and the brand logo.
                 self.remove(*[mob for mob in self.content() if mob is not self.brand_logo])
+                self._decor = ()
                 self.add(panel.group, badge)
                 finale = []
             finale.append(panel.group.animate(rate_func=ease_out, run_time=m.enter).shift(UP * lay.unit * 3)
@@ -160,13 +197,40 @@ class Template(StudioScene):
 
         hold = m.reading_time(explanation, minimum=2.0) if explanation else 3.0
         self.wait(hold)
-        self.target_length = self.elapsed + (m.exit if self.s.ending == "fade" else 0.0)
+
+    def _capture(self):
+        """A storyboard image after every play, thinned evenly once a quiz grows long."""
+        if self._capture_limit is None:
+            return super()._capture()
+        self._captured_plays += 1
+        if self._captured_plays % self._capture_every:
+            return
+        super()._capture()
+        if len(self._frames) > self._capture_limit:
+            self._frames = self._frames[::2]
+            self._capture_every *= 2
+
+    def _between_questions(self):
+        """A clean fade from one question to the next: background, logo and soft shapes stay."""
+        keep = {id(mob) for mob in self._decor}
+        if self.brand_logo is not None:
+            keep.add(id(self.brand_logo))
+        gone = [mob for mob in self.content() if id(mob) not in keep]
+        if gone and self.mode == "storyboard":
+            # A contact sheet never shows the fade's in-between frames: keep its time,
+            # skip the costly copies of every glyph.
+            self.wait(self.motion.exit)
+        elif gone:
+            self.play(*[FadeOut(mob) for mob in gone], run_time=self.motion.exit)
+        # Individual card animations can leave glyphs as scene roots.
+        self.remove(*[mob for mob in self.content() if id(mob) not in keep])
+        self.wait(0.15)
 
     # -- pieces ---------------------------------------------------------------------
     def _decorate(self, pal):
         """Soft background shapes in two corners; skipped on transparent exports."""
         if self.s.background.kind == "transparent":
-            return
+            return ()
         lay, theme = self.layout, self.theme
         w, h, short = lay.frame_width, lay.frame_height, lay.short
         alpha = 0.10 if theme.dark else 0.09
@@ -175,6 +239,7 @@ class Template(StudioScene):
         small = Circle(radius=short * 0.30).set_fill(pal.success, alpha * 0.8).set_stroke(width=0)
         small.move_to([w / 2 - short * 0.02, -h / 2 + short * 0.05, 0])
         self.add(big, small)
+        return (big, small)
 
     def _pill(self, text, pal, R):
         unit = self.layout.unit

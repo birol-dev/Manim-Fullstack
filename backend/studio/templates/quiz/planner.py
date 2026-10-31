@@ -25,6 +25,7 @@ class Plan:
     e_gap: float
     q_size: float
     q_width: float
+    q_lines: int
     q_center_y: float
     opt_size: float
     cols: int
@@ -63,7 +64,6 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
     q_min, o_min, e_min = 24.0, 24.0, 24.0
     e_lines_max = 2 if lay.is_landscape else 4
 
-    q_width = R.width * 0.96
     e_width = R.width
     badge_d = unit * 8.4
     e_gap = unit * 3.2
@@ -77,30 +77,36 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
         grids = []
     variants = [(c, 2) for c in grids] + [(1, 3)] + [(c, lines) for lines in (3, 4) for c in grids]
 
-    def at(k: float, variant: tuple) -> dict:
+    def at(k: float, variant: tuple, *, dense: bool = False) -> dict:
         cols, max_lines = variant
-        s = max(0.4, k)  # spacing scale: tightens together with the text
-        qs, os_, es = max(q_min, q_max * k), max(o_min, o_max * k), max(e_min, e_max * k)
+        # A dense plan is the last resort for maximum-length text: less padding, tighter
+        # spacing and a smaller size floor. A plan that already fits is never replaced.
+        s = max(0.30 if dense else 0.4, k)  # spacing scale: tightens together with the text
+        low = 18.0 if dense else 24.0
+        qs, os_, es = max(low, q_max * k), max(low, o_max * k), max(low, e_max * k)
         d = dict(k=k, qs=qs, es=es)
-        d["ring"] = ring * max(0.85, s)
+        d["ring"] = ring * max(0.60 if dense else 0.85, s)
         d["pill_h"] = unit * 6.6 if has_label else 0.0
         d["g_head"] = unit * 4.0 * s if has_label else 0.0
         d["g_opts"], d["g_exp"], gap = unit * 4.5 * s, unit * 3.0 * s, unit * 2.8 * max(0.7, s)
         tight = max(0.5, s)
-        pad_l, pad_r, slot_gap = unit * 3.2 * tight, unit * 3.4 * tight, unit * 3.2 * tight
-        pad_v = unit * 3.0 * s
+        squeeze = 0.55 if dense else 1.0
+        pad_l, pad_r, slot_gap = unit * 3.2 * tight * squeeze, unit * 3.4 * tight * squeeze, unit * 3.2 * tight * squeeze
+        pad_v = unit * 3.0 * s * squeeze
         d["pad_l"], d["pad_r"], d["gap"] = pad_l, pad_r, gap
 
         # question
+        q_width = R.width * (1.0 if dense else 0.96)
+        d["q_width"] = q_width
         d["q_lines"] = lines_at(question, q_width, qs, font, qw)
         d["q_h"] = d["q_lines"] * line_height(qs, font, qw, 1.0)
 
         # answers
-        letter = max(24.0, min(40.0, os_ * 0.85))
+        letter = max(20.0 if dense else 24.0, min(40.0, os_ * 0.85))
         slot = slot_diameter(letter, font)
         card_w = (R.width - (cols - 1) * gap) / cols
         text_w = card_w - pad_l - slot - slot_gap - pad_r
-        uniform = min(fit_size(o, text_w, os_, o_min, max_lines, font, ow)[0] for o in options)
+        uniform = min(fit_size(o, text_w, os_, low, max_lines, font, ow)[0] for o in options)
         lines = max(lines_at(o, text_w, uniform, font, ow) for o in options)
         cut = lines > max_lines  # even the smallest size needs more lines than allowed: it would be trimmed
         lines = min(lines, max_lines)
@@ -115,7 +121,7 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
         # explanation
         d["e_text_w"] = e_width - 2 * unit * 3.6 - badge_d - e_gap
         if explanation:
-            size, lines = fit_size(explanation, d["e_text_w"], es, e_min, e_lines_max, font, ew)
+            size, lines = fit_size(explanation, d["e_text_w"], es, low, e_lines_max, font, ew)
             d["e_size"], d["e_lines"] = size, lines
             d["e_h"] = max(lines * line_height(size, font, ew, EXPLANATION_SPACING) + 2 * unit * 2.4 * s,
                            badge_d + unit * 3.0 * s)
@@ -124,7 +130,7 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
         d["bottom_h"] = max(d["ring"], d["e_h"])
         d["total"] = (d["pill_h"] + d["g_head"] + d["q_h"] + d["g_opts"] + d["opts"]["height"] + d["g_exp"]
                       + d["bottom_h"])
-        d["floor"] = d["qs"] <= q_min and d["opts"]["size"] <= o_min and d["es"] <= e_min
+        d["floor"] = d["qs"] <= low and d["opts"]["size"] <= low and d["es"] <= low
         return d
 
     # Largest text first; at each size the first (preferred) answer layout that fits wins.
@@ -142,6 +148,25 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
             d = min(pool, key=lambda t: t["total"])
         k *= 0.94
 
+    if d["total"] > R.height or not d["eligible"]:
+        # Maximum-length content: try the same layouts with less padding and a smaller
+        # size floor. This never replaces a plan that already fits, so normal content
+        # renders exactly as before.
+        best, k = None, 1.0
+        while k >= 0.15:
+            candidates = [at(k, variant, dense=True) for variant in variants]
+            fitting = [t for t in candidates if t["eligible"] and t["total"] <= R.height]
+            if fitting:
+                best = fitting[0]
+                break
+            pool = [t for t in candidates if t["eligible"]] or candidates
+            candidate = min(pool, key=lambda t: t["total"])
+            if best is None or candidate["total"] < best["total"]:
+                best = candidate
+            k *= 0.86
+        if best is not None and (best["total"] < d["total"] or (best["eligible"] and not d["eligible"])):
+            d = best
+
     opts = d["opts"]
     free = max(0.0, R.height - d["total"])
     cap = opts["card_h"] * (0.9 if opts["rows"] == 1 else (0.7 if tall else 0.45))
@@ -158,7 +183,7 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
     return Plan(
         ring=d["ring"], pill_h=d["pill_h"], head_y=head_y, bottom_h=d["bottom_h"],
         bottom_y=R.bottom + d["bottom_h"] / 2, badge_d=badge_d, e_gap=e_gap,
-        q_size=d["qs"], q_width=q_width, q_center_y=q_center,
+        q_size=d["qs"], q_width=d["q_width"], q_lines=d["q_lines"], q_center_y=q_center,
         opt_size=opts["size"], cols=opts["cols"], rows=opts["rows"], card_w=opts["card_w"], card_h=card_h,
         gap=d["gap"], slot_d=d["slot"], pad_l=d["pad_l"], pad_r=d["pad_r"], text_w=opts["text_w"],
         opt_lines=opts["lines"], opt_top=y, e_size=d["e_size"], e_lines=d["e_lines"], e_w=e_width,
