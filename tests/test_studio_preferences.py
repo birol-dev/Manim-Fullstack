@@ -11,7 +11,7 @@ from starlette.testclient import TestClient
 import main
 from studio import preferences as preferences_module
 from studio import service as service_module
-from studio.preferences import MAX_BYTES, MAX_RECENT_COLORS, MAX_SEEN_EXPORTS, PreferenceStore
+from studio.preferences import MAX_BYTES, MAX_FAVOURITE_DESIGNS, MAX_RECENT_COLORS, MAX_SEEN_EXPORTS, PreferenceStore
 from studio.registry import TemplateError
 from tests.conftest import LocalClient
 from tests.studio_fakes import make_service
@@ -94,6 +94,27 @@ def test_seen_exports_are_capped(store):
     for bad in (["../outside"], [""], [3], {}, None):
         with pytest.raises(TemplateError):
             store.update({"seen_exports": bad})
+
+
+def test_favourite_designs_are_kept_in_order_without_duplicates(store):
+    designs = ["countdown/classroom-timer", "steps/recipe-steps", "countdown/classroom-timer"]
+    assert store.update({"favourite_designs": designs})["favourite_designs"] == designs[:2]
+    assert store.read()["favourite_designs"] == designs[:2]
+    assert store.update({"favourite_designs": []})["favourite_designs"] == []
+    for bad in (["Countdown/classroom-timer"], ["../secret"], ["countdown"], [1], "not-a-list", None):
+        with pytest.raises(TemplateError) as info:
+            store.update({"favourite_designs": bad})
+        assert info.value.errors[0]["field"].startswith("favourite_designs")
+    too_many = [f"countdown/design-{n}" for n in range(MAX_FAVOURITE_DESIGNS + 1)]
+    with pytest.raises(TemplateError) as info:
+        store.update({"favourite_designs": too_many})
+    assert info.value.errors[0]["field"] == "favourite_designs"
+
+
+def test_favourites_survive_a_restart_and_come_back_from_the_route(api):
+    body = {"favourite_designs": ["countdown/classroom-timer", "quiz/quick-quiz"]}
+    assert api.patch("/api/studio/preferences", json=body).status_code == 200
+    assert api.get("/api/studio/preferences").json()["favourite_designs"] == body["favourite_designs"]
 
 
 def test_setup_preferences_validate_and_persist(store):

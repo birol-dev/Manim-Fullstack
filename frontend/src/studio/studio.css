@@ -433,8 +433,10 @@
   :root[data-surface="studio"] .studio-title-group { flex: 1; flex-wrap: wrap; gap: 0 8px; }
   :root[data-surface="studio"] .studio-title-group > span { font-size: 11px; }
   :root[data-surface="studio"] .studio-editor-header { grid-template-columns: minmax(0, 1fr) auto; }
-  :root[data-surface="studio"] .studio-editor-actions { justify-self: end; }
-  :root[data-surface="studio"] .studio-format-picker { width: 100%; }
+  /* The shape pills need the whole row: squeezed beside the actions, their ratio labels
+     ran into each other ("16:9:16"). The actions keep the row below. */
+  :root[data-surface="studio"] .studio-editor-actions { grid-column: 1 / -1; justify-self: end; }
+  :root[data-surface="studio"] .studio-format-picker { grid-column: 1 / -1; width: 100%; }
   :root[data-surface="studio"] .studio-format-picker [role="radio"] { flex-direction: column; gap: 2px; padding: 5px 4px; height: auto; }
   :root[data-surface="studio"] .studio-format-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   :root[data-surface="studio"] .studio-editor-actions :is(button, a).select-none { height: 32px; padding-inline: 8px; font-size: 12px; }

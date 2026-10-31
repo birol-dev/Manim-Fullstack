@@ -299,8 +299,15 @@ export interface Project {
   template: string;
   params: Params;
   settings: Partial<RenderSettings>;
+  /** Increases with every save; send the one you read back as base_revision. */
+  revision: number;
   created: number | string;
   updated: number | string;
+}
+
+/** The measured length of these params, or null when it cannot be measured. */
+export interface LengthEstimate {
+  length: number | null;
 }
 
 export interface FieldError {

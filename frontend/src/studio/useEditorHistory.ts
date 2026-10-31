@@ -16,5 +16,9 @@ export function useEditorHistory<T>(initial: T) {
     setSnapshot(history.current);
     return true;
   }, [history]);
-  return { snapshot, change, travel, history, canUndo: history.canUndo, canRedo: history.canRedo };
+  const reset = useCallback((next: T) => {
+    history.reset(next);
+    setSnapshot(next);
+  }, [history]);
+  return { snapshot, change, travel, reset, history, canUndo: history.canUndo, canRedo: history.canRedo };
 }

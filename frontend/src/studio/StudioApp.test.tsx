@@ -178,7 +178,7 @@ describe("gallery", () => {
     expect(within(setup).getByRole("link", { name: /Make your first video/ })).toHaveAttribute("data-next", "true");
     expect(screen.queryByRole("heading", { name: "Continue editing" })).not.toBeInTheDocument();
     view.unmount();
-    for (let i = 1; i <= 5; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, created: i, updated: i });
+    for (let i = 1; i <= 5; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, revision: 1, created: i, updated: i });
     open("#/");
     expect(await screen.findByRole("heading", { name: "Continue editing" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "How making a video works" })).not.toBeInTheDocument();
@@ -197,7 +197,7 @@ describe("gallery", () => {
 
   it("renames inline, cancels with Escape, duplicates saved content, and updates sidebar counts", async () => {
     const user = userEvent.setup();
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "Keep this", seconds: 75 }, settings: { theme: "midnight", aspect: "9:16" }, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "Keep this", seconds: 75 }, settings: { theme: "midnight", aspect: "9:16" }, revision: 1, created: 1, updated: 1 });
     open("#/videos");
     const options = await screen.findByRole("button", { name: "Options for My timer" });
     act(() => options.focus());
@@ -299,7 +299,7 @@ describe("gallery", () => {
       disconnect() {}
     });
     try {
-      studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "My own timer", seconds: 75 }, settings: { aspect: "9:16", theme: "midnight" }, created: 1, updated: 1 });
+      studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "My own timer", seconds: 75 }, settings: { aspect: "9:16", theme: "midnight" }, revision: 1, created: 1, updated: 1 });
       open("#/");
       const saved = await mainContent().findByRole("link", { name: /My timer/ });
       expect(studio.calls.some((call) => call.path === "/api/studio/projects/p9")).toBe(false);
@@ -314,7 +314,7 @@ describe("gallery", () => {
   });
 
   it("uses cached saved posters without fetching full projects", async () => {
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 1 });
     studio.reply = (call) => call.path === "/api/studio/projects" ? { status: 200, body: [{ id: "p9", title: "My timer", template: "countdown", updated: 1, poster_url: "/media/saved.png" }] } : null;
     open("#/");
     const saved = await mainContent().findByRole("link", { name: /My timer/ });
@@ -337,7 +337,7 @@ describe("gallery", () => {
   it("makes saved-video load failures visible and retryable", async () => {
     const user = userEvent.setup();
     let failed = true;
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 1 });
     studio.reply = (call) => call.path === "/api/studio/projects" && failed ? { status: 503, body: { detail: "Try later." } } : null;
     open("#/");
     expect(await screen.findByText(/Couldn't load your videos/)).toBeInTheDocument();
@@ -349,7 +349,7 @@ describe("gallery", () => {
 
   it("deletes a saved video after confirmation", async () => {
     const user = userEvent.setup();
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 1 });
     open("#/");
     await user.click(await screen.findByRole("button", { name: "Options for My timer" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete" }));
@@ -421,9 +421,9 @@ describe("gallery", () => {
   it("finds saved videos by title alongside templates", async () => {
     const user = userEvent.setup();
     studio.projects.push(
-      { id: "p9", title: "Weekend sale", template: "countdown", params: {}, settings: {}, created: 1, updated: 2 },
-      { id: "p8", title: "Sale recap", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 },
-      { id: "p7", title: "Classroom timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 0 },
+      { id: "p9", title: "Weekend sale", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 2 },
+      { id: "p8", title: "Sale recap", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 1 },
+      { id: "p7", title: "Classroom timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 0 },
     );
     open("#/");
     const search = await screen.findByRole("searchbox", { name: "Search designs" });
@@ -454,7 +454,7 @@ describe("gallery", () => {
   });
 
   it("lists saved videos and links to author mode", async () => {
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: Date.now() / 1000 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: Date.now() / 1000 });
     open("#/");
     const saved = await mainContent().findByRole("link", { name: /My timer/ });
     expect(saved).toHaveAttribute("href", "#/project/p9");
@@ -627,7 +627,7 @@ describe("editor", () => {
   });
 
   it("picks up AI edits saved elsewhere without saving over them, but never over unsaved local edits", async () => {
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "Original", seconds: 300 }, settings: {}, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: { title: "Original", seconds: 300 }, settings: {}, revision: 1, created: 1, updated: 1 });
     open("#/project/p9");
     await screen.findByRole("textbox", { name: "Title" });
     // Focus without a newer version on the server changes nothing.
@@ -647,7 +647,7 @@ describe("editor", () => {
   });
 
   it("keeps edits typed while a check for AI edits is still running", async () => {
-    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, created: 1, updated: 1 });
+    studio.projects.push({ id: "p9", title: "My timer", template: "countdown", params: {}, settings: {}, revision: 1, created: 1, updated: 1 });
     open("#/project/p9");
     const title = await screen.findByRole("textbox", { name: "Title" });
     let finish!: (result: { status: number; body: unknown }) => void;

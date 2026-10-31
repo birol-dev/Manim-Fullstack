@@ -26,6 +26,12 @@ FAKE_CHILD = textwrap.dedent('''
     os.write(1, b"chatter on fd 1\\n")
 
     class Fake(worker._Child):
+        def measure(self, request):
+            behavior = (request["job"].get("params") or {{}}).get("behavior")
+            if behavior == "fail":
+                return {{"id": request["id"], "ok": False, "error": "ValueError: no length"}}
+            return {{"id": request["id"], "ok": True, "ms": 1, "length": 12.5}}
+
         def render(self, request):
             job = request["job"]
             behavior = (job.get("params") or {{}}).get("behavior")
@@ -96,6 +102,20 @@ def test_render_round_trip_ignores_stdout_chatter(fake_child, tmp_path):
     finally:
         worker.stop()
     assert not worker.alive
+
+
+def test_measure_answers_seconds_without_a_render(fake_child, tmp_path):
+    worker = PreviewWorker(command=fake_child, request_timeout=20)
+    try:
+        reply = worker.measure({"template": "countdown", "params": {"seconds": 5}, "settings": {},
+                                "mode": "video"}, 360, 640)
+        assert reply["ok"] and reply["length"] == 12.5
+        with pytest.raises(WorkerReplyError, match="no length"):
+            worker.measure({"template": "countdown", "params": {"behavior": "fail"}, "settings": {},
+                            "mode": "video"}, 360, 640)
+        assert worker.alive  # a refused measurement does not stop the warm worker
+    finally:
+        worker.close()
 
 
 def test_job_failure_keeps_the_worker(fake_child, tmp_path):

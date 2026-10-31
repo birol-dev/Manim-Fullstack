@@ -81,7 +81,7 @@ describe("rail and side panel", () => {
   });
 
   it("lists the five most recent videos in the panel, newest first", async () => {
-    for (let i = 1; i <= 6; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, created: i, updated: i });
+    for (let i = 1; i <= 6; i++) studio.projects.push({ id: `p${i}`, title: `Video ${i}`, template: "countdown", params: {}, settings: {}, revision: 1, created: i, updated: i });
     open();
     await loaded();
     const panel = await libraryPanel();

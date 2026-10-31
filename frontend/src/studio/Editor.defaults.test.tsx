@@ -139,6 +139,7 @@ it("never applies the defaults to a saved video", async () => {
     template: "countdown",
     params: { seconds: 60 },
     settings: { aspect: "1:1", theme: "clean" },
+    revision: 1,
     created: 1,
     updated: 1,
   });

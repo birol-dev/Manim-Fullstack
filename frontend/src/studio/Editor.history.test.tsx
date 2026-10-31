@@ -87,7 +87,7 @@ it("undoes format, look changes, list add/remove/move, and table edits", async (
 }, 60_000);
 
 it("records an AI update as one undoable step without resaving it until undo", async () => {
-  studio.projects.push({ id: "p9", title: "Original project", template: "countdown", params: { title: "Original", seconds: 300 }, settings: {}, created: 1, updated: 1 });
+  studio.projects.push({ id: "p9", title: "Original project", template: "countdown", params: { title: "Original", seconds: 300 }, settings: {}, revision: 1, created: 1, updated: 1 });
   render(<TooltipProvider><EditorPage catalog={studio.catalog} route={{ kind: "project", id: "p9" }} onProjectCreated={() => {}} /></TooltipProvider>);
   await screen.findByRole("textbox", { name: "Title" });
   Object.assign(studio.projects[0], { title: "AI project", params: { title: "AI title", seconds: 60 }, settings: { theme: "pop" }, updated: 2 });

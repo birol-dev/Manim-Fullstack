@@ -532,6 +532,17 @@ class ExportManager:
             self._save_locked()
             return public(record)
 
+    def forget(self, export_id: str) -> dict:
+        """Forget a finished export but keep its file in the exports folder."""
+        self._ensure_loaded()
+        with self._lock:
+            record = self._get_locked(export_id)
+            if record["status"] in ACTIVE:
+                raise ConflictError("This export is still running; cancel it first.")
+            self._records.pop(export_id, None)
+            self._save_locked()
+            return public(record)
+
     def shutdown(self, timeout: float = 10.0, on_stopping: Optional[Callable] = None) -> None:
         """Stop the running export and the queue thread. A clean stop hands every queued
         or rendering record back to the queue (``queued`` with ``resume``) and writes the

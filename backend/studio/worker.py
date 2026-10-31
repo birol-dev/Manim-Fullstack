@@ -9,11 +9,14 @@ Protocol (JSON lines, UTF-8):
 * parent -> child, on the child's stdin, one request per line::
 
       {"id": 7, "op": "render", "job": {...}, "width": 640, "height": 360, "media_dir": "..."}
-      {"id": 8, "op": "ping"}
+      {"id": 8, "op": "measure", "job": {...}, "width": 640, "height": 360}
+      {"id": 9, "op": "ping"}
       {"op": "quit"}
 
   ``job`` is a kit render job (``template params settings mode assets_dir output``);
   ``mode`` is ``poster`` or ``storyboard``; ``media_dir`` is Manim's scratch folder.
+  ``measure`` runs the same timeline with drawing skipped and answers its length in
+  seconds, so the editor's caption can show the real duration without rendering.
 
 * child -> parent: every protocol line starts with ``@@studio `` and is written to a
   private copy of the original stdout. The child points its own fd 1 (and
@@ -162,6 +165,44 @@ class _Child:
                 return {"id": rid, "ok": False, "error": f"The storyboard metadata is missing ({exc})."}
         return reply
 
+    def measure(self, request: dict) -> dict:
+        """Run the scene's timeline without drawing or writing anything; answer its seconds."""
+        from manim import tempconfig
+
+        from studio.compat import output_config
+        from studio.formats import frame_size
+        from studio.kit import runtime
+
+        rid = request.get("id")
+        job = dict(request.get("job") or {})
+        if not job.get("template"):
+            return {"id": rid, "ok": False, "error": "A measurement needs a template."}
+        started = time.perf_counter()
+        try:
+            width, height = int(request.get("width") or 640), int(request.get("height") or 360)
+            frame_width, frame_height = frame_size(width, height)
+            cls = self.template_class(job["template"])
+            runtime.set_job({**job, "mode": "video", "output": None})
+            try:
+                # The export's own timing pass: plays and waits advance the clock, no frames draw.
+                from studio.runner import TimingRenderer
+
+                with tempconfig({**output_config(dry_run=True), "pixel_width": width, "pixel_height": height,
+                                 "frame_width": frame_width, "frame_height": frame_height, "frame_rate": 30,
+                                 "disable_caching": True, "progress_bar": "none", "verbosity": "ERROR"}):
+                    renderer = TimingRenderer()
+                    scene = cls(renderer=renderer)
+                    scene.render()
+            finally:
+                runtime.set_job(None)
+        except (Exception, SystemExit) as exc:
+            import traceback
+
+            return {"id": rid, "ok": False, "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": traceback.format_exc(limit=-12)}
+        return {"id": rid, "ok": True, "ms": round((time.perf_counter() - started) * 1000),
+                "length": round(renderer.frames / 30, 2)}
+
     def serve(self, stdin) -> int:
         while True:
             raw = stdin.readline()
@@ -181,6 +222,8 @@ class _Child:
                 self.send({"id": request.get("id"), "ok": True, "pid": os.getpid()})
             elif op == "render":
                 self.send(self.render(request))
+            elif op == "measure":
+                self.send(self.measure(request))
             else:
                 self.send({"id": request.get("id"), "ok": False, "error": f"Unknown op {op!r}."})
 
@@ -495,6 +538,14 @@ class PreviewWorker:
                               "media_dir": media_dir or self.media_dir}, timeout, cancel)
         if not reply.get("ok"):
             raise WorkerReplyError(reply.get("error") or "The preview failed.", reply.get("traceback") or "")
+        return reply
+
+    def measure(self, job: dict, width: int, height: int, timeout: Optional[float] = None) -> dict:
+        """The real length in seconds of *job*: the timeline runs, no frames are drawn."""
+        reply = self.request({"op": "measure", "job": job, "width": int(width), "height": int(height)}, timeout)
+        if not reply.get("ok"):
+            raise WorkerReplyError(reply.get("error") or "The length could not be measured.",
+                                   reply.get("traceback") or "")
         return reply
 
 

@@ -21,6 +21,7 @@ const PROJECT: Project = {
   template: "countdown",
   params: { seconds: 300, title: "Quiet reading time", style: "ring" },
   settings: { aspect: "16:9", theme: "clean" },
+  revision: 1,
   created: 1,
   updated: 1,
 };

@@ -30,10 +30,18 @@ class FakeWorker:
 
     def __init__(self):
         self.calls = []
+        self.measured = []
+        self.length = 12.5  # the seconds a measurement answers with
         self.fail = None  # an exception to raise instead of rendering
         self.stops = 0
         self.alive = False
         self.delay = 0.0
+
+    def measure(self, job, width, height, timeout=None):
+        self.measured.append({"job": job, "width": width, "height": height, "timeout": timeout})
+        if self.fail is not None:
+            raise self.fail
+        return {"id": len(self.measured), "ok": True, "ms": 1, "length": self.length}
 
     def render(self, job, width, height, media_dir=None, timeout=None):
         self.calls.append({"job": job, "width": width, "height": height, "timeout": timeout})

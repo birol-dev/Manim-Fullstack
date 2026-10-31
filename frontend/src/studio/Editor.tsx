@@ -8,7 +8,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
 
-import { createProject, friendlyError, getProject, updateProject } from "./api";
+import { createProject, estimateLength, friendlyError, getProject, updateProject } from "./api";
 import { saveProjectFile } from "./portableFile";
 import { ActionMenu } from "./ProjectMenu";
 import { Autosaver, type SaveStatus } from "./autosave";
@@ -60,11 +60,15 @@ interface InitialState {
   params: Params;
   settings: RenderSettings;
   projectId: string | null;
+  revision: number;
   updated: Project["updated"] | null;
 }
 
 /** How often an open project checks for changes saved elsewhere (an AI agent, another window). */
 export const REMOTE_CHECK_MS = 4000;
+
+/** How long a burst of edits waits before the caption asks for the real length once. */
+export const LENGTH_CHECK_MS = 400;
 
 /** ISO timestamps from the server sort as text; numbers (tests) as numbers. */
 function isNewer(a: Project["updated"], b: Project["updated"]) {
@@ -128,6 +132,7 @@ export function EditorPage({ catalog, route, onProjectCreated }: EditorPageProps
       params: initialParams(template.defaults, card?.params),
       settings: newVideoSettings(template, card?.settings, catalog.themes ?? []),
       projectId: null,
+      revision: 1,
       updated: null,
     };
     return <EditorBody catalog={catalog} template={template} initial={initial} newPreset={opened.preset} onProjectCreated={onProjectCreated} />;
@@ -154,6 +159,7 @@ function ProjectLoader({ catalog, id, onProjectCreated }: { catalog: Catalog; id
             params: initialParams(template.defaults, project.params),
             settings: initialSettings(template, project.settings),
             projectId: project.id,
+            revision: project.revision ?? 1,
             updated: project.updated,
           },
         });
@@ -234,7 +240,7 @@ interface EditorBodyProps {
 }
 
 function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }: EditorBodyProps) {
-  const { snapshot: { title, params, settings }, change, travel, history, canUndo, canRedo } = useEditorHistory({ title: initial.title, params: initial.params, settings: initial.settings });
+  const { snapshot: { title, params, settings }, change, travel, reset, history, canUndo, canRedo } = useEditorHistory({ title: initial.title, params: initial.params, settings: initial.settings });
   const [initialProjectId] = useState(initial.projectId);
   const [hasProject, setHasProject] = useState(!!initial.projectId);
   const [tab, setTab] = useState("content");
@@ -250,7 +256,11 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [remoteNote, setRemoteNote] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [loadingNewest, setLoadingNewest] = useState(false);
+  const [lengthEstimate, setLengthEstimate] = useState<{ key: string; length: number | null } | null>(null);
   const [formVersion, setFormVersion] = useState(0);
+  const [loadedVersion, setLoadedVersion] = useState(0);
   const nativeHistory = useRef(new WeakSet<HTMLElement>());
   const shortcut = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl+";
   const [exportErrors, setExportErrors] = useState<{ key: string; errors: FieldError[] } | null>(null);
@@ -271,6 +281,28 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
   // Content-timed templates report their actual duration in storyboard metadata.
   const storyboard = useLivePreview(view === "storyboard" || (template.length_from_params && !!poster.response) ? { ...posterRequest, mode: "storyboard" } : null);
 
+  // The caption's real duration: the warm worker plays the timeline without drawing frames.
+  // One request per debounce, and only its own key may replace the text on screen.
+  useEffect(() => {
+    let live = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      estimateLength({ template: template.id, params, settings: effectiveSettings }, controller.signal).then(
+        (result) => {
+          if (live) setLengthEstimate({ key: requestKey, length: typeof result.length === "number" ? result.length : null });
+        },
+        () => {
+          if (live) setLengthEstimate({ key: requestKey, length: null });
+        },
+      );
+    }, LENGTH_CHECK_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [requestKey, template.id, params, effectiveSettings]);
+
   // ---- Autosave ---------------------------------------------------------------------------
   const touched = useRef(false);
   const editVersion = useRef(0);
@@ -282,6 +314,8 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
   const manyAfterSave = useRef(false);
   // `updated` of the version on screen: a newer one on the server was saved by someone else.
   const knownUpdate = useRef(initial.updated);
+  // The revision of the copy on screen: every autosave starts from it, so a newer copy is never replaced.
+  const revisionRef = useRef(initial.revision);
   const createdRef = useRef(onProjectCreated);
   useEffect(() => {
     createdRef.current = onProjectCreated;
@@ -289,17 +323,26 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
   useEffect(() => {
     const remember = (project: Project) => {
       knownUpdate.current = project.updated;
+      revisionRef.current = project.revision ?? revisionRef.current;
       return project;
     };
     const autosaver = new Autosaver({
       projectId: initialProjectId,
       create: (snapshot, keepalive) => createProject(snapshot, keepalive).then(remember),
       update: (id, snapshot, keepalive) =>
-        updateProject(id, { title: snapshot.title, params: snapshot.params, settings: snapshot.settings }, keepalive).then(remember),
+        updateProject(id, { title: snapshot.title, params: snapshot.params, settings: snapshot.settings, base_revision: revisionRef.current }, keepalive).then(remember),
       onStatus: (status, error) => {
         if (status === "error") manyAfterSave.current = false;
         setSaveStatus(status);
         setSaveError(status === "error" ? friendlyError(error, "Couldn't save this video.") : null);
+      },
+      onConflict: (error) => {
+        if (!(error instanceof ApiError) || error.status !== 409) return false;
+        // The project changed elsewhere: stop saving and leave the edits on screen until the
+        // person chooses to load the newest copy.
+        manyAfterSave.current = false;
+        setConflict(true);
+        return true;
       },
       onCreated: (project) => {
         setHasProject(true);
@@ -327,6 +370,38 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
   useEffect(() => {
     document.title = `${title.trim() || "Untitled video"} · Studio`;
   }, [title]);
+
+  // After a conflict: replace the stale copy on screen with the newest one and start again.
+  // Earlier edits are no longer undoable, since they never reached the project.
+  const loadNewest = async () => {
+    const id = saver.current?.id ?? initialProjectId;
+    if (!id) return;
+    setLoadingNewest(true);
+    try {
+      const project = await getProject(id);
+      revisionRef.current = project.revision ?? 1;
+      knownUpdate.current = project.updated;
+      touched.current = false;
+      reset({
+        title: project.title,
+        params: initialParams(template.defaults, project.params),
+        settings: initialSettings(template, project.settings),
+      });
+      saver.current?.resume();
+      setConflict(false);
+      setRemoteNote(false);
+      setSaveError(null);
+      setExportErrors(null);
+      setFormVersion((value) => value + 1);
+      // Remount the title too, so the browser's native Undo cannot revive the stale copy.
+      setLoadedVersion((value) => value + 1);
+      nativeHistory.current = new WeakSet();
+    } catch (error) {
+      setSaveError(friendlyError(error, "Couldn't load the newest version."));
+    } finally {
+      setLoadingNewest(false);
+    }
+  };
 
   const setParam = (key: string, value: unknown, related: Params = {}) => {
     if (change({ params: { ...history.current.params, ...related, [key]: value } })) markTouched();
@@ -369,9 +444,18 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
         toast.error("This video is still being saved. Try again in a moment.");
         return;
       }
-      await updateProject(id, { title: title.trim() || template.title, params, settings });
+      const saved = await updateProject(id, { title: title.trim() || template.title, params, settings, base_revision: revisionRef.current });
+      knownUpdate.current = saved.updated;
+      revisionRef.current = saved.revision ?? revisionRef.current;
       await saveProjectFile(id);
     } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        saver.current?.stop();
+        setConflict(true);
+        setSaveStatus("idle");
+        toast.error("This video was changed somewhere else. Load the newest version, then save the file.");
+        return;
+      }
       toast.error(friendlyError(error, "Couldn't save this video as a file."));
     }
   };
@@ -416,7 +500,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     let noteTimer: ReturnType<typeof setTimeout> | undefined;
     const check = async () => {
       const id = saver.current?.id;
-      if (stopped || checking || !id || document.hidden || saver.current?.dirty) return;
+      if (stopped || conflict || checking || !id || document.hidden || saver.current?.dirty) return;
       const version = editVersion.current;
       const known = knownUpdate.current;
       checking = true;
@@ -426,6 +510,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
         if (stopped || editVersion.current !== version || saver.current?.dirty || knownUpdate.current !== known) return;
         if (known !== null && !isNewer(project.updated, known)) return;
         knownUpdate.current = project.updated;
+        revisionRef.current = project.revision ?? revisionRef.current;
         if (known === null) return;
         const current = templateRef.current;
         touched.current = false;
@@ -454,7 +539,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [hasProject, change]);
+  }, [hasProject, change, conflict]);
 
   // ---- Errors -----------------------------------------------------------------------------
   const fieldErrors = useMemo(() => {
@@ -474,9 +559,12 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     [settings.locale, theme, matched.byPath],
   );
 
-  const length = template.length_from_params
+  // The measured length only applies to the params it was measured for; otherwise keep the
+  // old text (the storyboard's own length, the chosen length, or the template default).
+  const measured = lengthEstimate?.key === requestKey ? lengthEstimate.length : null;
+  const length = measured ?? (template.length_from_params
     ? storyboard.response?.storyboard?.length ?? template.default_length
-    : settings.length ?? template.default_length;
+    : settings.length ?? template.default_length);
 
   return (
     <div className="studio-editor" onInputCapture={(event) => { if (isTextEditor(event.target)) nativeHistory.current.add(event.target); }} onBlurCapture={(event) => { nativeHistory.current.delete(event.target); history.boundary(); }}>
@@ -490,6 +578,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
           </Button>
           <div className="studio-title-group">
             <input
+              key={loadedVersion}
               value={title}
               maxLength={80}
               aria-label="Video title"
@@ -499,7 +588,11 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
               className="studio-video-title"
               style={{ width: `calc(${Math.max(8, [...title].length + 1)}ch + 26px)` }}
             />
-            {remoteNote ? (
+            {conflict ? (
+              <span className="flex items-center gap-1 text-xs text-fg-subtle" role="status">
+                <CloudOff className="size-3.5" /> Not saved
+              </span>
+            ) : remoteNote ? (
               <span className="flex items-center gap-1 text-xs text-accent" role="status">
                 <Sparkles className="size-3.5" /> Updated by your AI
               </span>
@@ -537,7 +630,15 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
         </div>
       </header>
 
-      {saveError && <p role="alert" className="studio-editor-save-error">{saveError} Use Retry save to try again.</p>}
+      {conflict && (
+        <div className="studio-editor-conflict" role="status">
+          <span>This video was changed somewhere else.</span>
+          <Button variant="secondary" size="sm" onClick={() => void loadNewest()} disabled={loadingNewest}>
+            {loadingNewest && <Spinner className="size-3.5" />} Load the newest version
+          </Button>
+        </div>
+      )}
+      {saveError && <p role="alert" className="studio-editor-save-error">{saveError}{!conflict && " Use Retry save to try again."}</p>}
 
       <div className="studio-editor-body">
         <aside className="studio-editor-sidebar">

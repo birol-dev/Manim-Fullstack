@@ -83,6 +83,27 @@ def test_agent_project_preview_and_export(tmp_path):
         service.shutdown_sync()
 
 
+def test_an_agent_save_from_an_old_revision_asks_for_a_fresh_read(tmp_path):
+    service, _ = make_service(tmp_path)
+    server = create_server(service)
+    try:
+        project = payload(run(server.call_tool("create_project", {"template": "countdown",
+                                                                 "params": {"seconds": 30}})))
+        saved = payload(run(server.call_tool("update_project", {"project_id": project["id"],
+                                                               "base_revision": 1,
+                                                               "params": {"seconds": 45}})))
+        assert saved["revision"] == 2
+        with pytest.raises(ToolError) as info:
+            run(server.call_tool("update_project", {"project_id": project["id"], "base_revision": 1,
+                                                    "params": {"seconds": 1}, "title": "Lost"}))
+        assert "changed somewhere else" in str(info.value)
+        assert "Read the project again" in str(info.value)
+        kept = run(service.get_project(project["id"]))
+        assert kept["params"] == {"seconds": 45} and kept["revision"] == 2
+    finally:
+        service.shutdown_sync()
+
+
 def test_agent_field_errors_are_actionable(tmp_path):
     service, _ = make_service(tmp_path)
     server = create_server(service)
@@ -269,6 +290,33 @@ def test_stdio_bridge_shares_app_state(tmp_path):
             assert (await service.get_project(project["id"]))["title"] == "Changed"
             await bridge.preview("countdown", {"seconds": 7}, {}, "poster")
             assert len(worker.calls) == 1
+    try:
+        run(scenario())
+    finally:
+        api.service_module.service = original
+        service.shutdown_sync()
+
+
+def test_stdio_bridge_passes_a_stale_save_back_as_one_plain_message(tmp_path):
+    import httpx
+    from fastapi import FastAPI
+    from studio import api
+
+    service, _ = make_service(tmp_path)
+    app = FastAPI()
+    app.include_router(api.router)
+    original = api.service_module.service
+    api.service_module.service = service
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
+            bridge = RestBridge(client)
+            project = await bridge.create_project("countdown", {"seconds": 30}, {}, "Bridge")
+            await bridge.update_project(project["id"], base_revision=1, params={"seconds": 45})
+            with pytest.raises(ToolError, match="Read the project again"):
+                await bridge.update_project(project["id"], base_revision=1, params={"seconds": 1})
+            kept = await service.get_project(project["id"])
+            assert kept["params"] == {"seconds": 45} and kept["revision"] == 2
     try:
         run(scenario())
     finally:

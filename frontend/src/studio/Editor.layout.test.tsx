@@ -13,6 +13,7 @@ import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
 
 // CSS imports are stubbed out in tests, so read the stylesheets themselves.
 const editorCss = readFileSync(resolve(process.cwd(), "src/studio/editor.css"), "utf8");
+const studioCss = readFileSync(resolve(process.cwd(), "src/studio/studio.css"), "utf8");
 const previewCss = readFileSync(resolve(process.cwd(), "src/studio/preview.css"), "utf8");
 
 let studio: FakeStudio;
@@ -108,6 +109,13 @@ it("keeps the full video title in the input's tooltip when the column cuts it", 
   const title = screen.getByRole("textbox", { name: "Video title" });
   expect(title).toHaveValue("Countdown timer");
   expect(title).toHaveAttribute("title", "Countdown timer");
+});
+
+it("gives phone shape pills their own row while keeping desktop layout rules unchanged", () => {
+  const phone = mediaBlock(studioCss.slice(studioCss.indexOf("@media (max-width: 1023px)")), "(max-width: 640px)");
+  expect(phone).toMatch(/\.studio-format-picker\s*\{[^}]*grid-column:\s*1 \/ -1/);
+  expect(phone).toMatch(/\.studio-editor-actions\s*\{[^}]*grid-column:\s*1 \/ -1/);
+  expect(phone).toMatch(/\.studio-format-picker \[role="radio"\]\s*\{[^}]*flex-direction:\s*column/);
 });
 
 it("sizes the title to its text plus its own padding, so the name is not clipped", () => {

@@ -14,7 +14,7 @@ from studio import service as service_module
 from studio.errors import BusyError, NotFoundError, RenderError, RendererUnavailable, RenderTimeout
 from studio.exports import INTERRUPTED, ConflictError, ManimVideoRunner, VideoJob
 from studio.registry import TemplateError
-from studio.service import StudioService
+from studio.service import ProjectConflict, StudioService
 from studio.storage import png_size, prune_previews, slugify, tree_fingerprint
 from studio.worker import WorkerCrashed, WorkerReplyError, WorkerStartError, WorkerTimeout
 from tests.studio_fakes import STORYBOARD, FakeRunner, FakeWorker, RunnerFactory, make_service, tiny_png, wait_until
@@ -283,6 +283,29 @@ def test_tree_fingerprint_follows_edits(tmp_path):
     assert tree_fingerprint(str(tmp_path)) == before
     (tmp_path / "a.py").write_text("x = 22")
     assert tree_fingerprint(str(tmp_path)) != before
+
+
+# --------------------------------------------------------------------------- #
+# Length
+# --------------------------------------------------------------------------- #
+
+
+def test_estimate_length_runs_a_timing_pass_without_rendering(svc):
+    assert run(svc.estimate_length("countdown", {"seconds": 30}, {"aspect": "9:16"})) == {"length": 12.5}
+    measured = svc.fake.measured[0]
+    assert measured["job"]["mode"] == "video" and measured["job"]["params"]["seconds"] == 30
+    assert (measured["width"], measured["height"]) == (360, 640)
+    assert svc.fake.calls == []  # nothing was drawn
+
+
+def test_estimate_length_keeps_todays_text_when_it_cannot_measure(svc):
+    assert run(svc.estimate_length("no_such_template")) == {"length": None}
+    assert run(svc.estimate_length("countdown", {"seconds": 1}, {"aspect": "2:1"})) == {"length": None}
+    svc.fake.fail = WorkerReplyError("the timeline could not run")
+    assert run(svc.estimate_length("countdown", {"seconds": 30})) == {"length": None}
+    svc.fake.fail = None
+    svc.fake.length = 0
+    assert run(svc.estimate_length("countdown", {"seconds": 30})) == {"length": None}
 
 
 # --------------------------------------------------------------------------- #
@@ -699,6 +722,29 @@ def test_remove_a_finished_export(tmp_path):
     svc.shutdown_sync()
 
 
+def test_forget_removes_only_the_record_and_keeps_the_file(tmp_path):
+    blocker = FakeRunner("block")
+    svc, _ = make_service(tmp_path, runners=RunnerFactory(FakeRunner("ok"), blocker))
+    done = _settled(svc, run(svc.start_export("countdown", {}, {}, quality="draft", title="Forgotten"))["id"])
+    path = os.path.join(svc.exports_dir, done["filename"])
+    manager = svc._export_manager()
+    forgotten = manager.forget(done["id"])
+    assert forgotten["id"] == done["id"] and forgotten["status"] == "done"
+    assert os.path.isfile(path)
+    assert done["id"] not in {record["id"] for record in manager.list()}
+    with pytest.raises(NotFoundError):
+        manager.forget(done["id"])
+    with pytest.raises(NotFoundError):
+        manager.get(done["id"])
+
+    active = run(svc.start_export("countdown", {}, {}, quality="draft"))
+    assert blocker.started.wait(5)
+    with pytest.raises(ConflictError):
+        manager.forget(active["id"])
+    assert run(svc.get_export(active["id"]))["status"] == "rendering"
+    svc.shutdown_sync()
+
+
 def test_manim_runner_arguments_and_failure_message():
     job = VideoJob(job_dir="j", job_file="j/job.json", media_dir="j/media", width=1280, height=720, fps=30,
                    format="webm", transparent=True, timeout=60)
@@ -776,6 +822,66 @@ def test_projects_crud(svc):
     assert not os.path.exists(path)
     with pytest.raises(NotFoundError):
         run(svc.get_project(project["id"]))
+
+
+def test_a_project_revision_starts_at_one_and_each_save_increases_it(svc):
+    project = run(svc.create_project("countdown", {"seconds": 30}))
+    assert project["revision"] == 1
+    first = run(svc.update_project(project["id"], params={"seconds": 45}))
+    assert first["revision"] == 2
+    second = run(svc.update_project(project["id"], base_revision=2, title="Later"))
+    assert second["revision"] == 3 and second["title"] == "Later"
+
+
+def test_a_project_saved_before_revisions_existed_reads_as_revision_one(svc):
+    os.makedirs(svc.projects_dir)
+    old = {"id": "0123456789abcdef", "title": "Older video", "template": "countdown",
+           "params": {"seconds": 20}, "settings": {}, "created": "1", "updated": "1"}
+    with open(os.path.join(svc.projects_dir, "0123456789abcdef.json"), "w", encoding="utf-8") as f:
+        json.dump(old, f)
+    assert run(svc.get_project(old["id"]))["revision"] == 1
+    assert run(svc.update_project(old["id"], params={"seconds": 25}))["revision"] == 2
+
+
+def test_a_save_from_an_older_revision_is_refused_and_changes_nothing(svc):
+    project = run(svc.create_project("countdown", {"seconds": 30}))
+    saved = run(svc.update_project(project["id"], params={"seconds": 45}, title="Kept"))
+    with pytest.raises(ProjectConflict) as info:
+        run(svc.update_project(project["id"], base_revision=1, params={"seconds": 1}, title="Lost"))
+    assert info.value.status == 409
+    assert info.value.project["revision"] == saved["revision"] == 2
+    assert info.value.project["params"] == {"seconds": 45}
+    assert "Read the project again" in str(info.value)
+    stored = run(svc.get_project(project["id"]))
+    assert stored["params"] == {"seconds": 45} and stored["title"] == "Kept" and stored["revision"] == 2
+
+
+@pytest.mark.parametrize("base", [0, -1, "2", 1.5, True])
+def test_an_invalid_base_revision_is_a_plain_field_error(svc, base):
+    project = run(svc.create_project("countdown"))
+    with pytest.raises(TemplateError) as info:
+        run(svc.update_project(project["id"], base_revision=base, params={"seconds": 10}))
+    assert _errors(info).keys() == {"base_revision"}
+    assert run(svc.get_project(project["id"]))["revision"] == 1
+
+
+def test_two_saves_from_the_same_revision_cannot_both_win(svc):
+    project = run(svc.create_project("countdown", {"seconds": 30}))
+
+    def save(seconds):
+        try:
+            return svc.update_project_sync(project["id"], base_revision=1, params={"seconds": seconds})
+        except ProjectConflict as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = [future.result(timeout=10) for future in (pool.submit(save, 40), pool.submit(save, 50))]
+    winners = [result for result in results if isinstance(result, dict)]
+    losers = [result for result in results if isinstance(result, ProjectConflict)]
+    assert len(winners) == 1 and len(losers) == 1
+    assert losers[0].project["params"] == winners[0]["params"]
+    stored = run(svc.get_project(project["id"]))
+    assert stored["revision"] == 2 and stored["params"] == winners[0]["params"]
 
 
 def test_project_validation(svc):

@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { Gallery } from "./Gallery";
+import { FAVOURITE_DESIGNS_KEY } from "./preferences";
 import { CATALOG } from "./test/fixtures";
 import type { Route } from "./router";
 import type { SetupStatus } from "./setup";
@@ -36,6 +37,7 @@ let pause: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.useFakeTimers();
+  localStorage.removeItem(FAVOURITE_DESIGNS_KEY);
   fine = true;
   reduced = false;
   mockSetupStatus = null;
@@ -297,6 +299,47 @@ describe("home setup and chapters", () => {
     expect(screen.getByRole("heading", { name: 'Nothing matches "zebra"' })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Clear search" })).toHaveAttribute("href", "#/templates");
     expect(screen.getByRole("link", { name: "See all templates" })).toHaveAttribute("href", "#/templates");
+  });
+
+  it("hearts a card and shows it in Your favourites on Home", () => {
+    open({ home: true });
+    expect(screen.queryByRole("region", { name: "Your favourites" })).not.toBeInTheDocument();
+    const heart = screen.getByRole("button", { name: "Add Classroom timer to favourites" });
+    expect(heart).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(heart);
+    expect(heart).toHaveAttribute("aria-pressed", "true");
+    expect(JSON.parse(localStorage.getItem(FAVOURITE_DESIGNS_KEY)!)).toEqual(["countdown/classroom-timer"]);
+    const row = screen.getByRole("region", { name: "Your favourites" });
+    expect(within(row).getByRole("link", { name: /Classroom timer/ })).toBeInTheDocument();
+  });
+
+  it("shows Recently used only once two designs were worked on", () => {
+    open({ home: true });
+    expect(screen.queryByRole("region", { name: "Recently used" })).not.toBeInTheDocument();
+
+    cleanup();
+    open({
+      home: true,
+      projects: [
+        { id: "p1", title: "My timer", template: "countdown", updated: 2 },
+        { id: "p2", title: "My chart", template: "chart", updated: 1 },
+      ],
+    });
+    const row = screen.getByRole("region", { name: "Recently used" });
+    expect(within(row).getByRole("link", { name: /Classroom timer/ })).toBeInTheDocument();
+    expect(within(row).getByRole("link", { name: /Sales chart/ })).toBeInTheDocument();
+    expect(within(row).getAllByRole("link")).toHaveLength(2);
+  });
+
+  it("keeps the heart quiet until hover or focus, visible when set, and reachable on touch", () => {
+    const heart = /\.studio-card-favourite \{([\s\S]*?)\n\}/.exec(homeCss)?.[1] ?? "";
+    expect(heart).toContain("opacity: 0");
+    expect(heart).not.toContain("border:");
+    expect(heart).not.toContain("box-shadow:");
+    expect(homeCss).toMatch(/\.studio-card-favourite\[aria-pressed="true"\] \{[^}]*opacity: 1/);
+    expect(homeCss).toMatch(/:is\(:hover, :focus-within\) \.studio-card-favourite \{[^}]*opacity: 1/);
+    expect(homeCss).toMatch(/:is\(\.studio-template-grid, \.studio-home-zigzag\) > li \{ position: relative/);
+    expect(homeCss).toMatch(/@media \(hover: none\), \(any-pointer: coarse\) \{\s*:root\[data-surface="studio"\] \.studio-card-favourite \{ opacity: 1; \}/);
   });
 
   it("lets the hero reach the window edge and settles it inside the column on wide canvases", () => {

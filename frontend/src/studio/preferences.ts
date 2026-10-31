@@ -11,6 +11,8 @@ export interface Preferences {
   template_categories_open?: boolean | null;
   recent_colors?: string[];
   seen_exports?: string[];
+  /** Gallery cards marked with a heart: "template/preset", newest first. */
+  favourite_designs?: string[];
   onboarding_done?: boolean;
   brand_name?: string;
   brand_color?: string | null;
@@ -32,6 +34,7 @@ export const SIDEBAR_KEY = "studio:sidebar-collapsed";
 export const CATEGORIES_KEY = "studio:template-categories-open";
 export const RECENT_COLORS_KEY = "studio.recent-colors";
 export const SEEN_EXPORTS_KEY = "studio:seen-exports";
+export const FAVOURITE_DESIGNS_KEY = "studio:favourite-designs";
 export const ONBOARDING_KEY = "studio:onboarding-done";
 export const BRAND_NAME_KEY = "studio:brand-name";
 export const BRAND_COLOR_KEY = "studio:brand-color";
@@ -45,6 +48,7 @@ export const PREFERENCE_KEYS: PreferenceKey[] = [
   "template_categories_open",
   "recent_colors",
   "seen_exports",
+  "favourite_designs",
   "onboarding_done",
   "brand_name",
   "brand_color",
@@ -132,6 +136,10 @@ function readCache(key: PreferenceKey): unknown {
         const value: unknown = JSON.parse(localStorage.getItem(SEEN_EXPORTS_KEY) ?? "null");
         return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
       }
+      case "favourite_designs": {
+        const value: unknown = JSON.parse(localStorage.getItem(FAVOURITE_DESIGNS_KEY) ?? "null");
+        return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+      }
       case "onboarding_done": {
         const value = localStorage.getItem(ONBOARDING_KEY);
         return value === "true" ? true : value === "false" ? false : undefined;
@@ -172,6 +180,9 @@ function writeCache(key: PreferenceKey, value: unknown) {
         break;
       case "seen_exports":
         localStorage.setItem(SEEN_EXPORTS_KEY, JSON.stringify(value));
+        break;
+      case "favourite_designs":
+        localStorage.setItem(FAVOURITE_DESIGNS_KEY, JSON.stringify(value));
         break;
       case "onboarding_done":
         localStorage.setItem(ONBOARDING_KEY, String(value));
@@ -226,6 +237,9 @@ function sanitize(raw: unknown): Preferences {
   }
   if (Array.isArray(data.seen_exports) && data.seen_exports.every((item) => typeof item === "string")) {
     values.seen_exports = data.seen_exports;
+  }
+  if (Array.isArray(data.favourite_designs) && data.favourite_designs.every((item) => typeof item === "string")) {
+    values.favourite_designs = data.favourite_designs;
   }
   if (typeof data.onboarding_done === "boolean") values.onboarding_done = data.onboarding_done;
   const brandName = normalizeBrandName(data.brand_name);
@@ -337,6 +351,21 @@ export function needsOnboarding(): boolean {
 
 export function setOnboardingDone(value: boolean) {
   writePreference("onboarding_done", value);
+}
+
+/** The gallery cards marked with a heart, newest first. */
+export function readFavouriteDesigns(): string[] {
+  const value = readPreference("favourite_designs");
+  return Array.isArray(value) ? value : [];
+}
+
+/** Add or remove one design ("template/preset"); returns the new list. */
+export function toggleFavouriteDesign(key: string): string[] {
+  const current = readFavouriteDesigns();
+  const next = current.includes(key) ? current.filter((item) => item !== key) : [key, ...current];
+  const capped = next.slice(0, 200);
+  writePreference("favourite_designs", capped);
+  return capped;
 }
 
 export function readBrandName(): string {

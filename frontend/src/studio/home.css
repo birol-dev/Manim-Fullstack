@@ -162,6 +162,34 @@
 :root[data-surface="studio"] .studio-category-pill[aria-current="page"] { background: var(--color-ink); color: var(--color-ink-fg); }
 :root[data-surface="studio"] .studio-templates-page .studio-results-count { margin: 0; }
 
+/* ---- Hearts on gallery cards: quiet, on the artwork, out of the way until needed ---- */
+:root[data-surface="studio"] :is(.studio-template-grid, .studio-home-zigzag) > li { position: relative; }
+:root[data-surface="studio"] .studio-card-favourite {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-fg-muted);
+  opacity: 0;
+  transition: opacity 160ms ease-out, color 160ms ease-out;
+}
+:root[data-surface="studio"] .studio-card-favourite svg { width: 16px; height: 16px; }
+:root[data-surface="studio"] .studio-card-favourite[aria-pressed="true"] { opacity: 1; color: var(--color-danger); }
+:root[data-surface="studio"] :is(.studio-template-grid, .studio-home-zigzag) > li:is(:hover, :focus-within) .studio-card-favourite { opacity: 1; }
+:root[data-surface="studio"] .studio-card-favourite:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+@media (hover: none), (any-pointer: coarse) {
+  :root[data-surface="studio"] .studio-card-favourite { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-surface="studio"] .studio-card-favourite { transition: none; }
+}
+
 /* ---- Your videos ---- */
 :root[data-surface="studio"] .studio-videos-page { display: flex; flex-direction: column; gap: 24px; }
 :root[data-surface="studio"] .studio-videos-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }

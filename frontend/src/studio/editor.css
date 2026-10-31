@@ -24,6 +24,10 @@
 :root[data-surface="studio"] .studio-editor-history button:disabled { opacity: .3; }
 :root[data-surface="studio"] .studio-editor-history svg { width: 15px; height: 15px; }
 :root[data-surface="studio"] .studio-editor-save-error { margin: 0 16px 10px; padding: 10px 16px; border-radius: 12px; background: var(--color-danger-soft); color: var(--color-danger); font-size: 12.5px; line-height: 1.5; }
+/* A save was refused because the project changed elsewhere: quiet, with one way forward. */
+:root[data-surface="studio"] .studio-editor-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 16px 10px; padding: 10px 12px 10px 16px; border-radius: 12px; background: var(--color-raised); color: var(--color-fg-muted); font-size: 12.5px; line-height: 1.5; }
+:root[data-surface="studio"] .studio-editor-conflict > span { flex: 1 1 220px; }
+:root[data-surface="studio"] .studio-editor-conflict > :is(button, a).select-none { flex-shrink: 0; width: auto; }
 
 /* Tabs: one pill track that stays in place while the form scrolls under it. The surface behind
    it keeps the rounded ends from cutting into the form. */

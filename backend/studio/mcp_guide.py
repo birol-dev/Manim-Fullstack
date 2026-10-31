@@ -170,7 +170,9 @@ person watches the project in the app and downloads the exported file at the end
    frame times. Actually inspect the image: clipped text, empty space, the wrong word
    emphasized, text under a platform button.
 8. **Revise with `update_project`.** Call `get_project` first: a supplied `params` or
-   `settings` replaces the whole object, so send the complete object. Preview again.
+   `settings` replaces the whole object, so send the complete object and the `revision` you
+   read as `base_revision`. If it answers 409, someone else saved meanwhile: nothing changed,
+   so read the project again and decide what to keep. Preview again.
 9. **Motion is optional.** `preview(project_id, mode="motion")` queues a 720p preview with
    sound for the first 20 seconds; poll `get_motion`. It costs time, so use it only when
    timing or animation matters.
@@ -719,6 +721,7 @@ Work in this order for each question:
    `correct` (1-based index into `options`), `think_seconds` (6-10 for a class, 3-30
    allowed), `explanation` (why the answer is right, 120 characters at most), and
    `show_letters` true unless the letters confuse the question.
+   To put a whole quiz in one video, add `questions`: up to 11 more questions with those same fields.
 3. Look at the storyboard `quick_video` returns: check that `correct` points at the right
    answer, the options fit and the question is readable. Two answers make it true/false.
 4. `export_project(project_id, format="mp4", quality="1080p")` and poll `get_export`

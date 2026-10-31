@@ -50,6 +50,27 @@ def test_real_motion_is_capped_silent_and_playable(tmp_path):
         svc.shutdown_sync()
 
 
+def _steps(count):
+    return {"kicker": "Monday stand-up", "title": "Today's plan", "style": "numbered",
+            "steps": [{"text": f"Step {index + 1} takes a little while", "detail": "Two minutes",
+                       "time": "09:30"} for index in range(count)]}
+
+
+def test_real_length_measurement_follows_the_steps(tmp_path):
+    """The timing pass reports the true duration of the current params, without drawing frames.
+    The steps design allows 2 to 7 items, so 8 is refused (the caption keeps today's text)."""
+    svc = StudioService(str(tmp_path / "length"))
+    try:
+        two = run(svc.estimate_length("steps", _steps(2), {"aspect": "9:16", "theme": "clean"}))["length"]
+        seven = run(svc.estimate_length("steps", _steps(7), {"aspect": "9:16", "theme": "clean"}))["length"]
+        eight = run(svc.estimate_length("steps", _steps(8), {"aspect": "9:16", "theme": "clean"}))["length"]
+        print(f"steps length: 2 -> {two}, 7 -> {seven}, 8 -> {eight}")
+        assert two and seven and seven > two
+        assert eight is None
+    finally:
+        svc.shutdown_sync()
+
+
 def test_real_previews_and_export(tmp_path):
     svc = StudioService(str(tmp_path / "ws"))
     # Other work may be adding bundled fonts or icons meanwhile; keep cache keys still.

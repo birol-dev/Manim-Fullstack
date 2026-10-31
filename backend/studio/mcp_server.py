@@ -202,11 +202,14 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @server.tool()
     @_tool_errors
     async def update_project(project_id: str, params: dict | None = None, settings: dict | None = None,
-                             title: str | None = None) -> dict:
+                             title: str | None = None, base_revision: int | None = None) -> dict:
         """Revise a saved project. Only supplied fields change, but a supplied params or settings
         object replaces the whole object: call get_project first and send the complete object.
-        Leave title out to keep the current one. Returns the updated project."""
-        fields = {k: v for k, v in {"params": params, "settings": settings, "title": title}.items() if v is not None}
+        Leave title out to keep the current one. Send the revision you read as base_revision: if
+        the project was saved again in the meantime nothing changes and the answer asks you to
+        read it again. Returns the updated project."""
+        fields = {k: v for k, v in {"params": params, "settings": settings, "title": title,
+                                   "base_revision": base_revision}.items() if v is not None}
         return await service.update_project(project_id, **fields)
 
     @server.tool()
@@ -388,6 +391,8 @@ class RestBridge:
             hint = "The Studio service could not be started" if self.host is not None else "Open the app and check --url"
             raise ToolError(f"Could not reach Manim Studio. {hint} ({type(exc).__name__}).") from None
         if response.is_error:
+            if response.status_code == 409 and isinstance(data, dict) and isinstance(data.get("detail"), str):
+                raise ToolError(data["detail"])  # a plain note, e.g. the project changed elsewhere
             raise ToolError(json.dumps(data))
         return data
 

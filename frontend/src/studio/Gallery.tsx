@@ -1,6 +1,6 @@
 /** Library pages inside the persistent Studio shell. */
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { ArrowRight, Check, Clapperboard, LayoutGrid, RotateCw, Video, X } from "lucide-react";
+import { ArrowRight, Check, Clapperboard, Heart, LayoutGrid, RotateCw, Video, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { inputClass, SectionHeading } from "./components";
 import { ExportsPage } from "./exports";
 import { useExports, useNearViewport, usePoster } from "./hooks";
 import { cardSettings, filterCards, timeAgo, toDate } from "./options";
-import { readBrandName } from "./preferences";
+import { readBrandName, readFavouriteDesigns, toggleFavouriteDesign } from "./preferences";
 import { OpenProjectButton } from "./Portable";
 import { dragHasFiles, usePortableOpener } from "./portableFile";
 import { ProjectMenu } from "./ProjectMenu";
@@ -52,12 +52,28 @@ function Poster({ card, template, peek, aspect }: { card: Card; template: Templa
   return <div ref={ref} className="studio-poster-well" style={aspect ? { aspectRatio: ASPECT_RATIO[aspect] } : undefined}><PosterImage response={response} error={error} peek={peek} /></div>;
 }
 
-function CardTile({ card, template, className }: { card: Card; template: TemplateInfo | undefined; className?: string }) {
+const designKey = (card: Card) => `${card.template}/${card.id}`;
+
+function CardTile({ card, template, className, favourite, onFavourite }: {
+  card: Card;
+  template: TemplateInfo | undefined;
+  className?: string;
+  favourite?: boolean;
+  onFavourite?: (card: Card) => void;
+}) {
   const { video, visible, onCanPlay, onError, cardEvents } = useCardPeek(card.peek_url);
   return <li className={className}><a href={routeHash({ kind: "new", template: card.template, preset: card.id })} className="studio-card" {...cardEvents}>
     <Poster card={card} template={template} peek={card.peek_url && <video ref={video} className="studio-card-peek" data-visible={visible} preload="none" muted playsInline aria-hidden="true" tabIndex={-1} onCanPlay={onCanPlay} onError={onError} />} />
     <span className="studio-card-copy"><span className="studio-card-title">{card.title}</span><span className="studio-card-summary">{card.summary}</span></span>
-  </a></li>;
+  </a>
+    {onFavourite && <button
+      type="button"
+      className="studio-card-favourite"
+      aria-pressed={!!favourite}
+      aria-label={favourite ? `Remove ${card.title} from favourites` : `Add ${card.title} to favourites`}
+      onClick={() => onFavourite(card)}
+    ><Heart aria-hidden fill={favourite ? "currentColor" : "none"} /></button>}
+  </li>;
 }
 
 function ProjectTile({ project, library, onDelete }: { project: ProjectSummary; library: Library; onDelete: (project: ProjectSummary) => void }) {
@@ -212,14 +228,68 @@ function SetupTray({ projects, exports }: { projects: ProjectSummary[] | null; e
   </section>;
 }
 
-function Home({ catalog, library, exports }: { catalog: Catalog; library: Library; exports: ReturnType<typeof useExports> }) {
+/** A row of designs in the quiet gallery style: a heading, then cards. */
+function DesignRow({ id, title, cards, templates, favourites, onFavourite }: {
+  id: string;
+  title: string;
+  cards: Card[];
+  templates: Map<string, TemplateInfo>;
+  favourites: Set<string>;
+  onFavourite: (card: Card) => void;
+}) {
+  return <section className="studio-gallery-section" aria-labelledby={id}>
+    <SectionHeading id={id}>{title}</SectionHeading>
+    <ul className="studio-template-grid studio-home-row">
+      {cards.map((card) => <CardTile key={designKey(card)} card={card} template={templates.get(card.template)} favourite={favourites.has(designKey(card))} onFavourite={onFavourite} />)}
+    </ul>
+  </section>;
+}
+
+function Home({ catalog, library, exports, favourites, favouriteSet, onFavourite }: {
+  catalog: Catalog;
+  library: Library;
+  exports: ReturnType<typeof useExports>;
+  favourites: string[];
+  favouriteSet: Set<string>;
+  onFavourite: (card: Card) => void;
+}) {
   const templates = useMemo(() => new Map(catalog.templates.map((template) => [template.id, template])), [catalog.templates]);
   const chapters = catalog.sections.filter((section) => section.cards.length > 0);
   const jobs = Array.isArray(exports?.jobs) ? exports.jobs : null;
+  const designs = useMemo(() => {
+    const byKey = new Map<string, Card>();
+    const firstByTemplate = new Map<string, Card>();
+    for (const section of catalog.sections) for (const card of section.cards) {
+      byKey.set(designKey(card), card);
+      if (!firstByTemplate.has(card.template)) firstByTemplate.set(card.template, card);
+    }
+    return { byKey, firstByTemplate };
+  }, [catalog.sections]);
+  const favouriteCards = favourites.flatMap((key) => {
+    const card = designs.byKey.get(key);
+    return card ? [card] : [];
+  });
+  // One card per design the person worked on lately, newest first.
+  const recentCards = useMemo(() => {
+    const seen = new Set<string>();
+    const picked: Card[] = [];
+    const projects = [...(library.projects ?? [])]
+      .sort((a, b) => (toDate(b.updated)?.getTime() ?? 0) - (toDate(a.updated)?.getTime() ?? 0));
+    for (const project of projects) {
+      const card = designs.firstByTemplate.get(project.template);
+      if (!card || seen.has(project.template)) continue;
+      seen.add(project.template);
+      picked.push(card);
+      if (picked.length === 4) break;
+    }
+    return picked;
+  }, [designs, library.projects]);
   return <div className="studio-home">
     <HomeHero catalog={catalog} />
     <SetupTray projects={library.projects} exports={jobs} />
     <YourVideos library={library} home />
+    {favouriteCards.length > 0 && <DesignRow id="studio-home-favourites" title="Your favourites" cards={favouriteCards} templates={templates} favourites={favouriteSet} onFavourite={onFavourite} />}
+    {recentCards.length >= 2 && <DesignRow id="studio-home-recent-designs" title="Recently used" cards={recentCards} templates={templates} favourites={favouriteSet} onFavourite={onFavourite} />}
     {chapters.length > 0 && <div className="studio-home-chapters">
       {chapters.map((section, index) => <section key={section.id} className="studio-home-chapter" aria-labelledby={`home-section-${section.id}`}>
         <div className="studio-home-chapter-head">
@@ -230,7 +300,7 @@ function Home({ catalog, library, exports }: { catalog: Catalog; library: Librar
           <a className="studio-see-all" href={routeHash({ kind: "templates", category: section.id })}>See all {section.cards.length} <ArrowRight aria-hidden /></a>
         </div>
         <ul className="studio-home-zigzag">
-          {section.cards.slice(0, 4).map((card, cardIndex) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} className={`studio-home-zig-${cardIndex}`} />)}
+          {section.cards.slice(0, 4).map((card, cardIndex) => <CardTile key={designKey(card)} card={card} template={templates.get(card.template)} className={`studio-home-zig-${cardIndex}`} favourite={favouriteSet.has(designKey(card))} onFavourite={onFavourite} />)}
         </ul>
       </section>)}
     </div>}
@@ -326,9 +396,11 @@ interface TemplatesProps {
   library: Library;
   cards: Card[];
   videos: ProjectSummary[];
+  favouriteSet: Set<string>;
+  onFavourite: (card: Card) => void;
 }
 
-function TemplatesPage({ catalog, category, query, templates, library, cards, videos }: TemplatesProps) {
+function TemplatesPage({ catalog, category, query, templates, library, cards, videos, favouriteSet, onFavourite }: TemplatesProps) {
   const summary = query
     ? `${[
       videos.length ? `${videos.length} ${videos.length === 1 ? "video" : "videos"}` : "",
@@ -348,21 +420,26 @@ function TemplatesPage({ catalog, category, query, templates, library, cards, vi
     </section>}
     {cards.length > 0 ? <section className="studio-gallery-section" aria-label="Templates">
       {videos.length > 0 && <SectionHeading>Templates</SectionHeading>}
-      <ul className="studio-template-grid">{cards.map((card) => <CardTile key={`${card.template}/${card.id}`} card={card} template={templates.get(card.template)} />)}</ul>
+      <ul className="studio-template-grid">{cards.map((card) => <CardTile key={designKey(card)} card={card} template={templates.get(card.template)} favourite={favouriteSet.has(designKey(card))} onFavourite={onFavourite} />)}</ul>
     </section> : videos.length === 0 ? <EmptyTemplates query={query} category={category} /> : null}
   </div>;
 }
 
 export function Gallery({ catalog, route, library, exports }: { catalog: Catalog; route: Route; library: Library; exports: ReturnType<typeof useExports> }) {
   const templates = useMemo(() => new Map(catalog.templates.map((template) => [template.id, template])), [catalog.templates]);
+  const [favourites, setFavourites] = useState<string[]>(readFavouriteDesigns);
+  const favouriteSet = useMemo(() => new Set(favourites), [favourites]);
+  const changeFavourite = (card: Card) => setFavourites(toggleFavouriteDesign(designKey(card)));
   if (route.kind === "videos") return <YourVideos library={library} />;
   if (route.kind === "exports") return <ExportsPage exports={exports} />;
-  if (route.kind === "gallery") return <Home catalog={catalog} library={library} exports={exports} />;
+  if (route.kind === "gallery") {
+    return <Home catalog={catalog} library={library} exports={exports} favourites={favourites} favouriteSet={favouriteSet} onFavourite={changeFavourite} />;
+  }
   const category = route.kind === "templates" ? route.category : undefined;
   const query = route.kind === "templates" ? route.query ?? "" : "";
   const cards = filterCards(catalog.sections.filter((section) => !category || section.id === category).flatMap((section) => section.cards), query, templates);
   const videos = query ? (library.projects ?? []).filter((project) => matchesVideo(project, query)) : [];
-  return <TemplatesPage catalog={catalog} category={category} query={query} templates={templates} library={library} cards={cards} videos={videos} />;
+  return <TemplatesPage catalog={catalog} category={category} query={query} templates={templates} library={library} cards={cards} videos={videos} favouriteSet={favouriteSet} onFavourite={changeFavourite} />;
 }
 
 function CardSkeleton() {

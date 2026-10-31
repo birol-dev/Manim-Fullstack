@@ -12,6 +12,14 @@ export class EditorHistory<T> {
   get canUndo() { return this.past.length > 0; }
   get canRedo() { return this.future.length > 0; }
   boundary() { this.group = null; }
+  /** Start again from a freshly loaded copy: earlier edits are no longer undoable. */
+  reset(next: T) {
+    this.current = next;
+    this.past = [];
+    this.future = [];
+    this.group = null;
+    this.time = 0;
+  }
   change(next: T, group: unknown = null, now = Date.now()) {
     if (stableKey(next) === stableKey(this.current)) return false;
     if (!group || group !== this.group || now - this.time >= 600 || this.future.length) {

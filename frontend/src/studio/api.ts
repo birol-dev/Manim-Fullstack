@@ -10,6 +10,7 @@ import type {
   ExportFormat,
   ExportJob,
   ExportQuality,
+  LengthEstimate,
   Params,
   PreviewRequest,
   PreviewResponse,
@@ -92,6 +93,16 @@ export const updatePreferences = (patch: Partial<Preferences>) => requestJson<Pr
 
 export function requestPreview(request: PreviewRequest, signal?: AbortSignal): Promise<PreviewResponse> {
   return requestJson<PreviewResponse>("/api/studio/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+    signal,
+  });
+}
+
+/** The real duration for these params, measured without rendering (null when unavailable). */
+export function estimateLength(request: Omit<PreviewRequest, "mode">, signal?: AbortSignal): Promise<LengthEstimate> {
+  return requestJson<LengthEstimate>("/api/studio/length", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(request),
@@ -222,6 +233,8 @@ export interface ProjectDraft {
   template: string;
   params: Params;
   settings: Partial<RenderSettings>;
+  /** The revision this edit started from; a newer saved copy answers 409 instead of being replaced. */
+  base_revision?: number;
 }
 
 export const createProject = (body: ProjectDraft, keepalive = false) => requestJson<Project>("/api/studio/projects", {

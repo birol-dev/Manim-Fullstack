@@ -8,6 +8,7 @@ import { readRecentColors, RECENT_COLORS_KEY, rememberColor } from "./color";
 import {
   BRAND_COLOR_KEY,
   BRAND_KIT_KEY,
+  FAVOURITE_DESIGNS_KEY,
   flushPreferences,
   loadPreferences,
   needsOnboarding,
@@ -17,6 +18,7 @@ import {
   readBrandName,
   readDefaultFormat,
   readDefaultTheme,
+  readFavouriteDesigns,
   readOnboardingDone,
   readPreference,
   resetPreferencesForTests,
@@ -26,6 +28,7 @@ import {
   setDefaultFormat,
   setDefaultTheme,
   setOnboardingDone,
+  toggleFavouriteDesign,
 } from "./preferences";
 import StudioApp from "./StudioApp";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
@@ -50,6 +53,18 @@ function servePreferences(body: unknown) {
 }
 
 describe("workspace preferences", () => {
+  it("restores favourites from the workspace and persists heart changes", async () => {
+    servePreferences({ favourite_designs: ["countdown/classroom-timer"] });
+    await loadPreferences(500);
+    expect(readFavouriteDesigns()).toEqual(["countdown/classroom-timer"]);
+    expect(JSON.parse(localStorage.getItem(FAVOURITE_DESIGNS_KEY)!)).toEqual(["countdown/classroom-timer"]);
+    toggleFavouriteDesign("chart/sales");
+    toggleFavouriteDesign("countdown/classroom-timer");
+    await flushPreferences();
+    expect(readFavouriteDesigns()).toEqual(["chart/sales"]);
+    expect(studio.calls.filter((call) => call.method === "PATCH").at(-1)?.body).toEqual({ favourite_designs: ["chart/sales"] });
+  });
+
   it("prefers the server value once loaded and keeps the cache for absent keys", async () => {
     localStorage.setItem(APPEARANCE_KEY, "dark");
     localStorage.setItem(SIDEBAR_KEY, "true");

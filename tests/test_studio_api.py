@@ -257,6 +257,39 @@ def test_projects_crud(api):
     assert api.post("/api/studio/projects", json={"template": "nope"}).status_code == 422
 
 
+def test_a_save_from_an_older_revision_answers_409_with_the_current_project(api, studio):
+    project = api.post("/api/studio/projects", json={"template": "countdown", "params": {"seconds": 30},
+                                                     "title": "Mine"}).json()
+    assert project["revision"] == 1
+    saved = api.put(f"/api/studio/projects/{project['id']}",
+                    json={"base_revision": 1, "params": {"seconds": 45}})
+    assert saved.status_code == 200 and saved.json()["revision"] == 2
+
+    stale = api.put(f"/api/studio/projects/{project['id']}",
+                    json={"base_revision": 1, "params": {"seconds": 1}, "title": "Lost"})
+    assert stale.status_code == 409
+    body = stale.json()
+    assert body["detail"] == "This video was changed somewhere else. Read the project again before you edit it."
+    assert body["project"]["revision"] == 2 and body["project"]["params"] == {"seconds": 45}
+    kept = api.get(f"/api/studio/projects/{project['id']}").json()
+    assert kept["params"] == {"seconds": 45} and kept["title"] == "Mine" and kept["revision"] == 2
+
+    bad = api.put(f"/api/studio/projects/{project['id']}", json={"base_revision": "1"})
+    assert bad.status_code == 422 and bad.json()["errors"][0]["field"] == "base_revision"
+
+
+def test_length_route_measures_without_rendering(api, studio):
+    res = api.post("/api/studio/length", json={"template": "countdown", "params": {"seconds": 30},
+                                               "settings": {"aspect": "9:16"}})
+    assert res.status_code == 200 and res.json() == {"length": 12.5}
+    assert (studio.fake.measured[0]["width"], studio.fake.measured[0]["height"]) == (360, 640)
+    assert studio.fake.calls == []
+    invalid = api.post("/api/studio/length", json={"template": "countdown", "params": {"seconds": 1},
+                                                   "settings": {"aspect": "2:1"}})
+    assert invalid.status_code == 200 and invalid.json() == {"length": None}
+    assert api.post("/api/studio/length", json={"template": "countdown", "nope": 1}).status_code == 422
+
+
 def test_duplicate_a_project(api):
     project = api.post("/api/studio/projects", json={"template": "countdown", "params": {"seconds": 3},
                                                      "title": "Mine"}).json()

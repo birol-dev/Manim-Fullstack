@@ -95,6 +95,14 @@ def _field_error(field: str, message: str, summary: Optional[str] = None) -> Tem
     return TemplateError(summary or message, [{"field": field, "message": message}])
 
 
+class ProjectConflict(ConflictError):
+    """A save started from an older revision than the one on disk."""
+
+    def __init__(self, message: str, project: dict):
+        super().__init__(message)
+        self.project = project
+
+
 class StudioService:
     def __init__(self, workspace_dir: Optional[str] = None, media_dir: Optional[str] = None,
                  assets_dir: Optional[str] = None, **options):
@@ -464,6 +472,27 @@ class StudioService:
         except OSError as exc:
             raise RendererUnavailable(f"The preview worker could not start ({exc.strerror or exc}).") from None
 
+    def estimate_length_sync(self, template, params=None, settings=None) -> dict:
+        """The seconds this input will render, measured without drawing any frames (``{"length": None}``
+        when the input can't be used or the worker is unavailable)."""
+        try:
+            spec, params, settings, render_settings = self._validate(template, params, settings)
+            width, height = pixel_size(render_settings.aspect, 360)
+            worker = self._get_worker()
+            reply = worker.measure({"template": spec.id, "params": params, "settings": settings,
+                                    "assets_dir": self.assets_dir, "mode": "video"}, width, height)
+        except (TemplateError, StudioError, OSError, WorkerReplyError, WorkerTimeout, WorkerCrashed,
+                WorkerStartError):
+            return {"length": None}
+        length = reply.get("length") if isinstance(reply, dict) else None
+        if isinstance(length, bool) or not isinstance(length, (int, float)) or length <= 0:
+            return {"length": None}
+        return {"length": round(float(length), 2)}
+
+    async def estimate_length(self, template, params=None, settings=None) -> dict:
+        """The caption's real duration for these params: measured by the warm worker, nothing rendered."""
+        return await asyncio.to_thread(self.estimate_length_sync, template, params, settings)
+
     def _render_into_cache(self, spec, params, settings, mode, width, height, key) -> None:
         os.makedirs(self.previews_dir, exist_ok=True)
         stem = os.path.join(self.previews_dir, f"{TEMP_MARK}{key}-{secrets.token_hex(4)}")
@@ -645,19 +674,7 @@ class StudioService:
         manager = self._export_manager()
         if delete_file:
             return await asyncio.to_thread(manager.remove, export_id)
-        return await asyncio.to_thread(self._forget_export_record, export_id)
-
-    def _forget_export_record(self, export_id: str) -> dict:
-        """Take a finished export out of the history and leave its file in the exports folder."""
-        manager = self._export_manager()
-        record = manager.get(export_id)
-        with manager._lock:
-            stored = manager._get_locked(export_id)
-            if stored.get("status") in ACTIVE:
-                raise ConflictError("This export is still running; cancel it first.")
-            stored["filename"] = None  # the manager unlinks only the file a record names
-        manager.remove(export_id)
-        return record
+        return await asyncio.to_thread(manager.forget, export_id)
 
     async def retry_export(self, export_id: str) -> dict:
         """Queue a new export from the request saved on a finished record."""
@@ -928,6 +945,9 @@ class StudioService:
             raise StudioError(f"The project file can't be read ({exc}).") from None
         if not isinstance(project, dict):
             raise StudioError("The project file is damaged.")
+        revision = project.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            project["revision"] = 1  # projects saved before revisions existed
         return project
 
     def _encode_project(self, project: dict) -> bytes:
@@ -957,7 +977,7 @@ class StudioService:
         params = self._canonical_params(spec.id, params)
         now = utc_now()
         project = {"id": "", "title": self._title(title, spec.meta.title), "template": spec.id,
-                   "params": params, "settings": settings, "created": now, "updated": now}
+                   "params": params, "settings": settings, "revision": 1, "created": now, "updated": now}
         os.makedirs(self.projects_dir, exist_ok=True)
         for _attempt in range(5):
             project["id"] = secrets.token_hex(8)
@@ -970,23 +990,36 @@ class StudioService:
                 continue
         raise StudioError("Could not pick a project id.")  # pragma: no cover
 
-    def update_project_sync(self, project_id, *, title=_UNSET, params=_UNSET, settings=_UNSET) -> dict:
+    def update_project_sync(self, project_id, *, title=_UNSET, params=_UNSET, settings=_UNSET,
+                            base_revision=None) -> dict:
+        if base_revision is not None and (isinstance(base_revision, bool) or not isinstance(base_revision, int)
+                                          or base_revision < 1):
+            raise _field_error("base_revision", "Use the revision number you read from the project.")
         path = self._project_path(project_id)
+        stale = None
         with file_ops.locked(path):
             project = self._read_project(path)
-            if title is not _UNSET:
-                default = None
-                try:
-                    default = registry.get_template(project.get("template")).meta.title
-                except Exception:  # noqa: BLE001 - the template may be gone
-                    pass
-                project["title"] = self._title(title, default or project.get("title") or "Untitled")
-            if params is not _UNSET:
-                project["params"] = self._canonical_params(project.get("template"), self._object("params", params))
-            if settings is not _UNSET:
-                project["settings"] = self._object("settings", settings)
-            project["updated"] = utc_now()
-            file_ops.atomic_write(path, self._encode_project(project))
+            revision = project["revision"]
+            if base_revision is not None and revision > base_revision:
+                stale = project  # changed elsewhere since this copy was read
+            else:
+                if title is not _UNSET:
+                    default = None
+                    try:
+                        default = registry.get_template(project.get("template")).meta.title
+                    except Exception:  # noqa: BLE001 - the template may be gone
+                        pass
+                    project["title"] = self._title(title, default or project.get("title") or "Untitled")
+                if params is not _UNSET:
+                    project["params"] = self._canonical_params(project.get("template"), self._object("params", params))
+                if settings is not _UNSET:
+                    project["settings"] = self._object("settings", settings)
+                project["revision"] = revision + 1
+                project["updated"] = utc_now()
+                file_ops.atomic_write(path, self._encode_project(project))
+        if stale is not None:
+            raise ProjectConflict("This video was changed somewhere else. Read the project again before you edit it.",
+                                  self._with_poster(stale))
         return self._with_poster(project)
 
     def delete_project_sync(self, project_id) -> dict:
@@ -1030,10 +1063,16 @@ class StudioService:
     async def create_project(self, template, params=None, settings=None, title=None) -> dict:
         return await asyncio.to_thread(self.create_project_sync, template, params, settings, title)
 
-    async def update_project(self, project_id: str, *, title=_UNSET, params=_UNSET, settings=_UNSET) -> dict:
-        """Replace the given fields (omitted ones stay); ``title=None`` resets it to the template's title."""
+    async def update_project(self, project_id: str, *, title=_UNSET, params=_UNSET, settings=_UNSET,
+                             base_revision=None) -> dict:
+        """Replace the given fields (omitted ones stay); ``title=None`` resets it to the template's title.
+
+        *base_revision* is the revision the caller started from: a newer file on disk answers 409
+        with the current project instead of overwriting it.
+        """
         return await asyncio.to_thread(
-            lambda: self.update_project_sync(project_id, title=title, params=params, settings=settings))
+            lambda: self.update_project_sync(project_id, title=title, params=params, settings=settings,
+                                             base_revision=base_revision))
 
     async def delete_project(self, project_id: str) -> dict:
         return await asyncio.to_thread(self.delete_project_sync, project_id)

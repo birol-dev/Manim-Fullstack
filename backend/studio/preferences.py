@@ -23,9 +23,11 @@ APPEARANCES = ("light", "dark", "system")
 MAX_BYTES = 64 * 1024
 MAX_RECENT_COLORS = 12
 MAX_SEEN_EXPORTS = 200
+MAX_FAVOURITE_DESIGNS = 200
 MAX_EXPORT_ID = 64
 _HEX = re.compile(r"^#?[0-9a-fA-F]{6}$")
 _EXPORT_ID = re.compile(r"^[A-Za-z0-9_-]{1,%d}$" % MAX_EXPORT_ID)
+_DESIGN_KEY = re.compile(r"^[a-z0-9_]+/[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def _error(field: str, message: str) -> TemplateError:
@@ -150,6 +152,21 @@ def _seen(value):
     return seen
 
 
+def _favourites(value):
+    """Design cards marked with a heart: template id / preset id, newest first, no duplicates."""
+    if not isinstance(value, list):
+        raise _error("favourite_designs", "Use a list of designs.")
+    if len(value) > MAX_FAVOURITE_DESIGNS:
+        raise _error("favourite_designs", f"Use at most {MAX_FAVOURITE_DESIGNS} designs.")
+    keys = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not _DESIGN_KEY.match(item):
+            raise _error(f"favourite_designs.{index}", "Use a design from this gallery.")
+        if item not in keys:
+            keys.append(item)
+    return keys
+
+
 # Known keys and how to check them. New preferences are one entry here (and one
 # in the frontend's Preferences type); old files keep working.
 SCHEMA = {
@@ -158,6 +175,7 @@ SCHEMA = {
     "template_categories_open": _categories,
     "recent_colors": _colors,
     "seen_exports": _seen,
+    "favourite_designs": _favourites,
     "onboarding_done": _boolean("onboarding_done"),
     "brand_name": _brand_name,
     "brand_color": _optional_hex("brand_color"),

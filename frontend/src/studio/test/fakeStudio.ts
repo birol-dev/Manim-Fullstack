@@ -58,9 +58,10 @@ export function installFakeStudio(): FakeStudio {
       previewCount += 1;
       return reply(200, { url: `/media/studio/previews/${previewCount}.png`, mode: body.mode, width: 640, height: 360, cached: false, ms: 5 });
     }
+    if (path === "/api/studio/length") return reply(200, { length: null });
     if (path === "/api/studio/projects" && method === "GET") return reply(200, studio.projects);
     if (path === "/api/studio/projects" && method === "POST") {
-      const project: Project = { id: `p${studio.projects.length + 1}`, created: 1, updated: 1, title: "", ...body };
+      const project: Project = { id: `p${studio.projects.length + 1}`, created: 1, updated: 1, revision: 1, title: "", ...body };
       studio.projects.push(project);
       return reply(201, project);
     }
@@ -68,7 +69,13 @@ export function installFakeStudio(): FakeStudio {
     if (projectMatch) {
       const project = studio.projects.find((item) => item.id === decodeURIComponent(projectMatch[1]));
       if (!project) return reply(404, { detail: "Project not found." });
-      if (method === "PUT") Object.assign(project, body, { updated: Number(project.updated) + 1 });
+      if (method === "PUT") {
+        const { base_revision: base, ...fields } = body as { base_revision?: number };
+        if (typeof base === "number" && (project.revision ?? 1) > base) {
+          return reply(409, { detail: "This video was changed somewhere else. Read the project again before you edit it.", project });
+        }
+        Object.assign(project, fields, { updated: Number(project.updated) + 1, revision: (project.revision ?? 1) + 1 });
+      }
       if (method === "DELETE") studio.projects.splice(studio.projects.indexOf(project), 1);
       return reply(200, project);
     }

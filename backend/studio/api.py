@@ -47,7 +47,11 @@ def _errors(fn):
         except TemplateError as exc:
             return JSONResponse({"detail": str(exc), "errors": exc.errors}, status_code=422)
         except StudioError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+            body = {"detail": str(exc)}
+            project = getattr(exc, "project", None)  # a stale save answers with the current project
+            if project is not None:
+                body["project"] = project
+            return JSONResponse(body, status_code=exc.status)
 
     return wrapper
 
@@ -333,6 +337,14 @@ async def post_preview(request: Request):
     return result
 
 
+@router.post("/length")
+@_errors
+async def post_length(request: Request):
+    """The real duration for these params, measured without rendering (null when unavailable)."""
+    body = await _body(request, ("template", "params", "settings"))
+    return await get_service().estimate_length(body.get("template"), body.get("params"), body.get("settings"))
+
+
 @router.post("/exports", status_code=202)
 @_errors
 async def post_export(request: Request):
@@ -444,7 +456,7 @@ async def get_project(project_id: str):
 @router.put("/projects/{project_id}")
 @_errors
 async def put_project(project_id: str, request: Request):
-    body = await _body(request, ("title", "params", "settings"))
+    body = await _body(request, ("title", "params", "settings", "base_revision"))
     return await get_service().update_project(project_id, **body)
 
 

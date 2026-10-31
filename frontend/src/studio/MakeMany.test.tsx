@@ -167,7 +167,7 @@ it("opens a saved project's own words and look", async () => {
   const studio = installFakeStudio();
   studio.projects = [{
     id: "p1", title: "Maths timer", template: "countdown",
-    params: { seconds: 9, title: "Maths", style: "ring" }, settings: { theme: "pop" }, created: 1, updated: 1,
+    params: { seconds: 9, title: "Maths", style: "ring" }, settings: { theme: "pop" }, revision: 1, created: 1, updated: 1,
   }];
   render(<MakeManyPage catalog={CATALOG} route={{ kind: "many-project", id: "p1" }} />);
   expect(await screen.findByRole("heading", { name: /Where's your list/ })).toBeInTheDocument();
@@ -181,7 +181,7 @@ it("opens the list maker from the editor's Make many button", async () => {
   const studio = installFakeStudio();
   studio.projects = [{
     id: "p1", title: "Maths timer", template: "countdown",
-    params: { seconds: 9, title: "Maths", style: "ring" }, settings: { theme: "pop" }, created: 1, updated: 1,
+    params: { seconds: 9, title: "Maths", style: "ring" }, settings: { theme: "pop" }, revision: 1, created: 1, updated: 1,
   }];
   render(<TooltipProvider><EditorPage catalog={CATALOG} route={{ kind: "project", id: "p1" }} onProjectCreated={vi.fn()} /></TooltipProvider>);
   expect(await screen.findByDisplayValue("Maths timer")).toBeInTheDocument();

@@ -4,7 +4,7 @@ import { Autosaver, type SaveStatus, type Snapshot } from "./autosave";
 import type { Project } from "./types";
 
 const snap = (title: string): Snapshot => ({ title, template: "countdown", params: { title }, settings: { aspect: "16:9" } });
-const project = (id: string): Project => ({ id, title: "", template: "countdown", params: {}, settings: {}, created: 0, updated: 0 });
+const project = (id: string): Project => ({ id, title: "", template: "countdown", params: {}, settings: {}, revision: 1, created: 0, updated: 0 });
 const flush = async () => {
   for (let i = 0; i < 5; i += 1) await Promise.resolve();
 };
@@ -72,6 +72,34 @@ describe("Autosaver", () => {
     expect(statuses.at(-1)).toBe("saved");
   });
 
+  it("stops for good when the project changed elsewhere and resumes from a fresh copy", async () => {
+    const conflict = new Error("409");
+    const update = vi.fn().mockRejectedValueOnce(conflict).mockResolvedValue({});
+    const onConflict = vi.fn(() => true);
+    const statuses: SaveStatus[] = [];
+    const saver = new Autosaver({ projectId: "p3", create: vi.fn(), update, onCreated: () => {}, onStatus: (status) => statuses.push(status), onConflict });
+    saver.change(snap("mine"));
+    vi.advanceTimersByTime(800);
+    await flush();
+    expect(onConflict).toHaveBeenCalledWith(conflict);
+    expect(statuses.at(-1)).toBe("idle");
+    expect(saver.dirty).toBe(true);
+
+    saver.change(snap("still mine"));
+    vi.advanceTimersByTime(5000);
+    await flush();
+    expect(update).toHaveBeenCalledTimes(1); // no retry, no overwrite
+
+    saver.resume();
+    expect(saver.dirty).toBe(false);
+    saver.change(snap("after loading"));
+    vi.advanceTimersByTime(800);
+    await flush();
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenLastCalledWith("p3", snap("after loading"), false);
+    expect(statuses.at(-1)).toBe("saved");
+  });
+
   it("flushes on leave, with keepalive when asked", async () => {
     const update = vi.fn(async () => ({}));
     const saver = new Autosaver({ projectId: "p4", create: vi.fn(), update, onCreated: () => {}, onStatus: () => {} });
@@ -124,6 +152,22 @@ describe("Autosaver", () => {
     await flush();
     expect(create).toHaveBeenCalledWith(snap("new"), true);
     expect(onCreated).not.toHaveBeenCalled();
+    expect(saver.dirty).toBe(false);
+  });
+
+  it("finishes edits queued behind an in-flight save when the editor closes", async () => {
+    let finish = () => {};
+    const update = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; })).mockResolvedValue({});
+    const saver = new Autosaver({ projectId: "p4", create: vi.fn(), update, onCreated: () => {}, onStatus: () => {} });
+    saver.change(snap("first"));
+    saver.flush();
+    saver.change(snap("last"));
+    saver.flush(true);
+    saver.dispose();
+    finish();
+    await flush();
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenLastCalledWith("p4", snap("last"), true);
     expect(saver.dirty).toBe(false);
   });
 });
