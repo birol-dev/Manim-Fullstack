@@ -9,9 +9,13 @@ import os
 from pathlib import Path
 import socket
 import sys
+import threading
 
 
 DEFAULT_PORT = 47817
+
+# The launcher reads this exit as an expected shutdown, not a crash.
+SHUTDOWN_EXIT_CODE = 3
 
 
 def bind_socket(port_file: Path) -> socket.socket:
@@ -68,9 +72,11 @@ def main():
     os.environ["MANIM_ALLOWED_ORIGINS"] = origin
     os.environ["MANIM_DEV_ORIGIN_PORTS"] = ""  # no unrelated development origins
     os.environ["MANIM_ALLOW_LAN"] = "0"
+    shutdown_requested = False
 
     class Gateway:
         async def __call__(self, scope, receive, send):
+            nonlocal shutdown_requested
             if scope["type"] == "http" and scope["path"].startswith("/__desktop__/"):
                 headers = dict(scope["headers"])
                 peer = scope.get("client")
@@ -83,6 +89,7 @@ def main():
                 if allowed and (path, method) == ("/__desktop__/ping", "GET"):
                     status, body = 200, json.dumps({"instance": instance, "pid": os.getpid()}).encode()
                 elif allowed and (path, method) == ("/__desktop__/shutdown", "POST"):
+                    shutdown_requested = True
                     server.should_exit = True
                     status, body = 200, b'{"stopping":true}'
                 elif allowed:
@@ -103,22 +110,31 @@ def main():
                                           access_log=False, log_level="warning",
                                           timeout_graceful_shutdown=6))
 
-    async def watch_parent():
+    def watch_parent():
         # The parent keeps this pipe open for the entire session. EOF also covers crashes.
-        await asyncio.to_thread(sys.stdin.buffer.read)
-        server.should_exit = True
+        # A daemon thread reading the raw descriptor, so a shutdown asked for over HTTP can
+        # end the process while this read is still blocked, without the buffered-reader lock
+        # that crashes Python's interpreter shutdown.
+        def read_until_closed():
+            try:
+                while os.read(sys.stdin.fileno(), 1):
+                    pass
+            except (OSError, ValueError):
+                pass
+            server.should_exit = True
+
+        threading.Thread(target=read_until_closed, name="desktop-parent-watch",
+                         daemon=True).start()
 
     async def serve():
-        watcher = asyncio.create_task(watch_parent())
+        watch_parent()
         try:
             await server.serve(sockets=[sock])
         finally:
-            watcher.cancel()
             sock.close()
 
-    # uvicorn's loop helper may wait for an executor thread; parent closes stdin on stop.
     asyncio.run(serve())
-    return 0
+    return SHUTDOWN_EXIT_CODE if shutdown_requested else 0
 
 
 if __name__ == "__main__":
