@@ -169,6 +169,7 @@ def star_row(count: int, radius: float, gap: float, gold: str, empty: str) -> VG
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "top-right"
 
     def build(self):
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion

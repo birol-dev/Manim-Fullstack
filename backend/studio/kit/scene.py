@@ -15,10 +15,11 @@ Preview modes, set by the job:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 
-from manim import FadeOut, Scene, config
+from manim import FadeIn, FadeOut, Scene, config
 from manim.utils.exceptions import EndSceneEarlyException
 from manim.utils.family import extract_mobject_family_members
 from manim.utils.iterables import list_update
@@ -31,6 +32,12 @@ from .motion import Motion
 from .fx import ClearanceCamera
 
 MAX_STORYBOARD_FRAMES = 12
+LOGO_REGIONS = ("top-left", "top-right", "bottom-left", "bottom-right")
+LOGO_HEIGHT = 7  # percent of the frame's short side
+LOGO_MAX_WIDTH = 0.42  # share of the safe area, so an unusually wide logo stays in its corner
+LOGO_Z = 20  # above template surfaces and text (templates use up to 10)
+
+logger = logging.getLogger(__name__)
 
 
 class Theme:
@@ -63,6 +70,8 @@ class Theme:
 class StudioScene(Scene):
     Params = None  # the template's Params model; set by each template's scene.py
     META = None  # the template's TemplateMeta
+    # Where the brand kit's logo goes. Templates pick a corner that stays clear of their content.
+    logo_region = "bottom-right"
 
     def __init__(self, renderer=None, camera_class=ClearanceCamera, **kwargs):
         super().__init__(renderer=renderer, camera_class=camera_class, **kwargs)
@@ -90,6 +99,10 @@ class StudioScene(Scene):
         self.bg = self._background()
         if self.bg is not None:
             self.add(self.bg)
+        self.brand_logo = self._brand_logo()
+        if self.brand_logo is not None:
+            self.add(self.brand_logo)
+        self._brand_logo_in = False
 
     def _background(self):
         bg = self.s.background
@@ -101,6 +114,38 @@ class StudioScene(Scene):
         if bg.kind == "gradient":
             return shapes.full_frame(width, height, bg.color or self.theme.bg, bg.color2 or self.theme.bg2)
         return shapes.full_frame(width, height, self.theme.bg)
+
+    def _brand_logo(self):
+        """The brand kit's logo in this template's corner, or None (missing uploads never fail a render)."""
+        name = getattr(self.s.brand, "logo", None)
+        if not name:
+            return None
+        try:
+            path = self.asset(name)
+            if path is None:
+                logger.warning("Brand logo %r is missing; skipping it.", name)
+                return None
+            height = LOGO_HEIGHT * self.layout.unit
+            if path.lower().endswith(".svg"):
+                logo = media.svg_logo(path, height=height)
+            else:
+                logo = media.image(path, height=height, max_px=900)
+            if logo.width <= 0 or logo.height <= 0:
+                raise ValueError("the image is empty")
+            limit = self.layout.safe.width * LOGO_MAX_WIDTH
+            if logo.width > limit:
+                logo.scale(limit / logo.width)
+        except Exception as exc:  # noqa: BLE001 - a bad upload must never fail the render
+            logger.warning("Brand logo %r could not be read (%s); skipping it.", name, exc)
+            return None
+        region = self.logo_region if self.logo_region in LOGO_REGIONS else "bottom-right"
+        pad, safe = self.layout.unit * 2, self.layout.safe
+        x = safe.left + pad + logo.width / 2 if region.endswith("left") else \
+            safe.right - pad - logo.width / 2
+        y = safe.top - pad - logo.height / 2 if region.startswith("top") else \
+            safe.bottom + pad + logo.height / 2
+        logo.move_to([x, y, 0]).set_z_index(LOGO_Z)
+        return logo
 
     # -- helpers for templates -------------------------------------------------
     def asset(self, name):
@@ -176,6 +221,10 @@ class StudioScene(Scene):
             self.wait(0.15)
 
     def play(self, *args, **kwargs):
+        logo = getattr(self, "brand_logo", None)
+        if logo is not None and not self._brand_logo_in:
+            self._brand_logo_in = True
+            args = (*args, FadeIn(logo, run_time=self.motion.t(0.5)))
         if self.mode == "motion" and not self.is_peek and self.elapsed >= self.job["max_duration"] - 1e-6:
             raise EndSceneEarlyException()
         super().play(*args, **kwargs)

@@ -167,6 +167,10 @@
   justify-content: flex-start;
 }
 
+:root[data-surface="studio"] .studio-settings-form > .studio-settings-hint {
+  margin-top: 20px;
+}
+
 :root[data-surface="studio"] .studio-settings-save-row {
   display: flex;
   align-items: center;

@@ -6,11 +6,14 @@ import { resetCatalogCache } from "./api";
 import { APPEARANCE_KEY, CATEGORIES_KEY, readAppearance, readCategoriesOpen, readCollapsed, setAppearance, setCollapsed, SIDEBAR_KEY } from "./appearance";
 import { readRecentColors, RECENT_COLORS_KEY, rememberColor } from "./color";
 import {
+  BRAND_COLOR_KEY,
+  BRAND_KIT_KEY,
   flushPreferences,
   loadPreferences,
   needsOnboarding,
   PREFERENCE_FLUSH_MS,
   readBrandColor,
+  readBrandKit,
   readBrandName,
   readDefaultFormat,
   readDefaultTheme,
@@ -18,6 +21,7 @@ import {
   readPreference,
   resetPreferencesForTests,
   setBrandColor,
+  setBrandKit,
   setBrandName,
   setDefaultFormat,
   setDefaultTheme,
@@ -141,6 +145,7 @@ describe("workspace preferences", () => {
       onboarding_done: false,
       brand_name: "  Server Brand  ",
       brand_color: "#00ff00",
+      brand_kit: { accent: "#0000ff", logo: "server.svg" },
       default_format: "mp4",
       default_theme: "clean",
     });
@@ -148,17 +153,21 @@ describe("workspace preferences", () => {
     expect(readOnboardingDone()).toBe(false);
     expect(readBrandName()).toBe("Server Brand");
     expect(readBrandColor()).toBe("#00FF00");
+    expect(readBrandKit()).toEqual({ accent: "#0000FF", logo: "server.svg" });
     expect(readDefaultFormat()).toBe("mp4");
     expect(readDefaultTheme()).toBe("clean");
 
     setOnboardingDone(true);
     setBrandName("Acme Studio");
     setBrandColor("#ff3366");
+    const kit = { accent: "#12ab34", accent2: null, font: "JetBrains Mono", logo: "brand.svg" };
+    setBrandKit(kit);
     setDefaultFormat("gif");
     setDefaultTheme("midnight");
     expect(readOnboardingDone()).toBe(true);
     expect(readBrandName()).toBe("Acme Studio");
     expect(readBrandColor()).toBe("#FF3366");
+    expect(readBrandKit()).toEqual({ accent: "#12AB34", accent2: null, font: "JetBrains Mono", logo: "brand.svg" });
     expect(readDefaultFormat()).toBe("gif");
     expect(readDefaultTheme()).toBe("midnight");
 
@@ -171,9 +180,24 @@ describe("workspace preferences", () => {
       onboarding_done: true,
       brand_name: "x".repeat(80),
       brand_color: "#FF3366",
+      brand_kit: { accent: "#12AB34", accent2: null, font: "JetBrains Mono", logo: "brand.svg" },
       default_format: "gif",
       default_theme: "midnight",
     });
+  });
+
+  it("starts a new video's brand from brand_color when the kit has no main colour", async () => {
+    servePreferences({ brand_color: "#00ff00", brand_kit: { logo: "brand.png" } });
+    await loadPreferences(500);
+    expect(readBrandKit()).toEqual({ logo: "brand.png", accent: "#00FF00" });
+
+    // A kit's own accent wins; a malformed kit is ignored rather than breaking the fallback.
+    setBrandKit({ accent: "#123456" });
+    expect(readBrandKit()).toEqual({ accent: "#123456" });
+    resetPreferencesForTests();
+    localStorage.setItem(BRAND_KIT_KEY, JSON.stringify({ accent: "blue", logo: "../outside.png" }));
+    localStorage.setItem(BRAND_COLOR_KEY, "#FF3366");
+    expect(readBrandKit()).toEqual({ accent: "#FF3366" });
   });
 
   it("falls back to defaults when neither the workspace nor the cache has a value", async () => {

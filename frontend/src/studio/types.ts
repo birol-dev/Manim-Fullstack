@@ -65,6 +65,14 @@ export interface Background {
   color2?: string | null;
 }
 
+/** One video's brand overrides; every field is optional and null means "use the template's own". */
+export interface Brand {
+  accent?: string | null;
+  accent2?: string | null;
+  font?: string | null;
+  logo?: string | null;
+}
+
 export interface RenderSettings {
   aspect: Aspect;
   length?: number | null;
@@ -74,7 +82,7 @@ export interface RenderSettings {
   ending: Ending;
   safe_zone: boolean;
   locale: string;
-  brand?: Record<string, unknown>;
+  brand?: Brand;
   sound?: SoundSettings;
 }
 

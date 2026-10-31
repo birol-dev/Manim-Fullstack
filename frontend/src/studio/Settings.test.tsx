@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resetCatalogCache } from "./api";
-import { BRAND_NAME_KEY, DEFAULT_FORMAT_KEY, resetPreferencesForTests } from "./preferences";
+import { BRAND_KIT_KEY, BRAND_NAME_KEY, DEFAULT_FORMAT_KEY, resetPreferencesForTests } from "./preferences";
 import { SettingsPage } from "./Settings";
 import { type AIApp, type SetupComponent, type SetupStatus } from "./setup";
 import StudioApp from "./StudioApp";
@@ -85,7 +85,7 @@ describe("settings sections", () => {
   it("falls back to You for an unknown section and follows the address bar", async () => {
     render(<SettingsPage section="nope" />);
     expect(screen.getByRole("link", { name: "You" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByRole("heading", { name: "You" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "You and your brand" })).toBeInTheDocument();
 
     cleanup();
     window.history.replaceState(null, "", "/#/settings/appearance");
@@ -108,28 +108,43 @@ describe("settings sections", () => {
 });
 
 describe("profile and new videos", () => {
-  it("saves the name and brand color only when something changed", async () => {
+  it("saves the name, logo, colors and font only when something changed", async () => {
     const user = userEvent.setup();
     servePreferences();
     localStorage.setItem(BRAND_NAME_KEY, "Acme");
+    localStorage.setItem(BRAND_KIT_KEY, JSON.stringify({ logo: "brand.svg", accent: "#112233" }));
     render(<SettingsPage section="profile" />);
 
+    expect(screen.getByRole("heading", { name: "You and your brand" })).toBeInTheDocument();
+    expect(screen.getByText("New videos start with these. You can change them per video.")).toBeInTheDocument();
     const name = screen.getByRole("textbox", { name: "What should we call you?" });
     expect(name).toHaveValue("Acme");
     expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
-    expect(screen.getByText("New videos start with this color. You can change it per video.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove logo" })).toBeInTheDocument();
 
     await user.clear(name);
     await user.type(name, "Omer Studio");
-    await user.click(await screen.findByRole("radio", { name: "#2563EB" }));
+    const main = await screen.findByRole("radiogroup", { name: "Main color" });
+    await user.click(within(main).getByRole("radio", { name: "#2563EB" }));
+    const second = screen.getByRole("radiogroup", { name: "Second color" });
+    await user.click(within(second).getByRole("radio", { name: "#F97316" }));
+    await user.selectOptions(screen.getByLabelText("Font"), "JetBrains Mono");
+    await user.click(screen.getByRole("button", { name: "Remove logo" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       const patch = studio.calls.find((call) => call.path === "/api/studio/preferences" && call.method === "PATCH");
-      expect(patch?.body).toMatchObject({ brand_name: "Omer Studio", brand_color: "#2563EB" });
+      expect(patch?.body).toMatchObject({
+        brand_name: "Omer Studio",
+        brand_color: "#2563EB",
+        brand_kit: { accent: "#2563EB", accent2: "#F97316", font: "JetBrains Mono", logo: null },
+      });
     });
     expect(await screen.findByRole("status")).toHaveTextContent("Saved.");
     expect(localStorage.getItem(BRAND_NAME_KEY)).toBe("Omer Studio");
+    expect(JSON.parse(localStorage.getItem(BRAND_KIT_KEY)!)).toEqual({
+      accent: "#2563EB", accent2: "#F97316", font: "JetBrains Mono", logo: null,
+    });
   });
 
   it("saves the default shape and look, and can return to each template's own", async () => {

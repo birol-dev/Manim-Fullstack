@@ -37,6 +37,7 @@ def seconds_left(value: float) -> str:
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-left"
 
     # -- build ----------------------------------------------------------------------
     def build(self):
@@ -144,8 +145,8 @@ class Template(StudioScene):
                 self.play(*[FadeOut(obj) for obj in [question, *[c.group for c in cards], pill]
                             if obj is not None], run_time=m.exit)
                 # Individual card animations can leave glyphs as scene roots.
-                # Start the explanation page with just its panel and badge.
-                self.remove(*self.content())
+                # Start the explanation page with just its panel, badge and the brand logo.
+                self.remove(*[mob for mob in self.content() if mob is not self.brand_logo])
                 self.add(panel.group, badge)
                 finale = []
             finale.append(panel.group.animate(rate_func=ease_out, run_time=m.enter).shift(UP * lay.unit * 3)

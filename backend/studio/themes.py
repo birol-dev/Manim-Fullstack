@@ -107,6 +107,19 @@ THEMES = {
 
 DEFAULT_THEME = "clean"
 
+# The families the app ships in studio/assets/fonts. A brand may only choose one of these;
+# anything else keeps the theme's font, so a name typed elsewhere never changes a render.
+BUNDLED_FONTS = ("Inter", "JetBrains Mono")
+_BUNDLED = {name.casefold(): name for name in BUNDLED_FONTS}
+_BUNDLED.update({"inter studio": "Inter", "jetbrains mono studio": "JetBrains Mono"})
+
+
+def bundled_font(name) -> str | None:
+    """The bundled family for *name* (aliases included), or None when it is not bundled."""
+    if not isinstance(name, str):
+        return None
+    return _BUNDLED.get(name.strip().casefold())
+
 
 def theme_tokens(theme_id: str, brand=None) -> dict:
     """The theme's tokens with brand overrides applied (unknown ids fall back to the default)."""
@@ -117,8 +130,9 @@ def theme_tokens(theme_id: str, brand=None) -> dict:
             tokens["accent"][0] = brand.accent
         if getattr(brand, "accent2", None):
             tokens["accent"][1] = brand.accent2
-        if getattr(brand, "font", None):
-            tokens["font"] = brand.font
+        font = bundled_font(getattr(brand, "font", None))
+        if font:
+            tokens["font"] = font
     return tokens
 
 

@@ -12,6 +12,10 @@ from __future__ import annotations
 import asyncio
 import functools
 import ipaddress
+import os
+import threading
+import time
+import urllib.request
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
@@ -20,8 +24,10 @@ from . import preferences as preferences_module
 from . import service as service_module
 from . import setup_components as setup_components_module
 from . import setup_mcp as setup_mcp_module
+from . import updates as updates_module
 from .errors import StudioError
 from .registry import TemplateError
+from .version import APP_VERSION
 
 router = APIRouter(prefix="/api/studio", tags=["studio"])
 
@@ -139,6 +145,7 @@ def _setup_status(manager, setup, connection: dict) -> dict:
     return {
         "platform": manager.platform,
         "mode": manager.mode,
+        "version": APP_VERSION,
         "components": manager.components(),
         "ai_apps": setup.entries(connection),
         "data_folder": manager.workspace,
@@ -186,6 +193,78 @@ async def post_setup_reveal(request: Request):
     _require_local(request)
     await asyncio.to_thread(setup_components_module.reveal_folder, get_service().workspace_dir)
     return Response(status_code=204)
+
+
+_update_managers: dict = {}
+_update_managers_lock = threading.Lock()
+
+
+def get_update_manager() -> updates_module.UpdateManager:
+    """The one update state of the service's workspace (tests swap this)."""
+    workspace = os.path.abspath(get_service().workspace_dir)
+    with _update_managers_lock:
+        manager = _update_managers.get(workspace)
+        if manager is None:
+            manager = updates_module.UpdateManager(workspace)
+            _update_managers[workspace] = manager
+        return manager
+
+
+def _close_desktop_app(request: Request) -> None:
+    """Ask the desktop shell to close through its own authenticated shutdown route."""
+    token = os.environ.get("MANIM_API_TOKEN", "")
+    if not token:
+        return
+    base = str(request.base_url).rstrip("/")
+
+    def send() -> None:
+        # The answer to this request reaches the page first; then the app closes.
+        time.sleep(0.5)
+        try:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            opener.open(urllib.request.Request(
+                base + "/__desktop__/shutdown", method="POST",
+                headers={"Authorization": f"Bearer {token}", "Origin": base}), timeout=3).close()
+        except OSError:
+            pass
+
+    threading.Thread(target=send, daemon=True, name="studio-update-close").start()
+
+
+@router.get("/setup/update")
+@_errors
+async def get_setup_update():
+    """The update state; the once-a-day check starts here, never on a timer."""
+    return await asyncio.to_thread(updates_module.update_status, get_update_manager())
+
+
+@router.post("/setup/update/check")
+@_errors
+async def post_setup_update_check(request: Request):
+    """Check now, even when the automatic daily check already ran."""
+    _require_local(request)
+    return await asyncio.to_thread(get_update_manager().check, True)
+
+
+@router.post("/setup/update/download")
+@_errors
+async def post_setup_update_download(request: Request):
+    """Fetch the verified installer in the background; progress shows in GET update."""
+    _require_local(request)
+    return await asyncio.to_thread(get_update_manager().download)
+
+
+@router.post("/setup/update/install")
+@_errors
+async def post_setup_update_install(request: Request):
+    """Start the installer and let the app close; an export in flight is never interrupted."""
+    _require_local(request)
+    exports = await get_service().list_exports()
+    busy = any(isinstance(item, dict) and item.get("status") in ("queued", "rendering")
+               for item in exports)
+    result = await asyncio.to_thread(get_update_manager().install, busy)
+    _close_desktop_app(request)
+    return result
 
 
 @router.get("/peeks/{key}.mp4")

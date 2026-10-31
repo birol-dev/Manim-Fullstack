@@ -318,9 +318,31 @@ community and kids content; `chalk` for teaching.
 
 ## Brand and accents
 
-- `settings.brand.accent` and `brand.accent2` replace the theme's first two accent
-  colours; `brand.font` must be a font installed on the render machine; `brand.logo` is
-  an uploaded image name (call `add_image` first).
+`settings.brand` carries the brand kit for one video. Every field is optional; send
+`null` (or leave it out) to stop using it:
+
+```json
+{{
+  "settings": {{
+    "aspect": "9:16",
+    "brand": {{
+      "accent": "#2563EB",
+      "accent2": "#F97316",
+      "font": "Inter",
+      "logo": "agent-1a2b3c4d5e6f7890.png"
+    }}
+  }}
+}}
+```
+
+- `brand.accent` and `brand.accent2` replace the theme's first two accent colours.
+- `brand.font` is a font the app bundles: `Inter` or `JetBrains Mono` (aliases such as
+  `Inter Studio` work). Any other name silently keeps the theme's own font, so never
+  rely on a font being installed on the render machine.
+- `brand.logo` is an uploaded image name: call `add_image` first, then pass the returned
+  `name`. Templates draw it small (about 7% of the short side) in a corner that suits
+  their layout and fade it in with the first content. A missing or unreadable file is
+  skipped with a warning instead of failing the render, so preview before exporting.
 - A template `accent` param (timer ring, quote highlights) colours that one element — do
   not set it to a different colour than the brand accent.
 - Keep contrast: dark text on light themes, light text on dark themes. The theme already

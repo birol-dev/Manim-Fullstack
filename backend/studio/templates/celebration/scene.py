@@ -54,6 +54,7 @@ CONFETTI_Z = -1
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-left"
 
     # ------------------------------------------------------------------ setup
     def build(self):

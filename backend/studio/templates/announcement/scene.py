@@ -41,6 +41,7 @@ DEG = math.pi / 180
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "top-right"
 
     # -- entry -----------------------------------------------------------------
     def build(self):
@@ -51,7 +52,7 @@ class Template(StudioScene):
         self.fw, self.fh = lay.frame_width, lay.frame_height
         self.decorate = bg.kind != "transparent"
         self.photo = self.asset(p.image)
-        self.logo_path = self.asset(p.logo or self.s.brand.logo)
+        self.logo_path = self.asset(p.logo)
         self.details = [d for d in p.details if d.text][:4]
 
         layout = {"bold": self._bold, "split": self._split, "poster": self._poster}[p.layout]

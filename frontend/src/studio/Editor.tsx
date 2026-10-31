@@ -21,7 +21,7 @@ import "./editor.css";
 import { LookPanel } from "./LookPanel";
 import { SoundPanel } from "./SoundPanel";
 import { ASPECTS, initialSettings, isPortrait } from "./options";
-import { readBrandColor, readDefaultFormat, readDefaultTheme } from "./preferences";
+import { readBrandKit, readDefaultFormat, readDefaultTheme } from "./preferences";
 import { stableKey } from "./preview";
 import { PreviewPanel, type PreviewView } from "./PreviewPanel";
 import type { Route } from "./router";
@@ -95,7 +95,8 @@ function Message({ title, line }: { title: string; line: string }) {
 
 /**
  * A new video starts from its card, then from the workspace's defaults where they fit: a format
- * this template offers, a theme that exists, and the brand color. Saved projects skip this.
+ * this template offers, a theme that exists, and a snapshot of the brand kit. Saved projects skip
+ * this, so later brand changes never drift into an existing video.
  */
 function newVideoSettings(template: TemplateInfo, card: Partial<RenderSettings> | undefined, themes: Theme[]): RenderSettings {
   const settings = initialSettings(template, card);
@@ -103,8 +104,8 @@ function newVideoSettings(template: TemplateInfo, card: Partial<RenderSettings> 
   if (format && template.aspects.includes(format as Aspect)) settings.aspect = format as Aspect;
   const theme = readDefaultTheme();
   if (theme && themes.some((item) => item.id === theme)) settings.theme = theme;
-  const accent = readBrandColor();
-  if (accent) settings.brand = { ...settings.brand, accent };
+  const kit = readBrandKit();
+  if (kit) settings.brand = { ...settings.brand, ...kit };
   return settings;
 }
 

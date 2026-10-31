@@ -193,14 +193,18 @@ class Background(BaseModel):
 
 
 class Brand(BaseModel):
-    """Overrides from the brand kit: applied on top of the theme."""
+    """Overrides from the brand kit: applied on top of the theme. The logo is drawn small in a corner."""
 
     model_config = ConfigDict(extra="forbid")
 
     accent: HexColor = None
     accent2: HexColor = None
-    font: Optional[str] = Field(None, max_length=60)
-    logo: Optional[str] = Field(None, max_length=200)
+    font: Optional[str] = Field(
+        None, max_length=60,
+        description="A bundled font: Inter or JetBrains Mono. Anything else keeps the theme's font.")
+    logo: Optional[str] = Field(
+        None, max_length=200,
+        description="An uploaded image name (call add_image first). Drawn small in a corner; a missing file is skipped.")
 
 
 class RenderSettings(BaseModel):

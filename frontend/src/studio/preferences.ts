@@ -1,5 +1,6 @@
 import { getPreferences, updatePreferences } from "./api";
 import type { Appearance } from "./appearance";
+import type { Brand } from "./types";
 
 export type { Appearance };
 
@@ -13,9 +14,16 @@ export interface Preferences {
   onboarding_done?: boolean;
   brand_name?: string;
   brand_color?: string | null;
+  brand_kit?: Brand | null;
   default_format?: string | null;
   default_theme?: string | null;
 }
+
+/** The fonts the app renders with. Names match backend/studio/themes.py. */
+export const BRAND_FONTS: Array<{ value: string; label: string }> = [
+  { value: "Inter", label: "Inter" },
+  { value: "JetBrains Mono", label: "JetBrains Mono" },
+];
 
 export type PreferenceKey = keyof Preferences;
 
@@ -27,6 +35,7 @@ export const SEEN_EXPORTS_KEY = "studio:seen-exports";
 export const ONBOARDING_KEY = "studio:onboarding-done";
 export const BRAND_NAME_KEY = "studio:brand-name";
 export const BRAND_COLOR_KEY = "studio:brand-color";
+export const BRAND_KIT_KEY = "studio:brand-kit";
 export const DEFAULT_FORMAT_KEY = "studio:default-format";
 export const DEFAULT_THEME_KEY = "studio:default-theme";
 
@@ -39,6 +48,7 @@ export const PREFERENCE_KEYS: PreferenceKey[] = [
   "onboarding_done",
   "brand_name",
   "brand_color",
+  "brand_kit",
   "default_format",
   "default_theme",
 ];
@@ -70,6 +80,32 @@ function normalizeBrandColor(value: unknown): string | null | undefined {
 function normalizeChoice(value: unknown): string | null | undefined {
   if (value === null) return null;
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** A saved brand kit, or undefined when it is malformed (unknown keys are ignored). */
+function normalizeBrandKit(value: unknown): Brand | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const data = value as Record<string, unknown>;
+  const kit: Brand = {};
+  for (const key of ["accent", "accent2"] as const) {
+    if (!(key in data)) continue;
+    const color = normalizeBrandColor(data[key]);
+    if (color === undefined) return undefined;
+    kit[key] = color;
+  }
+  for (const key of ["font", "logo"] as const) {
+    if (!(key in data)) continue;
+    if (data[key] === null) {
+      kit[key] = null;
+      continue;
+    }
+    const text = typeof data[key] === "string" ? data[key].trim() : "";
+    const limit = key === "font" ? 60 : 200;
+    if (!text || text.length > limit || (key === "logo" && /[\\/]/.test(text))) return undefined;
+    kit[key] = text;
+  }
+  return kit;
 }
 
 function readCache(key: PreferenceKey): unknown {
@@ -104,6 +140,10 @@ function readCache(key: PreferenceKey): unknown {
         return normalizeBrandName(localStorage.getItem(BRAND_NAME_KEY));
       case "brand_color":
         return normalizeBrandColor(localStorage.getItem(BRAND_COLOR_KEY)) ?? undefined;
+      case "brand_kit": {
+        const value: unknown = JSON.parse(localStorage.getItem(BRAND_KIT_KEY) ?? "null");
+        return normalizeBrandKit(value) ?? undefined;
+      }
       case "default_format":
         return normalizeChoice(localStorage.getItem(DEFAULT_FORMAT_KEY)) ?? undefined;
       case "default_theme":
@@ -143,6 +183,12 @@ function writeCache(key: PreferenceKey, value: unknown) {
         const color = normalizeBrandColor(value);
         if (color) localStorage.setItem(BRAND_COLOR_KEY, color);
         else localStorage.removeItem(BRAND_COLOR_KEY);
+        break;
+      }
+      case "brand_kit": {
+        const kit = normalizeBrandKit(value);
+        if (kit) localStorage.setItem(BRAND_KIT_KEY, JSON.stringify(kit));
+        else localStorage.removeItem(BRAND_KIT_KEY);
         break;
       }
       case "default_format": {
@@ -186,6 +232,8 @@ function sanitize(raw: unknown): Preferences {
   if (brandName !== undefined) values.brand_name = brandName;
   const brandColor = normalizeBrandColor(data.brand_color);
   if (brandColor !== undefined) values.brand_color = brandColor;
+  const brandKit = normalizeBrandKit(data.brand_kit);
+  if (brandKit !== undefined) values.brand_kit = brandKit;
   const defaultFormat = normalizeChoice(data.default_format);
   if (defaultFormat !== undefined) values.default_format = defaultFormat;
   const defaultTheme = normalizeChoice(data.default_theme);
@@ -306,6 +354,33 @@ export function readBrandColor(): string | null {
 
 export function setBrandColor(value: string | null) {
   writePreference("brand_color", normalizeBrandColor(value) ?? null);
+}
+
+/**
+ * The saved brand kit for a new video, or null when nothing is saved.
+ *
+ * `brand_color` from the welcome tour (and older builds) counts as the main colour
+ * whenever the kit itself has none.
+ */
+export function readBrandKit(): Brand | null {
+  const stored = readPreference("brand_kit");
+  const kit: Brand = {};
+  if (stored && typeof stored === "object") {
+    // Keep an explicit null: applying the kit then clears that field on the video.
+    for (const key of ["accent", "accent2", "font", "logo"] as const) {
+      if (key in stored) kit[key] = stored[key] ?? null;
+    }
+  }
+  if (!kit.accent) {
+    const accent = readBrandColor();
+    if (accent) kit.accent = accent;
+  }
+  return Object.keys(kit).length ? kit : null;
+}
+
+/** Save the kit whole (a field set to null is stored as "not used"). */
+export function setBrandKit(value: Brand | null) {
+  writePreference("brand_kit", value === null ? null : normalizeBrandKit(value) ?? {});
 }
 
 export function readDefaultFormat(): string | null {

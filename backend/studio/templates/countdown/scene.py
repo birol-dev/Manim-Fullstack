@@ -16,6 +16,7 @@ def clock(value: float) -> str:
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-right"
 
     def build(self):
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion

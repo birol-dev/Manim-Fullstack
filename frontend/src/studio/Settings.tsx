@@ -1,31 +1,35 @@
 /** Settings: who you are, what new videos start with, AI apps, this computer, and about. */
-import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUpRight, Check, RotateCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { requestJson } from "@/lib/api";
 
 import type { Appearance } from "./appearance";
 import { AiAppsList } from "./AiAppsList";
 import { ColorControl } from "./ColorControl";
 import { inputClass } from "./components";
+import { ImageWidget } from "./form/media";
 import { useCatalog } from "./hooks";
 import { ASPECTS } from "./options";
 import {
+  BRAND_FONTS,
   BRAND_NAME_MAX,
   flushPreferences,
-  readBrandColor,
+  readBrandKit,
   readBrandName,
   readDefaultFormat,
   readDefaultTheme,
   setBrandColor,
+  setBrandKit,
   setBrandName,
   setDefaultFormat,
   setDefaultTheme,
 } from "./preferences";
+import type { FieldSpec } from "./schemaForm";
 import { useSetupStatus } from "./setup";
 import { SystemList } from "./SystemList";
-import type { Catalog, Theme } from "./types";
+import type { Brand, Catalog, Theme } from "./types";
+import { UpdateSection } from "./UpdateSection";
 import "./settings.css";
 
 export interface SettingsPageProps {
@@ -173,25 +177,78 @@ function SaveRow({ dirty, justSaved }: { dirty: boolean; justSaved: boolean }) {
   </div>;
 }
 
+const LOGO_FIELD: FieldSpec = {
+  key: "logo",
+  widget: "image",
+  title: "Logo",
+  description: "Shown small in a corner of new videos.",
+  required: false,
+  nullable: true,
+  shape: "logo",
+};
+
+function brandSnapshot(kit: Brand): string {
+  return JSON.stringify([kit.accent ?? null, kit.accent2 ?? null, kit.font ?? null, kit.logo ?? null]);
+}
+
+function fontStack(value: string): string {
+  return value === "JetBrains Mono"
+    ? '"JetBrains Mono Studio", "JetBrains Mono", ui-monospace, monospace'
+    : '"Inter Studio", Inter, system-ui, sans-serif';
+}
+
+function BrandColorField({ id, label, value, fallback, theme, onChange }: {
+  id: string;
+  label: string;
+  value: string | null | undefined;
+  fallback: string;
+  theme?: Theme;
+  onChange: (value: string | null) => void;
+}) {
+  return <div className="studio-settings-field">
+    <div className="studio-settings-label-row">
+      <span id={`${id}-label`} className="studio-settings-label">{label}</span>
+      <span className="studio-settings-brand-value">
+        <span className="studio-settings-brand-swatch" data-empty={value ? undefined : "true"} style={value ? { background: value } : undefined} aria-hidden />
+        {value ?? "Template color"}
+      </span>
+    </div>
+    <ColorControl id={id} label={label} value={value} fallback={fallback} theme={theme} onChange={onChange} />
+  </div>;
+}
+
 function ProfileSection({ catalog }: { catalog: Catalog | null }) {
   const id = useId();
   const [name, setName] = useState(readBrandName);
-  const [color, setColor] = useState<string | null>(readBrandColor);
-  const [saved, setSaved] = useState(() => ({ name: readBrandName(), color: readBrandColor() }));
+  const [kit, setKit] = useState<Brand>(() => readBrandKit() ?? {});
+  const [saved, setSaved] = useState(() => ({ name: readBrandName(), kit: brandSnapshot(readBrandKit() ?? {}) }));
   const [justSaved, setJustSaved] = useState(false);
-  const dirty = name.trim() !== saved.name || color !== saved.color;
+  const dirty = name.trim() !== saved.name || brandSnapshot(kit) !== saved.kit;
+  const updateKit = (patch: Partial<Brand>) => {
+    setKit((previous) => ({ ...previous, ...patch }));
+    setJustSaved(false);
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!dirty) return;
     const trimmed = name.trim().slice(0, BRAND_NAME_MAX);
+    const next: Brand = {
+      accent: kit.accent ?? null,
+      accent2: kit.accent2 ?? null,
+      font: kit.font ?? null,
+      logo: kit.logo ?? null,
+    };
     setBrandName(trimmed);
-    setBrandColor(color);
+    setBrandKit(next);
+    setBrandColor(next.accent ?? null);
     await flushPreferences();
     setName(trimmed);
-    setSaved({ name: trimmed, color });
+    setSaved({ name: trimmed, kit: brandSnapshot(next) });
     setJustSaved(true);
   };
-  return <Panel id="profile" title="You" description="Your name and color make new videos feel like yours.">
+  const theme = catalog?.themes?.[0];
+  const chosenFont = BRAND_FONTS.find((font) => font.value === kit.font);
+  return <Panel id="profile" title="You and your brand" description="Your name, logo and colors make new videos feel like yours.">
     <form className="studio-settings-form" onSubmit={(event) => { void submit(event); }}>
       <div className="studio-settings-fields">
         <div className="studio-settings-field">
@@ -208,24 +265,50 @@ function ProfileSection({ catalog }: { catalog: Catalog | null }) {
           <p className="studio-settings-hint">You can change this any time.</p>
         </div>
         <div className="studio-settings-field">
-          <div className="studio-settings-label-row">
-            <span id={`${id}-color-label`} className="studio-settings-label">Brand color</span>
-            <span className="studio-settings-brand-value">
-              <span className="studio-settings-brand-swatch" data-empty={color ? undefined : "true"} style={color ? { background: color } : undefined} aria-hidden />
-              {color ?? "Template color"}
-            </span>
-          </div>
-          <ColorControl
-            id={`${id}-color`}
-            label="Brand color"
-            value={color}
-            theme={catalog?.themes?.[0]}
-            describedBy={`${id}-color-hint`}
-            onChange={(value) => { setColor(value); setJustSaved(false); }}
+          <label className="studio-settings-label" htmlFor={`${id}-logo`}>Logo</label>
+          <ImageWidget
+            field={LOGO_FIELD}
+            id={`${id}-logo`}
+            value={kit.logo ?? null}
+            onChange={(value) => updateKit({ logo: typeof value === "string" ? value : null })}
+            invalid={false}
           />
-          <p id={`${id}-color-hint`} className="studio-settings-hint">New videos start with this color. You can change it per video.</p>
+          <p className="studio-settings-hint">A PNG or SVG with a see-through background works best.</p>
+        </div>
+        <BrandColorField
+          id={`${id}-main-color`}
+          label="Main color"
+          value={kit.accent}
+          fallback={theme?.accent?.[0] ?? "#2563EB"}
+          theme={theme}
+          onChange={(accent) => updateKit({ accent })}
+        />
+        <BrandColorField
+          id={`${id}-second-color`}
+          label="Second color"
+          value={kit.accent2}
+          fallback={theme?.accent?.[1] ?? "#F97316"}
+          theme={theme}
+          onChange={(accent2) => updateKit({ accent2 })}
+        />
+        <div className="studio-settings-field">
+          <label className="studio-settings-label" htmlFor={`${id}-font`}>Font</label>
+          <select
+            id={`${id}-font`}
+            className={inputClass}
+            value={kit.font ?? ""}
+            style={chosenFont ? { fontFamily: fontStack(chosenFont.value) } : undefined}
+            onChange={(event) => updateKit({ font: event.target.value || null })}
+          >
+            <option value="">Template's own font</option>
+            {BRAND_FONTS.map((font) => (
+              <option key={font.value} value={font.value} style={{ fontFamily: fontStack(font.value) }}>{font.label}</option>
+            ))}
+            {kit.font && !chosenFont && <option value={kit.font}>{kit.font}</option>}
+          </select>
         </div>
       </div>
+      <p className="studio-settings-hint">New videos start with these. You can change them per video.</p>
       <SaveRow dirty={dirty} justSaved={justSaved} />
     </form>
   </Panel>;
@@ -326,20 +409,11 @@ function SystemSection() {
 }
 
 function AboutSection() {
-  const [version, setVersion] = useState<string | null>(null);
-  useEffect(() => {
-    let live = true;
-    requestJson<{ version?: unknown }>("/api/health").then(
-      (data) => { if (live && data && typeof data.version === "string") setVersion(data.version); },
-      () => { /* The version is a nicety; it simply stays out when unknown. */ },
-    );
-    return () => { live = false; };
-  }, []);
   return <Panel id="about" title="About" description="A video maker for people who don't write code.">
     <dl className="studio-settings-about">
       <div><dt>App</dt><dd>Manim Studio</dd></div>
-      {version && <div><dt>Version</dt><dd>{version}</dd></div>}
     </dl>
+    <UpdateSection />
     <nav className="studio-settings-links" aria-label="More">
       <a className="studio-settings-link-row" href="#/author">
         <span className="studio-settings-link-copy">

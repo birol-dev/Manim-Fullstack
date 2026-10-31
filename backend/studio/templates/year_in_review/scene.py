@@ -80,6 +80,7 @@ def _solve(budget: float, flex: list) -> list:
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-right"
 
     # ------------------------------------------------------------------ build
     def build(self):

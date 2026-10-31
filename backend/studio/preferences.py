@@ -94,6 +94,49 @@ def _optional_hex(field: str):
     return check
 
 
+BRAND_KIT_KEYS = ("accent", "accent2", "font", "logo")
+MAX_BRAND_FONT = 60
+MAX_BRAND_LOGO = 200
+
+
+def _brand_text(field: str, limit: int):
+    def check(value):
+        if value is None:
+            return None
+        text = value.strip() if isinstance(value, str) else ""
+        if not text or len(text) > limit:
+            raise _error(field, f"Use text of at most {limit} characters, or null.")
+        return text
+
+    return check
+
+
+def _brand_logo(value):
+    if value is None:
+        return None
+    name = value.strip() if isinstance(value, str) else ""
+    if (not name or len(name) > MAX_BRAND_LOGO or "/" in name or "\\" in name
+            or name in (".", "..") or name.startswith(".")):
+        raise _error("brand_kit.logo", "Use an image name from your pictures, or null.")
+    return name
+
+
+def _brand_kit(value):
+    """The saved brand kit: any of accent, accent2, font and logo; null clears one."""
+    if not isinstance(value, dict):
+        raise _error("brand_kit", "Use an object with accent, accent2, font and logo.")
+    unknown = [key for key in value if key not in BRAND_KIT_KEYS]
+    if unknown:
+        raise _error(f"brand_kit.{unknown[0]}", "Unknown brand setting.")
+    checks = {
+        "accent": _optional_hex("brand_kit.accent"),
+        "accent2": _optional_hex("brand_kit.accent2"),
+        "font": _brand_text("brand_kit.font", MAX_BRAND_FONT),
+        "logo": _brand_logo,
+    }
+    return {key: check(value[key]) for key, check in checks.items() if key in value}
+
+
 def _seen(value):
     if not isinstance(value, list):
         raise _error("seen_exports", "Use a list of export ids.")
@@ -118,8 +161,10 @@ SCHEMA = {
     "onboarding_done": _boolean("onboarding_done"),
     "brand_name": _brand_name,
     "brand_color": _optional_hex("brand_color"),
+    "brand_kit": _brand_kit,
     "default_format": _optional_text("default_format", 32),
     "default_theme": _optional_text("default_theme", 64),
+    "update_check": _boolean("update_check"),
 }
 PREFERENCE_KEYS = tuple(SCHEMA)
 

@@ -1,7 +1,8 @@
-/** The "Look" controls: theme, energy, ending, background, length, safe zone, number style. */
+/** The "Look" controls: theme, energy, ending, background, length, safe zone, number style, brand. */
 import { useId, useRef, type ReactNode } from "react";
 import { Check } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -9,8 +10,29 @@ import { cn } from "@/lib/utils";
 import { inputClass, Segments } from "./components";
 import { ColorControl } from "./ColorControl";
 import { changeBackgroundKind, visibleBackgroundSlots, type BackgroundSlot } from "./background";
+import { ImageWidget } from "./form/media";
 import { BACKGROUNDS, ENDINGS, ENERGIES, formatSeconds, isPortrait, LOCALES } from "./options";
-import type { Background, RenderSettings, TemplateInfo, Theme } from "./types";
+import { BRAND_FONTS, readBrandKit } from "./preferences";
+import type { FieldSpec } from "./schemaForm";
+import type { Background, Brand, RenderSettings, TemplateInfo, Theme } from "./types";
+
+const TEMPLATE_FONT = "__template__";
+const LOGO_FIELD: FieldSpec = {
+  key: "logo",
+  widget: "image",
+  title: "Logo",
+  description: "Shown small in a corner of this video.",
+  required: false,
+  nullable: true,
+  shape: "logo",
+};
+
+/** Try each bundled family in the dropdown; the renderer always uses the real bundled file. */
+function fontStack(value: string): string {
+  return value === "JetBrains Mono"
+    ? '"JetBrains Mono Studio", "JetBrains Mono", ui-monospace, monospace'
+    : '"Inter Studio", Inter, system-ui, sans-serif';
+}
 
 interface LookPanelProps {
   settings: RenderSettings;
@@ -96,7 +118,10 @@ function ColorInput({ label, value, fallback, onChange, theme }: { label: string
 }
 
 export function LookPanel({ settings, onChange, template, themes, errors }: LookPanelProps) {
-  const ids = { theme: useId(), energy: useId(), ending: useId(), background: useId(), length: useId(), locale: useId(), safe: useId() };
+  const ids = {
+    theme: useId(), energy: useId(), ending: useId(), background: useId(), length: useId(), locale: useId(),
+    safe: useId(), brandLogo: useId(), brandFont: useId(), brandMain: useId(), brandSecond: useId(),
+  };
   const theme = themes.find((item) => item.id === settings.theme);
   const background = settings.background ?? { kind: "theme" };
   const chosenBackgroundSlots = useRef(new Set<BackgroundSlot>(visibleBackgroundSlots(background)));
@@ -109,6 +134,9 @@ export function LookPanel({ settings, onChange, template, themes, errors }: Look
   const length = settings.length ?? template.default_length;
   const lengthStep = template.max_length - template.min_length > 120 ? 1 : 0.5;
   const err = (path: string) => errors[path] ?? [];
+  const brand: Brand = settings.brand ?? {};
+  const kit = readBrandKit();
+  const setBrand = (patch: Partial<Brand>) => onChange({ brand: { ...brand, ...patch } });
 
   return (
     <div className="studio-look-panel">
@@ -223,6 +251,73 @@ export function LookPanel({ settings, onChange, template, themes, errors }: Look
           </Select>
         </div>
         {err("settings.locale").length > 0 && <p role="alert" className="text-xs text-danger">{err("settings.locale").join(" ")}</p>}
+      </section>
+      <section className="studio-look-section" aria-label="Brand">
+        <h2>Brand</h2>
+        <Row label="Logo" labelId={`${ids.brandLogo}-label`} htmlFor={ids.brandLogo} errors={err("settings.brand.logo")}
+          hint="Shown small in a corner of this video.">
+          <ImageWidget
+            field={LOGO_FIELD}
+            id={ids.brandLogo}
+            value={brand.logo ?? null}
+            onChange={(value) => setBrand({ logo: typeof value === "string" ? value : null })}
+            invalid={err("settings.brand.logo").length > 0}
+          />
+        </Row>
+        <Row label="Main color" labelId={`${ids.brandMain}-label`} errors={err("settings.brand.accent")}>
+          <ColorControl
+            id={ids.brandMain}
+            label="Main color"
+            value={brand.accent}
+            fallback={theme?.accent?.[0] ?? "#2563EB"}
+            theme={theme}
+            pickerLabel="Main color"
+            onChange={(accent) => setBrand({ accent })}
+          />
+        </Row>
+        <Row label="Second color" labelId={`${ids.brandSecond}-label`} errors={err("settings.brand.accent2")}>
+          <ColorControl
+            id={ids.brandSecond}
+            label="Second color"
+            value={brand.accent2}
+            fallback={theme?.accent?.[1] ?? "#F97316"}
+            theme={theme}
+            pickerLabel="Second color"
+            onChange={(accent2) => setBrand({ accent2 })}
+          />
+        </Row>
+        <Row label="Font" labelId={`${ids.brandFont}-label`} errors={err("settings.brand.font")}>
+          <Select value={brand.font ?? TEMPLATE_FONT} onValueChange={(value) => setBrand({ font: value === TEMPLATE_FONT ? null : value })}>
+            <SelectTrigger id={ids.brandFont} aria-labelledby={`${ids.brandFont}-label`} className={cn(inputClass, "h-9 rounded-lg")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={TEMPLATE_FONT} className="text-sm">Template's own font</SelectItem>
+              {BRAND_FONTS.map((font) => (
+                <SelectItem key={font.value} value={font.value} className="text-sm" style={{ fontFamily: fontStack(font.value) }}>
+                  {font.label}
+                </SelectItem>
+              ))}
+              {brand.font && !BRAND_FONTS.some((font) => font.value === brand.font) && (
+                <SelectItem value={brand.font} className="text-sm">{brand.font}</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+        </Row>
+        <div className="flex flex-wrap items-center gap-3">
+          {kit ? (
+            <>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onChange({ brand: { ...kit } })}>
+                Use my brand
+              </Button>
+              <p className="text-xs text-fg-subtle">Applies your saved logo, colors and font to this video.</p>
+            </>
+          ) : (
+            <p className="text-xs text-fg-subtle">
+              You haven't saved a brand yet. <a className="underline" href="#/settings/profile">Set up your brand</a>.
+            </p>
+          )}
+        </div>
       </section>
     </div>
   );

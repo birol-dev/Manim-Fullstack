@@ -30,6 +30,7 @@ from studio.mcp_guide import register_guidance
 from studio.registry import TemplateError
 from studio.schema import RenderSettings
 from studio.themes import THEMES
+from studio.version import APP_VERSION
 
 
 def _tool_errors(fn):
@@ -62,7 +63,7 @@ def settings_schema(template: dict) -> dict:
 def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPServer:
     """Build tools without importing Manim. A service may also be a REST bridge."""
     server = MCPServer(
-        "Manim Studio", version="1.2.0",
+        "Manim Studio", version=APP_VERSION,
         instructions=(
             "Manim Studio makes short animated videos from installed templates. Call guide() first if "
             "unsure: it teaches the workflow, writing, platforms, look, sound and export.\n"
@@ -104,8 +105,9 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     @_tool_errors
     async def get_template(template: str) -> dict:
         """Everything needed before creating a project: params JSON Schema (types, enums, maxLength,
-        min/max items), settings_schema (theme, aspect, background, brand, sound), defaults, presets
-        and timing limits. Call it instead of guessing a field: unknown fields are refused."""
+        min/max items), settings_schema (theme, aspect, background, brand logo/colours/bundled font,
+        sound), defaults, presets and timing limits. Call it instead of guessing a field: unknown
+        fields are refused."""
         info = await service.template_info(template)
         return {**info, "settings_schema": settings_schema(info)}
 
