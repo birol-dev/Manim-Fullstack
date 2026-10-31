@@ -1,6 +1,7 @@
 /** The editor: a form on the left, the live preview on the right, export on top. */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, Film, FolderDown, Layers, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CloudOff, Download, FileDown, Film, FolderDown, Layers, Palette, PenLine, Redo2, Sparkles, Undo2, Volume2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -8,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api";
 
 import { createProject, friendlyError, getProject, updateProject } from "./api";
+import { saveProjectFile } from "./portableFile";
+import { ActionMenu } from "./ProjectMenu";
 import { Autosaver, type SaveStatus } from "./autosave";
 import { FrameIcon, Segments, Spinner } from "./components";
 import { fieldErrorsOf, hasErrorsUnder, matchErrors } from "./errors";
@@ -351,6 +354,28 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     saver.current.flush();
   };
 
+  const saveFile = async () => {
+    try {
+      let id = saver.current?.id ?? initialProjectId;
+      if (!id && saver.current) {
+        saver.current.change({ title: title.trim() || template.title, template: template.id, params, settings });
+        saver.current.flush();
+        for (let attempt = 0; attempt < 50 && !id; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          id = saver.current?.id;
+        }
+      }
+      if (!id) {
+        toast.error("This video is still being saved. Try again in a moment.");
+        return;
+      }
+      await updateProject(id, { title: title.trim() || template.title, params, settings });
+      await saveProjectFile(id);
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't save this video as a file."));
+    }
+  };
+
   const restore = (direction: "undo" | "redo") => {
     if (!travel(direction)) return;
     markTouched();
@@ -492,6 +517,11 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
         </div>
         <FormatPicker aspects={template.aspects} value={settings.aspect} onChange={(aspect) => patchSettings({ aspect })} />
         <div className="studio-editor-actions">
+          <ActionMenu
+            className="studio-editor-file-menu"
+            title={title.trim() || "this video"}
+            items={[{ label: "Save as a file", icon: <FileDown aria-hidden />, onSelect: saveFile }]}
+          />
           <Tooltip content="Your exports">
             <Button variant="ghost" size="icon" aria-label="Your exports" aria-description={exportActivity ? "An export is running or ready to open." : undefined} onClick={() => changeExportsOpen(true)} className="studio-exports-button">
               <FolderDown />

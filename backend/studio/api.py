@@ -16,9 +16,11 @@ import os
 import threading
 import time
 import urllib.request
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 
 from . import preferences as preferences_module
 from . import service as service_module
@@ -457,6 +459,42 @@ async def delete_project(project_id: str):
 async def post_project_duplicate(project_id: str, request: Request):
     body = await _body(request, ("title",))
     return await get_service().duplicate_project(project_id, body.get("title"))
+
+
+def _discard_portable_file(path: str) -> None:
+    """Remove the temporary zip once its download has been sent."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+@router.get("/projects/{project_id}/file")
+@_errors
+async def get_project_file(project_id: str):
+    """Download one saved project as a single .manimstudio file."""
+    result = await get_service().project_file(project_id)
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}
+    if result.get("note"):
+        headers["X-Studio-Note"] = quote(result["note"], safe="")
+    return FileResponse(result["path"], media_type="application/zip", filename=result["filename"],
+                        headers=headers,
+                        background=BackgroundTask(_discard_portable_file, result["path"]))
+
+
+@router.get("/projects/{project_id}/file/info")
+@_errors
+async def get_project_file_info(project_id: str):
+    """The download's name and any plain note about files missing from this computer."""
+    return await get_service().project_file_info(project_id)
+
+
+@router.post("/projects/open", status_code=201)
+@_errors
+async def post_project_open(request: Request):
+    """Open an uploaded .manimstudio file as a new project (base64 like a list upload)."""
+    body = await _body(request, ("data", "filename"))
+    return await get_service().open_project_file(body.get("data"), body.get("filename") or "")
 
 
 @router.post("/images", status_code=201)

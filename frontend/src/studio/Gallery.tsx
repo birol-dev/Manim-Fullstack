@@ -14,8 +14,10 @@ import { ExportsPage } from "./exports";
 import { useExports, useNearViewport, usePoster } from "./hooks";
 import { cardSettings, filterCards, timeAgo, toDate } from "./options";
 import { readBrandName } from "./preferences";
+import { OpenProjectButton } from "./Portable";
+import { dragHasFiles, usePortableOpener } from "./portableFile";
 import { ProjectMenu } from "./ProjectMenu";
-import { routeHash, type Route } from "./router";
+import { navigate, routeHash, type Route } from "./router";
 import { useSetupStatus } from "./setup";
 import type { Aspect, Card, Catalog, ExportJob, PreviewRequest, PreviewResponse, ProjectSummary, TemplateInfo } from "./types";
 import type { Library } from "./useLibrary";
@@ -245,6 +247,11 @@ function Home({ catalog, library, exports }: { catalog: Catalog; library: Librar
 
 function YourVideos({ library, home = false }: { library: Library; home?: boolean }) {
   const [sort, setSort] = useState("edited");
+  const [dragging, setDragging] = useState(false);
+  const openFile = usePortableOpener((result) => {
+    if (result.notes?.length) toast(result.notes.join(" "));
+    navigate({ kind: "project", id: result.project.id });
+  });
   const { projects, error, retry } = library;
   const sorted = [...(projects ?? [])].sort((a, b) => !home && sort === "name" ? (a.title || "Untitled video").localeCompare(b.title || "Untitled video") : (toDate(b.updated)?.getTime() ?? 0) - (toDate(a.updated)?.getTime() ?? 0));
   const errorBanner = !!error && <div role="alert" className="studio-inline-error"><span>Couldn't load your videos. {friendlyError(error)}</span><Button size="sm" variant="secondary" onClick={retry}><RotateCw /> Try again</Button></div>;
@@ -256,16 +263,35 @@ function YourVideos({ library, home = false }: { library: Library; home?: boolea
       {projects && projects.length > 0 && <ProjectTiles projects={sorted.slice(0, 4)} library={library} home />}
     </section>;
   }
-  return <section aria-label="Video library" className="studio-videos-page">
+  return <section aria-label="Video library" className="studio-videos-page" data-dragging={dragging || undefined}
+    onDragOver={(event) => {
+      if (!dragHasFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    }}
+    onDragLeave={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+    }}
+    onDrop={(event) => {
+      event.preventDefault();
+      setDragging(false);
+      void openFile.open(event.dataTransfer?.files?.[0]);
+    }}>
     <div className="studio-videos-toolbar">
       <p className="studio-videos-count">{projects ? `${projects.length} ${projects.length === 1 ? "video" : "videos"}` : "Your library"}</p>
-      <div className="studio-video-sort"><label htmlFor="video-sort">Sort by</label><Select value={sort} onValueChange={setSort}><SelectTrigger id="video-sort" aria-label="Sort videos"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="edited">Last edited</SelectItem><SelectItem value="name">Name</SelectItem></SelectContent></Select></div>
+      <div className="studio-videos-tools">
+        <OpenProjectButton busy={openFile.busy} onPick={(file: File) => void openFile.open(file)} />
+        <div className="studio-video-sort"><label htmlFor="video-sort">Sort by</label><Select value={sort} onValueChange={setSort}><SelectTrigger id="video-sort" aria-label="Sort videos"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="edited">Last edited</SelectItem><SelectItem value="name">Name</SelectItem></SelectContent></Select></div>
+      </div>
     </div>
+    {openFile.error && <div role="alert" className="studio-inline-error"><span>{openFile.error}</span></div>}
     {errorBanner}
+    {dragging && <div className="studio-drop-hint" role="status">Drop the file to open it</div>}
     {projects === null && !error ? <div role="status" aria-label="Loading your videos"><ul className="studio-template-grid">{[0, 1, 2, 3].map((key) => <CardSkeleton key={key} />)}</ul></div> : projects?.length === 0 && !error ? <div className="studio-empty" role="status">
       <div className="studio-empty-picture studio-empty-video"><Video aria-hidden /></div>
       <h2>No videos yet</h2>
-      <p>Pick a template, change the words, and it saves here on its own.</p>
+      <p>Pick a template, change the words, and it saves here on its own. Or open a file someone sent you.</p>
       <div className="studio-empty-actions"><Button asChild size="md"><a href="#/templates">Browse templates <ArrowRight aria-hidden /></a></Button></div>
     </div> : <ProjectTiles projects={sorted} library={library} />}
   </section>;

@@ -307,3 +307,15 @@ export interface FieldError {
   field: string;
   message: string;
 }
+
+/** A saved project as one downloadable .manimstudio file, and any files it had to leave out. */
+export interface PortableFileInfo {
+  filename: string;
+  notes: string[];
+}
+
+/** The new project made by opening a .manimstudio file, plus plain notes about replaced assets. */
+export interface PortableOpenResult {
+  project: Project;
+  notes: string[];
+}

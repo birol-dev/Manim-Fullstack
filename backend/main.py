@@ -106,6 +106,11 @@ MAX_REQUEST_BODY_BYTES = int(
 )
 
 
+# A portable project file is 200 MB at most; base64 makes the JSON body larger.
+PORTABLE_OPEN_PATH = "/api/studio/projects/open"
+PORTABLE_OPEN_BYTES = 200 * 1024 * 1024 * 4 // 3 + 1024 * 1024
+
+
 def _body_too_large() -> str:
     return f"Request body exceeds maximum size ({MAX_REQUEST_BODY_BYTES} bytes)."
 
@@ -403,7 +408,7 @@ class RequestBodyLimitMiddleware:
 
     @staticmethod
     def deadline_for(path: str) -> float:
-        if path in ("/api/upload-asset", "/api/studio/audio", "/mcp", "/mcp/"):
+        if path in ("/api/upload-asset", "/api/studio/audio", PORTABLE_OPEN_PATH, "/mcp", "/mcp/"):
             return BODY_DEADLINE_SECONDS * UPLOAD_DEADLINE_FACTOR
         return BODY_DEADLINE_SECONDS
 
@@ -414,6 +419,8 @@ class RequestBodyLimitMiddleware:
             return 70 * 1024 * 1024, "Choose audio smaller than 50 MB."
         if path == "/api/upload-asset":
             return MAX_ASSET_SIZE_BYTES + UPLOAD_OVERHEAD_BYTES, "File size exceeds maximum allowed size (50MB)."
+        if path == PORTABLE_OPEN_PATH:
+            return PORTABLE_OPEN_BYTES, "This project file is larger than 200 MB and can't be opened."
         return MAX_REQUEST_BODY_BYTES, _body_too_large()
 
     async def __call__(self, scope, receive, send):

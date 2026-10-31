@@ -15,6 +15,8 @@ import type {
   PreviewResponse,
   Project,
   ProjectSummary,
+  PortableFileInfo,
+  PortableOpenResult,
   RenderSettings,
   BatchCreated,
   BatchSummary,
@@ -237,6 +239,17 @@ export function updateProject(id: string, body: Partial<Omit<ProjectDraft, "temp
     keepalive,
   });
 }
+
+/** The suggested name and any plain note about files missing from this computer. */
+export const getProjectFileInfo = (id: string) =>
+  requestJson<PortableFileInfo>(`/api/studio/projects/${encodeURIComponent(id)}/file/info`, { cache: "no-store" });
+
+/** One saved video as a single .manimstudio file (the same download path as a finished export). */
+export const projectFileUrl = (id: string) => apiUrl(`/api/studio/projects/${encodeURIComponent(id)}/file`);
+
+/** Open a .manimstudio file (base64, like a list upload) as a new project. */
+export const openProjectFile = (filename: string, data: string) =>
+  postJson<PortableOpenResult>("/api/studio/projects/open", { filename, data });
 
 let iconsPromise: Promise<string[]> | null = null;
 

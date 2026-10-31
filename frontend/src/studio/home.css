@@ -165,7 +165,13 @@
 /* ---- Your videos ---- */
 :root[data-surface="studio"] .studio-videos-page { display: flex; flex-direction: column; gap: 24px; }
 :root[data-surface="studio"] .studio-videos-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+:root[data-surface="studio"] .studio-videos-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 :root[data-surface="studio"] .studio-videos-count { color: var(--color-fg-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+:root[data-surface="studio"] .studio-open-pill { height: 34px; gap: 7px; padding: 0 14px; border-radius: 999px; background: var(--color-raised); color: var(--color-fg-muted); font-size: 13px; font-weight: 500; box-shadow: none; }
+:root[data-surface="studio"] .studio-open-pill:hover:not(:disabled) { background: var(--color-line); color: var(--color-fg); }
+:root[data-surface="studio"] .studio-open-pill svg { width: 15px; height: 15px; }
+:root[data-surface="studio"] .studio-videos-page[data-dragging] { border-radius: var(--radius-card); outline: 2px dashed var(--color-line-strong); outline-offset: 10px; }
+:root[data-surface="studio"] .studio-drop-hint { display: flex; align-items: center; justify-content: center; min-height: 76px; border-radius: var(--radius-card); background: var(--color-accent-soft); color: var(--color-fg-muted); font-size: 13.5px; }
 
 /* ---- Exports: a compact timeline that answers "is it ready?" ---- */
 :root[data-surface="studio"] .studio-exports-page { display: flex; flex-direction: column; gap: 28px; }

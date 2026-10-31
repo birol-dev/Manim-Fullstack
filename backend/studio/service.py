@@ -35,12 +35,13 @@ import re
 import secrets
 import shutil
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import batches, host, peeks, preferences, registry, setup_components
+from . import batches, host, peeks, portable, preferences, registry, setup_components
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -1048,6 +1049,207 @@ class StudioService:
     async def duplicate_project(self, project_id: str, title: Optional[str] = None) -> dict:
         """Copy a project under a new id; the title defaults to ``"<title> copy"``."""
         return await asyncio.to_thread(self.duplicate_project_sync, project_id, title)
+
+    # -- portable project files: one file to carry a video to another computer ----------------------
+    def _portable_document(self, project_id) -> tuple:
+        """(the JSON a portable file carries, its asset references)."""
+        project = self._read_project(self._project_path(project_id))
+        spec = self._spec(project.get("template"))
+        title = portable.safe_title(project.get("title"), spec.meta.title)
+        document = portable.project_document({**project, "title": title}, title)
+        refs = portable.project_refs(spec.id, document["params"], document["settings"])
+        recipes = portable.crop_recipes(refs, self.assets_dir,
+                                        ImageCropStore(self.workspace_dir, self.assets_dir))
+        if recipes:
+            document["crops"] = recipes
+        return document, refs
+
+    def project_file_info_sync(self, project_id) -> dict:
+        """The file's name and the plain note about assets that are missing here."""
+        document, refs = self._portable_document(project_id)
+        missing = portable.missing_assets(refs, self.assets_dir)
+        note = portable.missing_note(missing)
+        return {"filename": portable.file_name(document["title"]), "notes": [note] if note else []}
+
+    async def project_file_info(self, project_id: str) -> dict:
+        return await asyncio.to_thread(self.project_file_info_sync, project_id)
+
+    def project_file_sync(self, project_id) -> dict:
+        """Write ``<title>.manimstudio`` to a temp file; the API serves and then removes it."""
+        document, refs = self._portable_document(project_id)
+        os.makedirs(self.tmp_dir, exist_ok=True)
+        handle, path = tempfile.mkstemp(dir=self.tmp_dir, prefix=".~portable-", suffix=".manimstudio")
+        os.close(handle)
+        try:
+            missing = portable.write_file(path, document, self.assets_dir, refs)
+        except BaseException:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
+        return {"path": path, "filename": portable.file_name(document["title"]),
+                "note": portable.missing_note(missing)}
+
+    async def project_file(self, project_id: str) -> dict:
+        """A portable copy of one saved project: file, suggested name and a note when assets are missing."""
+        return await asyncio.to_thread(self.project_file_sync, project_id)
+
+    @staticmethod
+    def _portable_template(document: dict):
+        version = document.get("format")
+        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+            raise portable.PortableError(
+                "This isn't a Manim Studio project file. Choose one that ends in .manimstudio.")
+        if version > portable.FORMAT_VERSION:
+            raise portable.PortableError(
+                "This file was made by a newer version of Manim Studio. Update the app, then open it again.")
+        template = document.get("template")
+        if not isinstance(template, str) or not template:
+            raise portable.PortableError(
+                "This file is damaged and can't be opened. Save it again from Manim Studio.")
+        return template
+
+    @staticmethod
+    def _portable_inputs(spec, params, settings) -> tuple:
+        """Keep every field that validates; defaults fill what a file from an older app leaves out."""
+        if params is None:
+            params = {}
+        if settings is None:
+            settings = {}
+        if not isinstance(params, dict) or not isinstance(settings, dict):
+            raise portable.PortableError(
+                "This file's video details are damaged. Save it again from Manim Studio.")
+        size = sum(len(json.dumps(value, ensure_ascii=False, default=str)) for value in (params, settings))
+        if size > MAX_INPUT_BYTES:
+            raise portable.PortableError(
+                f"This file's video details are too large ({size // 1024} KB; the limit is "
+                f"{MAX_INPUT_BYTES // 1024} KB).")
+
+        defaults = spec.params_model().model_dump(mode="json")
+        valid = {}
+        for key, value in params.items():
+            if key not in defaults:
+                continue
+            try:
+                spec.params_model(**{**defaults, **valid, key: value})
+            except Exception:  # noqa: BLE001 - one bad field keeps its default
+                continue
+            valid[key] = value
+        clean_params = spec.params_model(**{**defaults, **valid}).model_dump(mode="json")
+
+        settings_defaults = {**RenderSettings().model_dump(mode="json"),
+                             "aspect": spec.meta.default_aspect}
+        valid_settings = {}
+        for key, value in settings.items():
+            if key not in RenderSettings.model_fields:
+                continue
+            try:
+                RenderSettings(**{**settings_defaults, **valid_settings, key: value})
+            except Exception:  # noqa: BLE001 - one bad setting keeps its default
+                continue
+            valid_settings[key] = value
+        if valid_settings.get("aspect") not in spec.meta.aspects:
+            valid_settings.pop("aspect", None)
+        clean_settings = RenderSettings(**{**settings_defaults, **valid_settings}).model_dump(mode="json")
+        return clean_params, clean_settings
+
+    def _apply_portable_crops(self, archive, raw_crops, stored_images: dict, problems: list) -> list:
+        """Write the file's crop recipes onto the images it stored; returns kept-crop names.
+
+        *raw_crops* is untrusted: only recipes for images this open actually stored are
+        considered. A refused recipe leaves its picture uncropped; a recipe for an image
+        that already has a different crop here is left alone (the workspace crop wins).
+        """
+        if not isinstance(raw_crops, dict) or not stored_images:
+            return []
+        crops = ImageCropStore(self.workspace_dir, self.assets_dir)
+        sources, kept = {}, []
+        for name, recipe in raw_crops.items():
+            stored_name = stored_images.get(name) if isinstance(name, str) else None
+            if stored_name is None or not isinstance(recipe, dict):
+                continue
+            try:
+                source = portable.asset_name(recipe.get("source"))
+                if source is None:
+                    raise ValueError("the crop has no usable source picture")
+                stored_source = stored_images.get(source) or sources.get(source)
+                if stored_source is None:
+                    asset = archive.asset(source)
+                    if not asset:
+                        raise ValueError("the crop's source picture is not in the file")
+                    stored_source = self.add_image_sync(asset)["name"]
+                    sources[source] = stored_source
+                crop = {**recipe, "source": stored_source}
+                existing = crops.read(stored_name)
+                if existing is not None:
+                    if existing != crop:
+                        kept.append(name)
+                    continue
+                crops.write(stored_name, crop)
+            except FileExistsError:
+                kept.append(name)
+            except Exception as exc:  # noqa: BLE001 - a refused recipe leaves the image uncropped
+                logger.info("studio: portable crop %r skipped (%s)", name, exc)
+                problems.append(name)
+        return kept
+
+    def open_project_file_sync(self, data, filename: str = "") -> dict:
+        """Store an uploaded portable file as a NEW project; assets go through upload validation."""
+        archive = portable.ProjectArchive(portable.decode_upload(data))
+        try:
+            document = archive.project()
+            template_id = self._portable_template(document)
+            try:
+                spec = self._spec(template_id)
+            except Exception:  # noqa: BLE001 - any unloadable design is the same plain answer
+                raise portable.PortableError(
+                    "This video uses a design this app doesn't have yet. "
+                    "Update the app, then open it again.") from None
+            params, settings = self._portable_inputs(spec, document.get("params"), document.get("settings"))
+            refs = portable.project_refs(spec.id, params, settings)
+            replacements, stored_images, problems = {}, {}, []
+            for ref in refs:
+                key = (ref.kind, ref.name)
+                if key in replacements:
+                    continue
+                name = ref.safe_name
+                if name is None:
+                    replacements[key] = None
+                    problems.append(ref.name)
+                    continue
+                try:
+                    asset = archive.asset(name)
+                except portable.PortableError:
+                    asset = None
+                stored = None
+                if asset:
+                    try:
+                        stored = (self.upload_audio_sync(asset, name) if ref.kind == "audio"
+                                  else self.add_image_sync(asset))
+                    except Exception as exc:  # noqa: BLE001 - a refused asset uses the design's default
+                        logger.info("studio: portable asset %r skipped (%s)", name, exc)
+                if stored is None:
+                    replacements[key] = None
+                    problems.append(ref.name)
+                else:
+                    replacements[key] = stored["name"]
+                    if ref.kind == "image":
+                        stored_images.setdefault(name, stored["name"])
+            kept_crops = self._apply_portable_crops(archive, document.get("crops"), stored_images, problems)
+            portable.apply_asset_names(params, settings, refs, replacements)
+            title = portable.unique_title(
+                portable.safe_title(document.get("title"), spec.meta.title),
+                [item.get("title") for item in self.list_projects_sync()])
+            project = self.create_project_sync(spec.id, params, settings, title)
+            notes = [note for note in (portable.problem_note(problems), portable.crop_note(kept_crops)) if note]
+            return {"project": project, "notes": notes}
+        finally:
+            archive.close()
+
+    async def open_project_file(self, data, filename: str = "") -> dict:
+        """Open a ``.manimstudio`` file as a new project; never overwrites anything."""
+        return await asyncio.to_thread(self.open_project_file_sync, data, filename)
 
     # -- preferences: the few choices that must survive a restart of the desktop app ---------------
     def _preference_store(self) -> preferences.PreferenceStore:
