@@ -709,8 +709,9 @@ def test_slow_trickle_hits_the_overall_deadline(monkeypatch):
 
 def test_uploads_get_a_longer_deadline(monkeypatch):
     assert main.RequestBodyLimitMiddleware.deadline_for("/api/upload-asset") == main.BODY_DEADLINE_SECONDS * main.UPLOAD_DEADLINE_FACTOR
-    status, _, elapsed = _trickle("/api/upload-asset", monkeypatch, deadline=0.1, chunks=30, gap=0.01)
-    assert status == 200  # 0.3 s of trickle fits in 5 x 0.1 s
+    # Windows rounds each sleep up to about 16 ms, so few chunks keep this clear of 5 x 0.1 s.
+    status, _, elapsed = _trickle("/api/upload-asset", monkeypatch, deadline=0.1, chunks=12, gap=0.015)
+    assert status == 200 and elapsed > 0.1  # outlasts the plain deadline, fits the longer one
 
 
 def test_a_body_inside_the_deadline_is_untouched(monkeypatch):

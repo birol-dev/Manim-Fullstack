@@ -188,7 +188,7 @@ def test_audio_never_changes_visual_keys_but_changes_motion(tmp_path):
     assert service._preview_key(spec, params, settings, "motion-15-20", 720) != service._preview_key(spec, params, changed, "motion-15-20", 720)
 
 
-def test_original_29_gallery_bakes_remain_current_with_sound(tmp_path):
+def test_original_gallery_bakes_remain_current_with_sound(tmp_path):
     from studio.bake_posters import check_baked, preset_requests
     from studio import peeks
     original_templates = {"announcement", "celebration", "countdown", "quiz", "quote", "year_in_review"}
@@ -205,7 +205,7 @@ def test_original_29_gallery_bakes_remain_current_with_sound(tmp_path):
         result = service.preview_sync(card["template"], card["params"], {**settings, "sound": {"music": {"track": "playful"}}})
         assert result["cached"], card["id"]
         count += 1
-    assert count == 29 and not worker.calls
+    assert count == 30 and not worker.calls
 
 
 def test_http_and_mcp_allow_the_same_bounded_base64_audio_request():
