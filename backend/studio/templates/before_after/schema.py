@@ -12,7 +12,7 @@ META = TemplateMeta(
     id="before_after",
     title="Before & after",
     summary="Two pictures and a line that sweeps across: show a makeover, a redo or your progress.",
-    category="creator",
+    category="compare",
     when_to_use="Showing a change with two pictures: a room or garden makeover, a design redo, a haircut, a "
                 "fitness or renovation progress. The 'after' picture is revealed with a clean sweeping line. "
                 "Leave a picture empty and a neat color panel takes its place, so it still works without photos.",

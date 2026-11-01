@@ -67,7 +67,11 @@ class Template(StudioScene):
             digit_h = radius * 0.42
             meter = VGroup(track, arc)
             center = main_box.center
-        else:  # bar, or "big" with more than 20 s (big digits above a thin bar)
+        elif p.style == "minimal":
+            track, arc, meter = VGroup(), VGroup(), VGroup()
+            digit_h = min(main_box.height * 0.55, main_box.width * 0.20)
+            center = main_box.center
+        else:  # bar, segments, or long "big" countdowns
             bar_w = main_box.width * 0.92
             bar_h = lay.unit * (5 if p.style == "bar" else 2.4)
             bar_y = main_box.bottom + main_box.height * 0.28
@@ -75,12 +79,24 @@ class Template(StudioScene):
 
             def make_fill():
                 frac = max(left.get_value(), 0) / seconds
+                if p.style == "segments":
+                    gap, count = lay.unit * 0.7, 20
+                    width = (bar_w - gap * (count - 1)) / count
+                    blocks = VGroup(*[
+                        shapes.card(width, bar_h, radius=lay.unit, color=(
+                            accent if frac > index / count else theme.line))
+                        .move_to([track.get_left()[0] + width / 2 + index * (width + gap), bar_y, 0])
+                        for index in range(count)
+                    ])
+                    return blocks
                 w = max(bar_w * frac, bar_h)
                 fill = shapes.pill(w, bar_h, color=accent if left.get_value() > warn_at or not warn_at else warn)
                 return fill.move_to(track.get_left(), aligned_edge=LEFT)
 
             arc = make_fill()
             arc.add_updater(lambda f: f.become(make_fill()))
+            if p.style == "segments":
+                track.set_opacity(0)
             # m:ss is about four digit-heights wide, so narrow frames are limited by width
             digit_h = min(main_box.height * (0.34 if p.style == "bar" else 0.48), main_box.width * 0.22)
             meter = VGroup(track, arc)
@@ -100,12 +116,18 @@ class Template(StudioScene):
             intro.append(m.appear(note, "rise"))
         self.play(*intro)
         digits.track(left)
+        digits.add_updater(lambda mob: mob.set_x(center[0]))
 
         if self.mode == "poster":
             left.set_value(seconds * 0.62)
             self.poster()
         if self.is_peek:
-            self.play(left.animate(rate_func=lambda t: t).set_value(seconds * 0.62), run_time=seconds * 0.38)
+            # The bake only retains the last 4.467 seconds before the poster.
+            # Start at that window instead of rendering minutes that are discarded.
+            span = min(seconds * .38, 4.5)
+            left.set_value(seconds * .62 + span)
+            self.update_mobjects(0)
+            self.play(left.animate(rate_func=lambda t: t).set_value(seconds * .62), run_time=span)
             self.poster()
 
         for n in range(min(3 if p.style == "big" else 5, int(seconds)), 0, -1):
@@ -114,6 +136,7 @@ class Template(StudioScene):
         if warn_at:
             digits.clear_updaters()
             warn_digits.track(left)
+            warn_digits.add_updater(lambda mob: mob.set_x(center[0]))
             self.remove(digits)
             self.add(warn_digits)
             for n in range(int(warn_at), 0, -1):

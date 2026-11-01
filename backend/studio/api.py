@@ -320,6 +320,13 @@ async def post_batch_retry(batch_id: str):
     return await get_service().retry_batch(batch_id)
 
 
+@router.get("/posters/{key}.png")
+@_errors
+async def get_poster(key: str):
+    return FileResponse(get_service().poster_path(key), media_type="image/png",
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @router.get("/peeks/{key}.mp4")
 @_errors
 async def get_peek(key: str):

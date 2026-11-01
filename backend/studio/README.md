@@ -34,6 +34,13 @@ side and silent peeks at 480px long side (even dimensions), 15 fps, H.264/yuv420
 faststart. The same command bakes both folders. Commit both manifests and their assets.
 `assets/posters/manifest.json` and `assets/peeks/manifest.json` map presets to portable
 content-based keys. Peeks add a versioned mode to the normal preview key inputs.
+Posters also include the Home hero's aspect variants (`template/preset@9:16`, for
+example). The catalog exposes exact matches in each card's `posters` map, with the
+image's URL and dimensions. `/api/studio/posters/{key}.png` serves the bundled file
+directly with immutable caching; gallery cards bypass the preview queue. Hero images
+load eagerly at high priority; the rest load as they approach the viewport. Missing
+or stale bakes fall back to normal preview generation. Use `--posters-only` to refresh
+just thumbnails and hero variants without rebuilding the motion clips.
 The freshness test fails with the rebake command when a preset is missing or stale.
 Desktop packaging checks freshness, then copies the whole backend tree including
 `assets/posters/` and `assets/peeks/`. First requests copy exact matching PNGs into the writable preview
@@ -50,11 +57,14 @@ Ring/bar countdowns animate to the poster's 62% remaining value; big-number time
 stop on the third number. Quizzes animate to 55% thinking time remaining, before
 the answer reveal. Year-in-review peeks reach the final recap, including the full
 moments sequence when selected; longer openings retain only the last 4.467 seconds.
+Countdown and interval peeks render only the final 4.5 seconds before their poster
+state. Their clocks run at real speed within that window, avoiding discarded minutes
+when baking long timers.
 
 Encoding starts at CRF 26 and increases only if necessary. Each movie targets at
-most 250,000 bytes (about 7.25 MB for the current 29 presets plus a small manifest),
+most 250,000 bytes, with a lower target as the catalog grows,
 with hard freshness/packaging checks at 300,000 bytes per file and 8,000,000 bytes
-for the whole folder. With larger catalogs the encoder reduces the per-file target.
+for the whole folder.
 The catalog exposes `peek_url` only for current manifest/file pairs. Missing or stale
 peeks are null; neither catalog lookup nor hover starts a render. `/api/studio/peeks/{key}.mp4`
 serves the immutable baked movie, including range requests, directly from the installation.

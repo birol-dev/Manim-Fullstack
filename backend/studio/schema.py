@@ -18,14 +18,15 @@ from .sound import SoundSettings
 
 Aspect = Literal["16:9", "9:16", "1:1", "4:5"]
 ASPECTS: tuple = ("16:9", "9:16", "1:1", "4:5")
-Category = Literal["announce", "celebrate", "timers", "creator", "teach", "numbers", "sports", "travel", "screens"]
+Category = Literal["announce", "celebrate", "timers", "compare", "creator", "teach", "numbers", "sports", "travel", "screens"]
 CATEGORY_TITLES = {
+    "timers": "Timers & countdowns",
+    "compare": "Comparisons",
+    "numbers": "Show numbers",
+    "teach": "Teach & quiz",
+    "creator": "For your videos",
     "announce": "Announce something",
     "celebrate": "Celebrate",
-    "timers": "Timers & countdowns",
-    "creator": "For your videos",
-    "teach": "Teach & quiz",
-    "numbers": "Show numbers",
     "sports": "Sports & clubs",
     "travel": "Maps & travel",
     "screens": "Shop screen loops",

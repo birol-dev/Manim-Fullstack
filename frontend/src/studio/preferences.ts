@@ -14,6 +14,7 @@ export interface Preferences {
   /** Gallery cards marked with a heart: "template/preset", newest first. */
   favourite_designs?: string[];
   onboarding_done?: boolean;
+  setup_dismissed?: boolean;
   brand_name?: string;
   brand_color?: string | null;
   brand_kit?: Brand | null;
@@ -36,6 +37,7 @@ export const RECENT_COLORS_KEY = "studio.recent-colors";
 export const SEEN_EXPORTS_KEY = "studio:seen-exports";
 export const FAVOURITE_DESIGNS_KEY = "studio:favourite-designs";
 export const ONBOARDING_KEY = "studio:onboarding-done";
+export const SETUP_DISMISSED_KEY = "studio:setup-dismissed";
 export const BRAND_NAME_KEY = "studio:brand-name";
 export const BRAND_COLOR_KEY = "studio:brand-color";
 export const BRAND_KIT_KEY = "studio:brand-kit";
@@ -50,6 +52,7 @@ export const PREFERENCE_KEYS: PreferenceKey[] = [
   "seen_exports",
   "favourite_designs",
   "onboarding_done",
+  "setup_dismissed",
   "brand_name",
   "brand_color",
   "brand_kit",
@@ -144,6 +147,10 @@ function readCache(key: PreferenceKey): unknown {
         const value = localStorage.getItem(ONBOARDING_KEY);
         return value === "true" ? true : value === "false" ? false : undefined;
       }
+      case "setup_dismissed": {
+        const value = localStorage.getItem(SETUP_DISMISSED_KEY);
+        return value === "true" ? true : value === "false" ? false : undefined;
+      }
       case "brand_name":
         return normalizeBrandName(localStorage.getItem(BRAND_NAME_KEY));
       case "brand_color":
@@ -186,6 +193,9 @@ function writeCache(key: PreferenceKey, value: unknown) {
         break;
       case "onboarding_done":
         localStorage.setItem(ONBOARDING_KEY, String(value));
+        break;
+      case "setup_dismissed":
+        localStorage.setItem(SETUP_DISMISSED_KEY, String(value));
         break;
       case "brand_name":
         localStorage.setItem(BRAND_NAME_KEY, String(value ?? ""));
@@ -242,6 +252,7 @@ function sanitize(raw: unknown): Preferences {
     values.favourite_designs = data.favourite_designs;
   }
   if (typeof data.onboarding_done === "boolean") values.onboarding_done = data.onboarding_done;
+  if (typeof data.setup_dismissed === "boolean") values.setup_dismissed = data.setup_dismissed;
   const brandName = normalizeBrandName(data.brand_name);
   if (brandName !== undefined) values.brand_name = brandName;
   const brandColor = normalizeBrandColor(data.brand_color);

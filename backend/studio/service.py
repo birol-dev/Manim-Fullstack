@@ -41,7 +41,7 @@ import time
 from typing import Optional
 from xml.etree import ElementTree
 
-from . import batches, host, peeks, portable, preferences, registry, setup_components
+from . import batches, host, peeks, portable, posters, preferences, registry, setup_components
 from .errors import NotFoundError, RenderError, RendererUnavailable, RenderTimeout, StudioError
 from .exports import ACTIVE, EXPORT_FORMATS, ConflictError, ExportManager, ManimVideoRunner
 from .formats import ASPECT_RATIOS, QUALITIES, pixel_size
@@ -268,15 +268,17 @@ class StudioService:
 
     def _catalog_sync(self) -> dict:
         ids = registry.template_ids()
-        key = tuple((tid, self._refresh_template(tid)) for tid in ids)
+        key = (tuple((tid, self._refresh_template(tid)) for tid in ids),
+               self._kit_fingerprint(), self._icons_fingerprint(),
+               posters.manifest_stamp(posters.POSTERS_DIR), posters.manifest_stamp(peeks.PEEKS_DIR))
         with self._state_lock:
             if self._catalog_cache is not None and self._catalog_cache[0] == key:
-                return self._with_peeks(copy.deepcopy(self._catalog_cache[1]))
+                return copy.deepcopy(self._catalog_cache[1])
         sections = {name: [] for name in CATEGORY_TITLES}
         templates = []
         for tid in ids:
             try:
-                public = self._spec(tid).public()
+                public = registry.get_template(tid).public()
             except Exception as exc:  # noqa: BLE001 - one broken template must not hide the others
                 logger.warning("studio: template %s is unavailable (%s)", tid, exc)
                 continue
@@ -284,7 +286,7 @@ class StudioService:
             for card in public["presets"]:
                 sections.setdefault(card["category"], []).append(card)
         result = {
-            "sections": [{"id": name, "title": CATEGORY_TITLES.get(name, name), "cards": cards}
+            "sections": [{"id": name, "title": CATEGORY_TITLES.get(name, name), "cards": registry.gallery_cards(name, cards)}
                          for name, cards in sections.items() if cards],
             "templates": templates,
             "themes": public_themes(),
@@ -294,18 +296,30 @@ class StudioService:
             "settings_schema": RenderSettings.model_json_schema(),
             "music_tracks": music_tracks(),
         }
+        result = self._with_peeks(result, dict(key[0]))
         with self._state_lock:
             self._catalog_cache = (key, result)
-        return self._with_peeks(copy.deepcopy(result))
+        return copy.deepcopy(result)
 
-    def _with_peeks(self, catalog):
+    def _with_peeks(self, catalog, fingerprints=None):
         manifest = peeks.read_manifest()
+        poster_manifest = posters.read_manifest()
         for template in catalog["templates"]:
+            spec = registry.get_template(template["id"])
+            files = fingerprints.get(spec.id) if fingerprints is not None else None
             for card in template["presets"]:
                 settings = {"aspect": template["default_aspect"], **card["settings"]}
-                path = peeks.current_path(self, card, settings, manifest)
+                job = self._validate(card["template"], card["params"], settings, spec=spec)
+                path = peeks.current_path(self, card, settings, manifest, job=job, files=files)
                 card["peek_url"] = f"/api/studio/peeks/{path.name}" if path else None
+                card["posters"] = posters.current_assets(self, card, settings, poster_manifest, job=job, files=files)
         return catalog
+
+    def poster_path(self, key):
+        path = posters.asset_path(key)
+        if path is not None:
+            return path
+        raise NotFoundError("That gallery thumbnail is no longer available.")
 
     def peek_path(self, key):
         if isinstance(key, str) and re.fullmatch(r"[a-f0-9]{32}", key):
@@ -357,9 +371,9 @@ class StudioService:
             raise _field_error("title", f"Use at most {MAX_TITLE} characters.")
         return value or default
 
-    def _validate(self, template, params, settings) -> tuple:
+    def _validate(self, template, params, settings, *, spec=None) -> tuple:
         """(spec, params as JSON, settings as JSON, RenderSettings); raises TemplateError."""
-        spec = self._spec(template)
+        spec = self._spec(template) if spec is None else spec
         params, settings = self._object("params", params), self._object("settings", settings)
         self._check_size(params, settings)
         spec, model, render_settings = registry.validate_job(spec.id, params, settings)
@@ -414,10 +428,10 @@ class StudioService:
                 stamps.append([name, None, None])
         return stamps
 
-    def _preview_key(self, spec, params: dict, settings: dict, mode: str, short: int) -> str:
+    def _preview_key(self, spec, params: dict, settings: dict, mode: str, short: int, *, files=None) -> str:
         visual_settings = {k: v for k, v in settings.items() if k != "sound"}
         payload = {"v": KEY_VERSION, "template": spec.id, "version": spec.meta.version,
-                   "files": self._refresh_template(spec.id), "kit": self._kit_fingerprint(),
+                   "files": self._refresh_template(spec.id) if files is None else files, "kit": self._kit_fingerprint(),
                    "icons": self._icons_fingerprint(),
                    "params": params, "settings": visual_settings, "mode": mode, "short": short,
                    "assets": self._asset_stamps(params, visual_settings)}

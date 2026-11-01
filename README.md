@@ -6,10 +6,11 @@ The gallery opens by default; **Author mode** opens the Python scene editor.
 
 ## Template Studio
 
-- **Announcements:** sale, event invitation, hiring, holiday hours, coming soon and product launch.
-- **Celebrations:** birthday, follower milestone, work anniversary, thank-you and welcome.
-- **Year in review:** personal, small business, creator, fitness and family recaps.
-- **Timers:** classroom, coffee break and launch countdown.
+- **Timers and countdowns:** classroom, breaks, focus, presentations, cooking, exams, livestreams and short starts.
+- **Interval timers:** Pomodoro, Tabata, HIIT, box breathing, study sprints and classroom stations.
+- **Comparisons:** before/after results, plans, products, costs, A/B tests, monthly results and photo reveals.
+- **Show numbers:** animated statistics, revenue and audience counters, KPI snapshots, goal progress, charts and a yearly recap.
+- **Announcements and celebrations:** a compact selection of sale, event invitation and birthday cards.
 - **Quotes:** inspirational post, customer review, hot take, book quote and team value.
 - **Quizzes:** general knowledge, vocabulary, mental math, true/false and kids' questions.
 

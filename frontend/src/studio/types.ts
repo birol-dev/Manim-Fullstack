@@ -108,6 +108,7 @@ export interface Card {
   settings: Partial<RenderSettings>;
   tags: string[];
   peek_url?: string | null;
+  posters?: Partial<Record<Aspect, Pick<PreviewResponse, "url" | "width" | "height">>>;
 }
 
 export interface Section {

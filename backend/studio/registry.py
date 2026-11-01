@@ -98,6 +98,23 @@ def get_template(template_id: str) -> TemplateSpec:
     return _cache[template_id]
 
 
+def gallery_cards(category: str, cards: list) -> list:
+    # Home shows four cards per chapter. Mix template families so those four show
+    # different tools, rather than four copies of the same animation.
+    featured = {
+        "timers": ["countdown", "interval_timer"],
+        "compare": ["comparison", "before_after"],
+        "numbers": ["number_card", "goal_progress", "chart", "year_in_review"],
+    }
+    families = {}
+    for card in cards:
+        families.setdefault(card["template"], []).append(card)
+    order = list(dict.fromkeys([*featured.get(category, []), *families]))
+    pools = [families[template] for template in order if template in families]
+    return [pool[index] for index in range(max(map(len, pools), default=0))
+            for pool in pools if index < len(pool)]
+
+
 def catalog() -> dict:
     """Gallery sections in display order, each with its preset cards."""
     sections = {key: [] for key in CATEGORY_TITLES}
@@ -107,7 +124,7 @@ def catalog() -> dict:
             sections[card["category"]].append(card)
     return {
         "sections": [
-            {"id": key, "title": CATEGORY_TITLES[key], "cards": cards}
+            {"id": key, "title": CATEGORY_TITLES[key], "cards": gallery_cards(key, cards)}
             for key, cards in sections.items() if cards
         ],
         "templates": [spec.public() for spec in all_templates()],

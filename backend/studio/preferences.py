@@ -177,6 +177,7 @@ SCHEMA = {
     "seen_exports": _seen,
     "favourite_designs": _favourites,
     "onboarding_done": _boolean("onboarding_done"),
+    "setup_dismissed": _boolean("setup_dismissed"),
     "brand_name": _brand_name,
     "brand_color": _optional_hex("brand_color"),
     "brand_kit": _brand_kit,

@@ -95,4 +95,26 @@ PRESETS = [
             {"label": "March", "value": 980}, {"label": "April", "value": 1320},
             {"label": "May", "value": 1510}, {"label": "June", "value": 1840}], "chart_type": "line"},
         settings={"theme": "midnight", "aspect": "9:16"}, tags=["visitors", "website", "example data"]),
+    Preset(id="budget-breakdown", title="Where the budget goes", summary="Show how a monthly budget is split.",
+        params={"title": "Where the *budget* goes", "chart_type": "pie", "values": [
+            {"label": "Rent", "value": 1200}, {"label": "Food", "value": 450},
+            {"label": "Transport", "value": 180}, {"label": "Savings", "value": 600}]},
+        settings={"theme": "clean"}, tags=["budget", "spending", "breakdown", "example data"]),
+    Preset(id="weekly-habits", title="A week of progress", summary="Seven bars for minutes spent on a daily habit.",
+        params={"title": "A little *every day*", "chart_type": "bars", "values": [
+            {"label": "Mon", "value": 20}, {"label": "Tue", "value": 35}, {"label": "Wed", "value": 30},
+            {"label": "Thu", "value": 45}, {"label": "Fri", "value": 25}, {"label": "Sat", "value": 60},
+            {"label": "Sun", "value": 40}]},
+        settings={"theme": "chalk"}, tags=["habit", "weekly", "study", "example data"]),
+    Preset(id="quarterly-profit", title="From loss to profit", summary="A chart with negative and positive results.",
+        params={"title": "Turning the *corner*", "chart_type": "bars", "values": [
+            {"label": "Q1", "value": -12000}, {"label": "Q2", "value": -4000},
+            {"label": "Q3", "value": 6000}, {"label": "Q4", "value": 18000}]},
+        settings={"theme": "newsroom"}, tags=["profit", "loss", "finance", "example data"]),
+    Preset(id="audience-growth", title="Audience over time", summary="A line chart showing a growing audience across six months.",
+        params={"title": "Building an *audience*", "chart_type": "line", "values": [
+            {"label": "Jan", "value": 1200}, {"label": "Feb", "value": 1800},
+            {"label": "Mar", "value": 2600}, {"label": "Apr", "value": 4100},
+            {"label": "May", "value": 5800}, {"label": "Jun", "value": 8200}]},
+        settings={"theme": "pastel"}, tags=["audience", "growth", "creator", "example data"]),
 ]

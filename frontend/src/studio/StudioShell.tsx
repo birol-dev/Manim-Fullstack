@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { BarChart3, ChevronRight, Code2, FolderDown, GraduationCap, Home, LayoutGrid, MapPin, Megaphone, Menu, PanelLeftClose, PanelLeftOpen, PartyPopper, Play, Plug, Repeat, Search, Settings, Timer, Trophy, Video, X } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, Code2, FolderDown, GraduationCap, Home, LayoutGrid, MapPin, Megaphone, Menu, PanelLeftClose, PanelLeftOpen, PartyPopper, Play, Plug, Repeat, Search, Settings, Timer, Trophy, Video, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -24,7 +24,7 @@ interface ShellProps {
   children: (library: Library, exports: Exports) => ReactNode;
 }
 
-const CATEGORY_ICONS = { announce: Megaphone, celebrate: PartyPopper, timers: Timer, creator: Video, teach: GraduationCap, numbers: BarChart3, sports: Trophy, travel: MapPin, screens: Repeat };
+const CATEGORY_ICONS = { announce: Megaphone, celebrate: PartyPopper, timers: Timer, compare: ArrowLeftRight, creator: Video, teach: GraduationCap, numbers: BarChart3, sports: Trophy, travel: MapPin, screens: Repeat };
 
 interface Counts {
   projects: number | null;

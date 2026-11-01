@@ -10,6 +10,16 @@
 :root[data-surface="studio"] .studio-editor-sidebar { width: 420px; border-right: 0; border-radius: var(--radius-panel); background: var(--color-surface); }
 :root[data-surface="studio"] .studio-editor-preview { padding: 20px 24px 24px; border-radius: var(--radius-panel); background: var(--color-well); }
 
+/* A clear way back to the gallery, with a larger arrow and a quiet, tactile surface. */
+:root[data-surface="studio"] .studio-editor .studio-editor-back.select-none { height: 44px; gap: 9px; padding: 5px 14px 5px 6px; border: 1px solid var(--color-line); border-radius: 999px; background: var(--color-surface); color: var(--color-fg); font-size: 14px; font-weight: 500; transition: background-color 160ms ease-out, border-color 160ms ease-out; }
+:root[data-surface="studio"] .studio-editor-back-icon { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; background: var(--color-raised); transition: background-color 160ms ease-out; }
+:root[data-surface="studio"] .studio-editor-back-icon svg { width: 22px; height: 22px; transition: transform 160ms ease-out; }
+:root[data-surface="studio"] .studio-editor .studio-editor-back.select-none:hover { border-color: var(--color-line-strong); background: var(--color-raised); }
+:root[data-surface="studio"] .studio-editor-back:hover .studio-editor-back-icon { background: var(--color-line); }
+:root[data-surface="studio"] .studio-editor-back:hover svg { transform: translateX(-2px); }
+:root[data-surface="studio"] .studio-editor-back:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+:root[data-surface="studio"] .studio-editor .studio-editor-back.select-none:active { background: var(--color-line); }
+
 /* The name of the video reads as a statement, not a form field, until it is focused. Its
    width follows the text; the header's free space is there when the name is long, and the
    ellipsis only appears when the row really is out of room. The full name stays in the
@@ -178,6 +188,9 @@
 @media (prefers-reduced-motion: reduce) {
   .studio-picker, .studio-upload-progress > span { animation: none; }
   .studio-picker button, .studio-table-color, .studio-step { transition: none; }
+  :root[data-surface="studio"] .studio-editor .studio-editor-back.select-none,
+  :root[data-surface="studio"] :is(.studio-editor-back-icon, .studio-editor-back-icon svg) { transition: none; }
+  :root[data-surface="studio"] .studio-editor-back:hover svg { transform: none; }
 }
 
 /* ---- Desktop split from 900px up -------------------------------------------------------

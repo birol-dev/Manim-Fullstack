@@ -21,6 +21,12 @@ from studio.templates.celebration.scene import Template  # noqa: E402
 from studio.templates.celebration.schema import PRESETS  # noqa: E402
 from studio.templates.countdown.scene import Template as Countdown  # noqa: E402
 
+WELCOME_PARAMS = {
+    "occasion": "welcome", "headline": "Welcome to the team", "name": "Jordan Lee",
+    "message": "Jordan joins us as Product Designer. Say hi and show them around!",
+    "from_line": "Everyone at Northwind", "confetti": True,
+}
+
 
 def rgba(mobjects, *, include_submobjects=True, camera_class=Camera):
     camera = camera_class(background_opacity=0)
@@ -272,8 +278,7 @@ def test_countdown_particle_pixels(particle_media, aspect, mode, style):
 
 def test_welcome_teammate_landscape_poster_sparkles_stay_in_hero_column(particle_media):
     """Exact rebaked-gallery case from the visual review, at gallery resolution."""
-    preset = next(p for p in PRESETS if p.id == "welcome-teammate")
-    runtime.set_job({"params": preset.params, "settings": {**preset.settings, "aspect": "16:9"}, "mode": "poster"})
+    runtime.set_job({"params": WELCOME_PARAMS, "settings": {"theme": "clean", "aspect": "16:9"}, "mode": "poster"})
     try:
         with tempconfig({"pixel_width": 640, "pixel_height": 360, "frame_width": 128 / 9, "frame_height": 8,
                          "frame_rate": 4, "dry_run": True, "media_dir": str(particle_media),
@@ -360,8 +365,7 @@ def test_photo_badge_and_number_without_name_stay_clear(particle_media, aspect, 
 @pytest.mark.parametrize("template", ["celebration", "countdown"])
 def test_encoded_exports_keep_all_decorations_clear(particle_media, aspect, template):
     """Strict pixel probes run while the real movie writer encodes every frame."""
-    preset = next(p for p in PRESETS if p.id == "welcome-teammate")
-    params = preset.params if template == "celebration" else {
+    params = WELCOME_PARAMS if template == "celebration" else {
         "seconds": 3, "style": "ring", "title": "Launch time", "subtitle": "Together we begin",
         "finish_text": "Here we go!", "confetti": True}
     width, height = pixel_size(aspect, 180)

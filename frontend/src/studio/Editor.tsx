@@ -570,9 +570,9 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     <div className="studio-editor" onInputCapture={(event) => { if (isTextEditor(event.target)) nativeHistory.current.add(event.target); }} onBlurCapture={(event) => { nativeHistory.current.delete(event.target); history.boundary(); }}>
       <header className="studio-editor-header">
         <div className="studio-editor-identity">
-          <Button asChild variant="ghost" size="md" className="-ml-1">
+          <Button asChild variant="ghost" size="md" className="studio-editor-back">
             <a href="#/" aria-label="Back to all designs">
-              <ArrowLeft />
+              <span className="studio-editor-back-icon"><ArrowLeft aria-hidden strokeWidth={2.25} /></span>
               <span>All designs</span>
             </a>
           </Button>

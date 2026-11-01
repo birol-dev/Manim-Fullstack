@@ -117,6 +117,16 @@ def test_favourites_survive_a_restart_and_come_back_from_the_route(api):
     assert api.get("/api/studio/preferences").json()["favourite_designs"] == body["favourite_designs"]
 
 
+def test_setup_dismissal_survives_restart(store, tmp_path):
+    assert store.update({"setup_dismissed": True}) == {"setup_dismissed": True}
+    assert PreferenceStore(str(tmp_path)).read() == {"setup_dismissed": True}
+    for invalid in ("true", 1, None):
+        with pytest.raises(TemplateError) as info:
+            store.update({"setup_dismissed": invalid})
+        assert info.value.errors[0]["field"] == "setup_dismissed"
+    assert store.read() == {"setup_dismissed": True}
+
+
 def test_setup_preferences_validate_and_persist(store):
     values = store.update({"onboarding_done": True, "brand_name": "Ana's Studio", "brand_color": "2563eb",
                            "default_format": "mp4", "default_theme": "midnight"})

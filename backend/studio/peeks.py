@@ -13,14 +13,14 @@ FPS = 15
 MAX_DURATION = 4.5
 MAX_FILE_BYTES = 300_000
 MAX_TOTAL_BYTES = 8_000_000
-# 29 presets currently: <= 7.25 MB of movies, leaving room for the manifest.
+# The baker lowers the per-movie budget as the catalog grows to keep the whole folder bounded.
 TARGET_FILE_BYTES = 250_000
 
 
-def peek_key(service, card, settings):
-    spec, params, validated, _ = service._validate(card["template"], card["params"], settings)
+def peek_key(service, card, settings, *, job=None, files=None):
+    spec, params, validated, _ = job if job is not None else service._validate(card["template"], card["params"], settings)
     return service._preview_key(spec, params, validated,
-                                f"peek-v{VERSION}-{FPS}-{MAX_DURATION}-{TARGET_FILE_BYTES}", LONG_SIDE)
+                                f"peek-v{VERSION}-{FPS}-{MAX_DURATION}-{TARGET_FILE_BYTES}", LONG_SIDE, files=files)
 
 
 def read_manifest(folder=None):
@@ -31,8 +31,8 @@ def read_manifest(folder=None):
         return {}
 
 
-def current_path(service, card, settings, manifest, folder=None):
-    key = peek_key(service, card, settings)
+def current_path(service, card, settings, manifest, folder=None, *, job=None, files=None):
+    key = peek_key(service, card, settings, job=job, files=files)
     name = f'{card["template"]}/{card["id"]}'
     path = Path(folder or PEEKS_DIR) / f"{key}.mp4"
     try:

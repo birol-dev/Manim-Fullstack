@@ -12,10 +12,10 @@ from tests.studio_motion_visuals import probe_motion
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is needed to decode motion frames")
 
 CASES = [("announcement", "weekend-sale"), ("celebration", "happy-birthday"),
-         ("celebration", "followers-milestone"), ("countdown", "classroom-timer"),
+         ("countdown", "classroom-timer"),
          ("countdown", "break-timer"), ("countdown", "launch-countdown"),
          ("quiz", "general-knowledge"), ("quote", "inspirational-quote"),
-         ("year_in_review", "personal-year")]
+         ("year_in_review", "small-business-year")]
 
 
 @pytest.mark.parametrize("template,preset", CASES)

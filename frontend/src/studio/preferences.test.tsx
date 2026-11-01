@@ -53,6 +53,28 @@ function servePreferences(body: unknown) {
 }
 
 describe("workspace preferences", () => {
+  it("dismisses setup and keeps it hidden after reopening the workspace", async () => {
+    servePreferences({ onboarding_done: true });
+    await loadPreferences(500);
+    const view = render(<StudioApp />);
+    const dismiss = await screen.findByRole("button", { name: "Dismiss setup" });
+    expect(screen.queryByText("Four small steps and you're ready to make videos.")).not.toBeInTheDocument();
+    await userEvent.click(dismiss);
+    expect(screen.queryByRole("region", { name: /Finish your setup/ })).not.toBeInTheDocument();
+    expect(readPreference("setup_dismissed")).toBe(true);
+    await flushPreferences();
+    expect(studio.calls.filter((call) => call.method === "PATCH").at(-1)?.body).toEqual({ setup_dismissed: true });
+
+    view.unmount();
+    resetPreferencesForTests();
+    localStorage.clear();
+    servePreferences({ onboarding_done: true, setup_dismissed: true });
+    await loadPreferences(500);
+    render(<StudioApp />);
+    await screen.findByRole("link", { name: "Browse templates" });
+    expect(screen.queryByRole("region", { name: /Finish your setup/ })).not.toBeInTheDocument();
+  });
+
   it("restores favourites from the workspace and persists heart changes", async () => {
     servePreferences({ favourite_designs: ["countdown/classroom-timer"] });
     await loadPreferences(500);

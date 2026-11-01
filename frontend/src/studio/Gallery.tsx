@@ -13,7 +13,7 @@ import { inputClass, SectionHeading } from "./components";
 import { ExportsPage } from "./exports";
 import { useExports, useNearViewport, usePoster } from "./hooks";
 import { cardSettings, filterCards, timeAgo, toDate } from "./options";
-import { readBrandName, readFavouriteDesigns, toggleFavouriteDesign } from "./preferences";
+import { readBrandName, readFavouriteDesigns, readPreference, toggleFavouriteDesign, writePreference } from "./preferences";
 import { OpenProjectButton } from "./Portable";
 import { dragHasFiles, usePortableOpener } from "./portableFile";
 import { ProjectMenu } from "./ProjectMenu";
@@ -26,14 +26,21 @@ import "./home.css";
 
 const ASPECT_RATIO: Record<Aspect, string> = { "16:9": "16 / 9", "9:16": "9 / 16", "1:1": "1 / 1", "4:5": "4 / 5" };
 
-function PosterImage({ url, response, error, peek }: { url?: string | null; response?: PreviewResponse | null; error?: unknown; peek?: ReactNode }) {
+function PosterImage({ url, response, error, peek, priority = false, onUnavailable }: {
+  url?: string | null;
+  response?: Pick<PreviewResponse, "url" | "width" | "height"> | null;
+  error?: unknown;
+  peek?: ReactNode;
+  priority?: boolean;
+  onUnavailable?: () => void;
+}) {
   const source = url || response?.url;
   const [loaded, setLoaded] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const ready = loaded === source;
   if (source && failed !== source) return <>
     <span className="studio-poster-artwork">
-      <img src={apiUrl(source)} alt="" width={response?.width} height={response?.height} loading="lazy" decoding="async" className="studio-poster-image" data-ready={ready} onLoad={() => setLoaded(source)} onError={() => setFailed(source)} />
+      <img src={apiUrl(source)} alt="" width={response?.width} height={response?.height} loading={priority ? "eager" : "lazy"} fetchPriority={priority ? "high" : undefined} decoding="async" className="studio-poster-image" data-ready={ready} onLoad={() => setLoaded(source)} onError={() => { setFailed(source); onUnavailable?.(); }} />
       {peek}
     </span>
     <img src={apiUrl(source)} alt="" aria-hidden loading="lazy" decoding="async" className="studio-poster-ambient" data-ready={ready} />
@@ -43,13 +50,16 @@ function PosterImage({ url, response, error, peek }: { url?: string | null; resp
   return <span className="studio-shimmer absolute inset-0" aria-hidden />;
 }
 
-function Poster({ card, template, peek, aspect }: { card: Card; template: TemplateInfo | undefined; peek: ReactNode; aspect?: Aspect }) {
+function Poster({ card, template, peek, aspect, priority = false }: { card: Card; template: TemplateInfo | undefined; peek: ReactNode; aspect?: Aspect; priority?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const near = useNearViewport(ref);
+  const [failedAsset, setFailedAsset] = useState<string | null>(null);
   const settings = { ...cardSettings(card, template), ...(aspect ? { aspect } : {}) };
-  const request = near ? { template: card.template, params: card.params, settings, mode: "poster" as const } : null;
+  const asset = card.posters?.[settings.aspect ?? template?.default_aspect ?? "16:9"];
+  const baked = asset && asset.url !== failedAsset ? asset : null;
+  const request = !baked && near ? { template: card.template, params: card.params, settings, mode: "poster" as const } : null;
   const { response, error } = usePoster(request);
-  return <div ref={ref} className="studio-poster-well" style={aspect ? { aspectRatio: ASPECT_RATIO[aspect] } : undefined}><PosterImage response={response} error={error} peek={peek} /></div>;
+  return <div ref={ref} className="studio-poster-well" style={aspect ? { aspectRatio: ASPECT_RATIO[aspect] } : undefined}><PosterImage response={baked ?? response} error={error} peek={peek} priority={priority} onUnavailable={baked ? () => setFailedAsset(baked.url) : undefined} /></div>;
 }
 
 const designKey = (card: Card) => `${card.template}/${card.id}`;
@@ -190,15 +200,16 @@ function HomeHero({ catalog }: { catalog: Catalog }) {
         className={`studio-home-frame studio-home-frame-${index}`}
         style={{ "--frame-tilt": `${HERO_TILTS[index] ?? 0}deg` } as CSSProperties}
       >
-        <Poster card={card} template={template} aspect={aspect} peek={null} />
+        <Poster card={card} template={template} aspect={aspect} peek={null} priority />
       </figure>)}
     </div>}
   </section>;
 }
 
-/** Four small steps, hidden for good once all of them are done. */
+/** Four small steps, hidden once completed or dismissed. */
 function SetupTray({ projects, exports }: { projects: ProjectSummary[] | null; exports: ExportJob[] | null }) {
   const { status } = useSetupStatus();
+  const [dismissed, setDismissed] = useState(() => readPreference("setup_dismissed") === true);
   const brandName = readBrandName();
   const steps = [
     { id: "video", title: "Make your first video", line: "Pick a template and make it yours.", done: (projects?.length ?? 0) > 0, href: "#/templates" },
@@ -207,12 +218,16 @@ function SetupTray({ projects, exports }: { projects: ProjectSummary[] | null; e
     { id: "name", title: "Tell us your name", line: "So we know what to call you.", done: !!brandName, href: "#/settings/profile" },
   ];
   const done = steps.filter((step) => step.done).length;
-  if (done === steps.length) return null;
+  if (dismissed || done === steps.length) return null;
   const next = steps.find((step) => !step.done)?.id;
   return <section className="studio-home-setup" aria-labelledby="studio-home-setup-title">
     <div className="studio-home-setup-head">
       <h2 id="studio-home-setup-title">Finish your setup — {done}/4</h2>
-      <p>Four small steps and you're ready to make videos.</p>
+      <button type="button" className="studio-shell-icon studio-home-setup-close" aria-label="Dismiss setup" title="Dismiss setup" onClick={() => {
+        writePreference("setup_dismissed", true);
+        setDismissed(true);
+        document.getElementById("studio-main")?.focus({ preventScroll: true });
+      }}><X aria-hidden /></button>
     </div>
     <ul className="studio-home-setup-grid">
       {steps.map((step, index) => <li key={step.id}>

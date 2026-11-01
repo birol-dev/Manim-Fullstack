@@ -9,7 +9,7 @@ META = TemplateMeta(
     id="year_in_review",
     title="Year in numbers",
     summary="Your year as a few big numbers that count up, then one recap to share.",
-    category="celebrate",
+    category="numbers",
     when_to_use="A year-end (or season, or anniversary) recap for a person, family, team or small business: "
                 "3 to 6 numbers with a short label each (books read, km run, coffees served, followers), "
                 "the year big at the start and a recap grid of all numbers at the end.",
@@ -67,24 +67,6 @@ class Params(TemplateParams):
 
 PRESETS = [
     Preset(
-        id="personal-year", title="My year in numbers", summary="Books, runs, coffees and trips: your year, counted.",
-        params={
-            "year": "2026",
-            "title": "My year in *numbers*",
-            "name": "@maya.reads",
-            "stats": [
-                {"value": 38, "label": "books read", "icon": "book-open"},
-                {"value": 1240, "label": "kilometres run", "suffix": "km", "icon": "footprints"},
-                {"value": 612, "label": "cups of coffee", "icon": "coffee"},
-                {"value": 9, "label": "countries visited", "icon": "plane"},
-            ],
-            "closing": "Here's to *2027*!",
-            "style": "moments",
-        },
-        settings={"theme": "pastel"},
-        tags=["personal", "goals", "reading", "running"],
-    ),
-    Preset(
         id="small-business-year", title="Our year at the shop", summary="Thank your customers with the numbers "
                                                                         "behind your year.",
         params={
@@ -102,65 +84,5 @@ PRESETS = [
         },
         settings={"theme": "clean"},
         tags=["business", "cafe", "shop", "customers", "thank you"],
-    ),
-    Preset(
-        id="creator-year", title="Creator year", summary="Followers, videos and views, with short numbers like 18.6M.",
-        params={
-            "year": "2026",
-            "title": "My year on camera",
-            "name": "@leo.makes",
-            "stats": [
-                {"value": 128400, "label": "new followers", "icon": "users", "compact": True},
-                {"value": 214, "label": "videos posted", "icon": "video"},
-                {"value": 18600000, "label": "views", "icon": "trending-up", "compact": True},
-                {"value": 2300000, "label": "likes", "icon": "heart", "compact": True},
-                {"value": 12, "label": "brand collabs", "icon": "star"},
-            ],
-            "closing": "Thank you for *watching*. More soon!",
-            "style": "moments",
-        },
-        settings={"theme": "pop", "energy": "punchy"},
-        tags=["creator", "followers", "youtube", "tiktok", "instagram"],
-    ),
-    Preset(
-        id="fitness-year", title="Training year", summary="Kilometres, workouts and personal bests from your "
-                                                          "training log.",
-        params={
-            "year": "2026",
-            "title": "A year of *training*",
-            "name": "Coach Deniz",
-            "stats": [
-                {"value": 1842, "label": "kilometres run", "suffix": "km", "icon": "footprints"},
-                {"value": 186, "label": "workouts", "icon": "dumbbell"},
-                {"value": 4210, "label": "kilometres on the bike", "suffix": "km", "icon": "bike"},
-                {"value": 312, "label": "hours of training", "suffix": "h", "icon": "flame"},
-                {"value": 3, "label": "marathons finished", "icon": "trophy"},
-                {"value": 14, "label": "personal bests", "icon": "trending-up"},
-            ],
-            "closing": "Stronger in *2027*",
-            "style": "moments",
-        },
-        settings={"theme": "midnight"},
-        tags=["fitness", "running", "gym", "sport", "training"],
-    ),
-    Preset(
-        id="family-travel-year", title="Family year", summary="Trips, flights, photos and pizza nights: a year "
-                                                              "to remember.",
-        params={
-            "year": "2026",
-            "title": "Our family year",
-            "name": "The Kaya family",
-            "stats": [
-                {"value": 7, "label": "countries explored", "icon": "globe"},
-                {"value": 23, "label": "flights taken", "icon": "plane"},
-                {"value": 4860, "label": "photos taken", "icon": "camera"},
-                {"value": 14, "label": "mountains climbed", "icon": "mountain"},
-                {"value": 52, "label": "pizza nights", "icon": "pizza"},
-            ],
-            "closing": "Same time *next year*?",
-            "style": "moments",
-        },
-        settings={"theme": "chalk", "energy": "calm"},
-        tags=["family", "travel", "holiday", "memories"],
     ),
 ]

@@ -8,8 +8,9 @@ import shutil
 
 from .service import StudioService
 from .storage import STUDIO_DIR
+from . import posters
 
-POSTERS_DIR = Path(STUDIO_DIR) / "assets" / "posters"
+POSTERS_DIR = posters.POSTERS_DIR
 BAKE_COMMAND = "python -m backend.studio.bake_posters"
 
 
@@ -27,10 +28,9 @@ def check_baked(service, folder=POSTERS_DIR):
     except (OSError, ValueError):
         manifest = {}
     problems = []
-    for card, settings in preset_requests(service):
+    for name, card, settings in posters.gallery_requests(service._catalog_sync()):
         spec, params, validated, _ = service._validate(card["template"], card["params"], settings)
         key = service._preview_key(spec, params, validated, "poster", service.poster_short)
-        name = f'{card["template"]}/{card["id"]}'
         if manifest.get(name) != key or not (Path(folder) / f"{key}.png").is_file():
             problems.append(name)
     return problems
@@ -40,20 +40,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path,
                         default=Path(STUDIO_DIR).parents[1] / "workspace" / "studio" / "tmp" / "poster-bake")
+    parser.add_argument("--posters-only", action="store_true", help="Bake thumbnails and hero shapes without rebuilding motion clips.")
     args = parser.parse_args()
     from .bake_peeks import bake as bake_peeks
     POSTERS_DIR.mkdir(parents=True, exist_ok=True)
     manifest = {}
     service = StudioService(str(args.work_dir))
     try:
-        for card, settings in preset_requests(service):
+        for name, card, settings in posters.gallery_requests(service._catalog_sync()):
             result = service.preview_sync(card["template"], card["params"], settings)
             key = Path(result["path"]).stem
             shutil.copyfile(result["path"], POSTERS_DIR / f"{key}.png")
-            name = f'{card["template"]}/{card["id"]}'
             manifest[name] = key
             print(f"Baked {name}: {key}", flush=True)
-        bake_peeks(service)
+        if not args.posters_only:
+            bake_peeks(service)
     finally:
         service.shutdown_sync()
     temporary = POSTERS_DIR / ".manifest.json"
