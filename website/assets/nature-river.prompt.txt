@@ -1,0 +1,8 @@
+Use case: photorealistic-natural
+Asset type: source photograph for an interactive shader-effects website.
+Primary request: an original, striking nature photograph that remains recognizable when transformed with glass refraction, water distortion, and paper-texture shaders.
+Scene: a clear emerald alpine river winding between mossy rocks in a lush temperate forest, a small waterfall in the middle distance, tall dark evergreen trees, distant misty blue mountains visible through an opening.
+Style/medium: refined editorial landscape photography with believable natural texture, not a painting.
+Composition/framing: wide 16:9 landscape, an especially recognizable large pale rock and fern in the lower foreground, river leading through the middle, varied fine foliage and broad calm water areas so distortion effects are easy to see; full-bleed image, no borders.
+Lighting/mood: soft early morning light with a few warm sunlit highlights and subtle atmospheric mist. Rich green, teal water, natural blue-gray distance.
+Constraints: one continuous scene. No people, buildings, lettering, logos, UI, collage, artificial shader effects, or watermark.
