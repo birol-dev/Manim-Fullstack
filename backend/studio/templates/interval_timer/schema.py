@@ -16,7 +16,8 @@ META = TemplateMeta(
 
 class Phase(Item):
     label: str = text("Work", title="Step name", max_length=28)
-    seconds: float = duration(40, title="Step length", ge=1, le=3600)
+    seconds: float = duration(40, title="Step length", ge=1, le=3600,
+        help="How long this step runs before the next one begins.")
 
 
 class Params(TemplateParams):
@@ -26,7 +27,7 @@ class Params(TemplateParams):
         description="Two to six steps, played in order. Each step has a name and duration.")
     rounds: int = integer(6, title="Rounds", ge=1, le=30)
     end_with_first: bool = toggle(True, title="Finish after the first step of the last round",
-        help="Skip the final rest. Turn off to complete every step of the last round.")
+        help="Skip the final rest. Turn off to complete the last round.")
     finish_text: str = text("Session complete", title="Finish message", max_length=40)
 
     @model_validator(mode="after")

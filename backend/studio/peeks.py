@@ -32,8 +32,10 @@ def read_manifest(folder=None):
 
 
 def current_path(service, card, settings, manifest, folder=None, *, job=None, files=None):
-    key = peek_key(service, card, settings, job=job, files=files)
     name = f'{card["template"]}/{card["id"]}'
+    if name not in manifest:
+        return None
+    key = peek_key(service, card, settings, job=job, files=files)
     path = Path(folder or PEEKS_DIR) / f"{key}.mp4"
     try:
         if manifest.get(name) == key and path.is_file() and 0 < path.stat().st_size <= MAX_FILE_BYTES:

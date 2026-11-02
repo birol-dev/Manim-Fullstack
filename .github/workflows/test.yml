@@ -33,7 +33,7 @@ jobs:
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi uvicorn psutil pydantic python-multipart httpx "mcp>=2.3,<3" segno "openpyxl>=3.1,<4" "pillow<13" numpy pyflakes pytest pytest-asyncio pytest-cov pytest-timeout
+          pip install fastapi uvicorn psutil pydantic python-multipart httpx "mcp>=2.3,<3" segno "openpyxl>=3.1,<4" "pillow<13" numpy av pyflakes pytest pytest-asyncio pytest-cov pytest-timeout
 
       - name: Lint
         run: python -m pyflakes backend tests run.py

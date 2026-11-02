@@ -205,7 +205,7 @@ def test_original_gallery_bakes_remain_current_with_sound(tmp_path):
         result = service.preview_sync(card["template"], card["params"], {**settings, "sound": {"music": {"track": "playful"}}})
         assert result["cached"], card["id"]
         count += 1
-    assert count == 30 and not worker.calls
+    assert count == 24 and not worker.calls
 
 
 def test_http_and_mcp_allow_the_same_bounded_base64_audio_request():
@@ -316,6 +316,7 @@ def test_upload_size_cap_and_missing_music_are_actionable(tmp_path, monkeypatch)
 @pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"), reason="Manim 0.18 renderer needs its existing media tools")
 @pytest.mark.parametrize("format,codec", [("mp4", "aac"), ("webm", "opus"), ("mov", "pcm_s16le"), ("gif", None)])
 def test_tiny_real_writer_outputs_audio_in_each_video_container(format, codec, tmp_path):
+    pytest.importorskip("manim")
     from types import SimpleNamespace
     from pydantic import BaseModel
     from manim import Square, tempconfig

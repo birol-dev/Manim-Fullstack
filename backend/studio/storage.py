@@ -236,7 +236,7 @@ def visual_source(data: bytes) -> bytes:
 def _stat_into(digest, path: str, visual_only=False) -> None:
     try:
         with open(path, "rb") as source:
-            if path.endswith((".py", ".svg", ".json", ".txt", ".md")):
+            if path.endswith((".py", ".svg", ".json", ".txt", ".md", ".conf")):
                 # Git may check source out as LF or CRLF; neither changes the render.
                 data = source.read().replace(b"\r\n", b"\n")
                 digest.update(visual_source(data) if visual_only and path.endswith(".py") else data)

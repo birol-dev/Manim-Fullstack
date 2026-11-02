@@ -48,7 +48,7 @@ def test_catalog_shape(svc):
     assert {p["id"] for p in countdown["presets"]} >= {"launch-countdown"}
     timers = next(s for s in cat["sections"] if s["id"] == "timers")
     card = next(c for c in timers["cards"] if c["id"] == "launch-countdown")
-    assert set(card) == {"id", "template", "title", "summary", "category", "params", "settings", "tags", "peek_url"}
+    assert set(card) == {"id", "template", "title", "summary", "category", "params", "settings", "tags", "peek_url", "posters"}
     assert card["peek_url"] is None or (card["peek_url"].startswith("/api/studio/peeks/")
                                        and card["peek_url"].endswith(".mp4"))
     theme = cat["themes"][0]
@@ -67,8 +67,8 @@ def test_catalog_matches_registry(svc):
     cat = run(svc.catalog())
 
     def without_peek(card):
-        assert "peek_url" in card
-        return {key: value for key, value in card.items() if key != "peek_url"}
+        assert "peek_url" in card and "posters" in card
+        return {key: value for key, value in card.items() if key not in {"peek_url", "posters"}}
 
     sections = [{"id": section["id"], "title": section["title"],
                  "cards": [without_peek(card) for card in section["cards"]]} for section in cat["sections"]]
@@ -282,6 +282,17 @@ def test_tree_fingerprint_follows_edits(tmp_path):
     (tmp_path / "__pycache__" / "a.cpython-312.pyc").write_bytes(b"junk")
     assert tree_fingerprint(str(tmp_path)) == before
     (tmp_path / "a.py").write_text("x = 22")
+    assert tree_fingerprint(str(tmp_path)) != before
+
+
+@pytest.mark.parametrize("extension", [".py", ".svg", ".json", ".txt", ".md", ".conf"])
+def test_text_fingerprints_ignore_checkout_line_endings(tmp_path, extension):
+    source = tmp_path / f"source{extension}"
+    source.write_bytes(b"first line\nsecond line\n")
+    before = tree_fingerprint(str(tmp_path))
+    source.write_bytes(b"first line\r\nsecond line\r\n")
+    assert tree_fingerprint(str(tmp_path)) == before
+    source.write_bytes(b"first line\r\nchanged line\r\n")
     assert tree_fingerprint(str(tmp_path)) != before
 
 

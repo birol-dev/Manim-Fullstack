@@ -10,7 +10,7 @@ from studio.themes import THEMES
 
 
 def test_chart_presets_and_plain_validation():
-    assert len(PRESETS) == 3
+    assert len(PRESETS) == 7
     cards = next(s["cards"] for s in registry.catalog()["sections"] if s["id"] == "numbers")
     assert {c["id"] for c in cards if c["template"] == META.id} == {p.id for p in PRESETS}
     for preset in PRESETS:
@@ -197,6 +197,7 @@ def test_negative_and_zero_bar_labels_stay_outside_bars_and_clear_of_axis(make_s
 @pytest.mark.parametrize("accent", ["#E11D48", "#123456", "#FFFF00", "#FFFFFF", "#000000", "#808080"])
 @pytest.mark.parametrize("dark", [False, True])
 def test_pie_palette_has_distinct_neighbors_and_readable_ink(accent, dark):
+    pytest.importorskip("manim")
     from studio.templates.chart.parts import contrast, ink_on, slice_colors
     for count in range(2, 13):
         colors = slice_colors(accent, count, dark)

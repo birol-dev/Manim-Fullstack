@@ -35,6 +35,8 @@ it("shows the measured length and follows a param edit without rendering", async
   const user = userEvent.setup();
   open();
   expect(await screen.findByText("16:9 · 5 min", {}, { timeout: 2000 })).toBeInTheDocument();
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/length"
+    && lengthOf(call.body) === 300)).toBe(true));
 
   const timer = screen.getByRole("textbox", { name: "Timer length" });
   await user.clear(timer);
@@ -43,7 +45,8 @@ it("shows the measured length and follows a param edit without rendering", async
   expect(await screen.findByText("16:9 · 1 min", {}, { timeout: 2000 })).toBeInTheDocument();
   expect(screen.queryByText("16:9 · 5 min")).not.toBeInTheDocument();
   // The caption comes from the timing pass for the edited params.
-  expect(studio.calls.filter((call) => call.path === "/api/studio/length").length).toBeGreaterThanOrEqual(2);
+  await waitFor(() => expect(studio.calls.some((call) => call.path === "/api/studio/length"
+    && lengthOf(call.body) === 60)).toBe(true));
 });
 
 it("updates the steps caption from 2 to 7 steps within one debounce", async () => {
