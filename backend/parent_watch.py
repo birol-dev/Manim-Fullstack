@@ -7,7 +7,9 @@ MANIM_PARENT_WATCH=watcher). The executor starts this script in a new session
 (POSIX) so the command shares its process group: cancel() still signals the
 whole group, and when the parent disappears this script kills the group, or on
 Windows the command's process tree. The command inherits stdin/stdout/stderr,
-so its output reaches the backend unchanged. Exits with the command's code.
+so its output reaches the backend unchanged (on Windows the three handles are
+handed to Popen explicitly, because Windows does not inherit them otherwise).
+Exits with the command's code.
 """
 
 import os
@@ -81,6 +83,11 @@ def main(argv: list) -> int:
         kwargs["preexec_fn"] = _restore_signals
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        # Without STARTF_USESTDHANDLES Windows gives the child no std handles at
+        # all, so the backend's pipes would see nothing. pythonw or a detached
+        # process can have None streams; pass only the real ones.
+        handles = {"stdin": sys.stdin, "stdout": sys.stdout, "stderr": sys.stderr}
+        kwargs.update({name: stream for name, stream in handles.items() if stream is not None})
     child = subprocess.Popen(argv[3:], **kwargs)
     while True:
         try:

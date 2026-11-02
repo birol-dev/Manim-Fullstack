@@ -15,6 +15,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
+    data-ui="dialog-overlay"
     className={cn(
       "fixed inset-0 z-50 bg-black/65 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
       className,
@@ -25,6 +26,7 @@ const DialogOverlay = React.forwardRef<
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 interface DialogContentProps extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
+  variant?: "center" | "sheet";
   hideClose?: boolean;
   /** Where focus goes on close when the element that opened the dialog is gone (e.g. a deleted row). */
   onFocusFallback?: () => void;
@@ -46,7 +48,7 @@ if (typeof document !== "undefined") {
 }
 
 const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
-  ({ className, children, hideClose = false, onOpenAutoFocus, onCloseAutoFocus, onFocusFallback, ...props }, ref) => {
+  ({ className, children, variant = "center", hideClose = false, onOpenAutoFocus, onCloseAutoFocus, onFocusFallback, ...props }, ref) => {
     // Dialogs here are opened from state, not a Radix Trigger, so Radix has no
     // trigger to return focus to. Remember what had focus and go back to it.
     const opener = React.useRef<HTMLElement | null>(null);
@@ -70,6 +72,8 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
         <DialogOverlay />
         <DialogPrimitive.Content
           ref={contentRef}
+          data-ui="dialog-content"
+          data-variant={variant}
           onOpenAutoFocus={(event) => {
             const active = document.activeElement;
             const content = event.currentTarget as HTMLElement | null;
@@ -100,7 +104,10 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
             window.setTimeout(recover, 120);
           }}
           className={cn(
-            "fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-xl border border-line-strong bg-surface p-5 text-fg shadow-popover duration-150 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-[0.97] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-[0.97]",
+            "fixed z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-md flex-col gap-4 overflow-hidden rounded-xl border border-line-strong bg-surface p-5 text-fg shadow-popover duration-150 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0",
+            variant === "sheet"
+              ? "inset-y-4 right-4 left-auto h-[calc(100dvh-2rem)] data-[state=open]:slide-in-from-right-4 data-[state=closed]:slide-out-to-right-4"
+              : "left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 data-[state=open]:zoom-in-[0.97] data-[state=closed]:zoom-out-[0.97]",
             className,
           )}
           {...props}

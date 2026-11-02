@@ -1,0 +1,784 @@
+"""Export queue: one export at a time, in a background thread, each video in its own Manim process.
+
+    manim -r W,H --fps F [--format gif|webm|mov] [--transparent] --media_dir <job>/media \
+          backend/studio/runner.py StudioRender          (env COMPOSER_JOB=<job>/job.json)
+
+Videos run through ``executor.ManimExecutor`` (output streaming, progress parsing, the
+render timeout, process-tree cancel), with their own executor instance and job folder,
+so they never share the IDE's render queue or media folders. PNG exports are a
+full-resolution poster from the warm preview worker.
+
+State lives in memory and in a small JSON index (``workspace/studio/exports.json``)
+so the list survives a restart. A clean shutdown writes queued and rendering exports
+as ``queued`` with ``resume``; the next launch renders them again from the start.
+Exports a crashed or killed process left active come back as ``failed``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import secrets
+import shutil
+import sys
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Callable, Optional
+
+from .errors import BusyError, NotFoundError, StudioError
+from .compat import output_cli_args
+from .storage import STUDIO_DIR, utc_now
+
+BACKEND_DIR = os.path.dirname(STUDIO_DIR)
+if BACKEND_DIR not in sys.path:  # executor / file_ops are top-level backend modules
+    sys.path.insert(0, BACKEND_DIR)
+
+import file_ops  # noqa: E402
+
+logger = logging.getLogger("studio.exports")
+
+RUNNER_PATH = os.path.join(STUDIO_DIR, "runner.py")
+SCENE_NAME = "StudioRender"
+EXPORT_FORMATS = ("mp4", "gif", "webm", "mov", "png")
+ACTIVE = ("queued", "rendering")
+FINISHED = ("done", "failed", "cancelled")
+INTERRUPTED = "Interrupted: the app stopped before this export finished."
+RESUMING = "Waiting to continue"
+RESUME_FAILED = "Could not continue this export"
+_EXPORT_ID = re.compile(r"^[0-9a-f]{12}$")
+_ERROR_LINE = re.compile(r"\b[A-Za-z_][\w.]*(?:Error|Exception)\b")
+_BOX_CHARS = "│┃╭╰─━┏┗┓┛╮╯"
+PROGRESS_PREFIX = "@@studio-export "
+DRAWING = "Drawing frames…"
+FINISHING = "Finishing your video…"
+RENDER_PERCENT = 95  # leave room for muxing/conversion and publishing the file
+
+
+class FrameEstimate:
+    """Estimate from measured frame throughput, excluding startup and timing setup."""
+
+    def __init__(self):
+        self.samples = deque()
+
+    def update(self, frames: int, total: int, fps: int) -> Optional[str]:
+        if frames <= 0:
+            return None  # exclude scene/font setup before the first completed frame
+        now = time.monotonic()
+        if self.samples and frames <= self.samples[-1][1]:
+            return None
+        self.samples.append((now, frames))
+        while len(self.samples) > 2 and now - self.samples[1][0] > 12:
+            self.samples.popleft()
+        elapsed = now - self.samples[0][0]
+        drawn = frames - self.samples[0][1]
+        if len(self.samples) < 4 or elapsed < 3 or drawn < max(10, fps) or frames >= total:
+            return None
+        # An initial average over several seconds avoids extrapolating the first
+        # frame (font/layout startup) or a single fast repeated frame.
+        seconds = (total - frames) * elapsed / drawn
+        if seconds < 60:
+            return "Less than a minute left"
+        return f"About {max(1, round(seconds / 60))} min left"
+
+
+class ConflictError(StudioError):
+    status = 409
+
+
+class ExportCancelled(Exception):
+    pass
+
+
+class ExportFailed(Exception):
+    pass
+
+
+@dataclass
+class VideoJob:
+    job_dir: str
+    job_file: str
+    media_dir: str
+    width: int
+    height: int
+    fps: int
+    format: str
+    transparent: bool
+    timeout: float
+
+
+def default_render_timeout() -> float:
+    from executor import DEFAULT_RENDER_TIMEOUT_SECONDS  # reads MANIM_RENDER_TIMEOUT
+
+    return float(DEFAULT_RENDER_TIMEOUT_SECONDS)
+
+
+class ManimVideoRunner:
+    """Renders one VideoJob with ManimExecutor. ``run`` blocks; ``cancel`` may come from any thread."""
+
+    def __init__(self, command=None, app_root: Optional[str] = None):
+        self.command = list(command) if command else [sys.executable, "-m", "manim"]
+        self.app_root = app_root
+        self._guard = threading.Lock()
+        self._cancelled = False
+        self._loop = None
+        self._executor = None
+
+    def run(self, job: VideoJob, on_progress: Callable, on_log: Callable) -> str:
+        return asyncio.run(self._run(job, on_progress, on_log))
+
+    def cancel(self) -> None:
+        with self._guard:
+            self._cancelled = True
+            loop, executor = self._loop, self._executor
+        if loop is not None and executor is not None:
+            try:
+                asyncio.run_coroutine_threadsafe(executor.cancel(), loop)
+            except RuntimeError:
+                pass  # the loop already finished
+
+    @staticmethod
+    def args(job: VideoJob) -> list:
+        extra = ["-r", f"{job.width},{job.height}", "--fps", str(job.fps), "--media_dir", job.media_dir,
+                 "--disable_caching", *output_cli_args(job.format, job.transparent)]
+        return extra
+
+    async def _run(self, job: VideoJob, on_progress, on_log) -> str:
+        from executor import ManimExecutor, media_file_is_complete
+
+        executor = ManimExecutor(job.job_dir, render_timeout=job.timeout, app_root=self.app_root)
+        with self._guard:
+            if self._cancelled:
+                raise ExportCancelled()
+            self._loop, self._executor = asyncio.get_running_loop(), executor
+        ready = {}
+        lines = deque(maxlen=60)
+        frame_protocol = False
+
+        async def events(event):
+            nonlocal frame_protocol
+            if self._cancelled:
+                # A cancel that arrived before Manim was spawned: the executor stops it at once.
+                await executor.cancel()
+            kind = event.get("type")
+            if kind == "progress" and not frame_protocol:
+                on_progress(event.get("animation"), event.get("percent", 0))
+            elif kind == "file_ready":
+                ready["path"] = event.get("abs_path")
+            elif kind in ("log", "error"):
+                message = event.get("message") or ""
+                if message.startswith(PROGRESS_PREFIX):
+                    try:
+                        payload = json.loads(message[len(PROGRESS_PREFIX):])
+                        if (payload["phase"] not in ("drawing", "finishing")
+                                or type(payload["rendered_frames"]) is not int
+                                or type(payload["total_frames"]) is not int
+                                or payload["rendered_frames"] < 0 or payload["total_frames"] <= 0):
+                            raise ValueError("Invalid frame progress")
+                    except (ValueError, KeyError, TypeError):
+                        pass  # malformed telemetry remains in the diagnostic log
+                    else:
+                        frame_protocol = True
+                        on_progress(payload, None)
+                        return
+                lines.append(message)
+                on_log(message)
+
+        try:
+            result = await executor.execute(self.command, RUNNER_PATH, SCENE_NAME, "m", False, events,
+                                            output_stem=os.path.splitext(os.path.basename(RUNNER_PATH))[0],
+                                            extra_args=self.args(job), extra_env={"COMPOSER_JOB": job.job_file})
+        finally:
+            with self._guard:
+                self._loop = self._executor = None
+        status = result.get("status")
+        if status == "cancelled" or self._cancelled:
+            raise ExportCancelled()
+        if status == "timeout":
+            raise ExportFailed(f"The export took longer than {job.timeout:.0f} s and was stopped.")
+        if not result.get("success"):
+            raise ExportFailed(self.failure_message(lines, result))
+        path = ready.get("path") or find_output(job.media_dir)
+        if not path or not media_file_is_complete(path):
+            raise ExportFailed("Manim finished, but the video file is missing or incomplete.")
+        return path
+
+    @staticmethod
+    def failure_message(lines, result: dict) -> str:
+        for line in reversed(lines):
+            text = line.strip()
+            if text and text[0] not in _BOX_CHARS and _ERROR_LINE.search(text):
+                return text[:500]
+        if result.get("exit_code") is not None:
+            return f"Manim exited with code {result['exit_code']}."
+        return result.get("error") or "The export failed."
+
+
+def find_output(media_dir: str) -> Optional[str]:
+    """Newest StudioRender.* video (or gif) under *media_dir*, ignoring partial movie files.
+
+    Manim 0.22 versions a default-named GIF ("StudioRender_ManimCE_v0.22.1.gif"),
+    so a plain stem check would miss the one artifact this run did write.
+    """
+    best = None
+    for dirpath, dirnames, filenames in os.walk(media_dir):
+        dirnames[:] = [d for d in dirnames if d != "partial_movie_files"]
+        for name in filenames:
+            stem, ext = os.path.splitext(name)
+            named = stem == SCENE_NAME or stem.startswith(f"{SCENE_NAME}_ManimCE_")
+            if named and ext.lower() in (".mp4", ".mov", ".webm", ".gif"):
+                path = os.path.join(dirpath, name)
+                mtime = os.path.getmtime(path)
+                if best is None or mtime > best[0]:
+                    best = (mtime, path)
+    return best[1] if best else None
+
+
+def public(record: dict) -> dict:
+    return {key: value for key, value in record.items() if not key.startswith("_")}
+
+
+def job_from_request(record: dict) -> dict:
+    """Rebuild the render job of a record from its stored request, or raise why it can't be."""
+    request = record.get("request")
+    if not isinstance(request, dict):
+        raise ValueError("it has no saved request")
+    template = request.get("template")
+    if not isinstance(template, str) or not template:
+        raise ValueError("its saved request has no template")
+    params, settings = request.get("params"), request.get("settings")
+    if params is not None and not isinstance(params, dict):
+        raise ValueError("its saved parameters are not valid")
+    if settings is not None and not isinstance(settings, dict):
+        raise ValueError("its saved settings are not valid")
+    return {"template": template, "params": dict(params or {}), "settings": dict(settings or {})}
+
+
+class ExportManager:
+    """The export queue. Thread-safe; the service wraps it in async calls.
+
+    *plan(job)* returns the storyboard metadata of a job (``plays``, ``length``) or raises;
+    *still(job, width, height, out)* renders a full-size poster; *runner_factory()*
+    returns a fresh ``ManimVideoRunner``-like object per video; *resume_job(record)*
+    rebuilds the job of an export a clean shutdown handed back to the queue (raises when
+    its stored request can no longer be used).
+    """
+
+    def __init__(self, *, exports_dir: str, work_dir: str, index_path: str, media_root: str,
+                 plan: Callable, still: Callable, runner_factory: Callable, base_timeout: Optional[float] = None,
+                 max_active: int = 20, max_records: int = 200,
+                 resume_job: Optional[Callable[[dict], dict]] = None):
+        self.exports_dir = exports_dir
+        self.work_dir = work_dir
+        self.index_path = index_path
+        self.media_root = media_root
+        self.plan = plan
+        self.still = still
+        self.runner_factory = runner_factory
+        self.resume_job = resume_job or job_from_request
+        self.base_timeout = base_timeout
+        self.max_active = max_active
+        self.max_records = max_records
+        self._lock = threading.RLock()
+        self._wake = threading.Condition(self._lock)
+        self._records: dict = {}
+        self._sequence = 0  # queue order, needed when two records share a ``created`` stamp
+        self._loaded = False
+        self._stopping = False
+        self._thread: Optional[threading.Thread] = None
+        self._current = None  # (export id, runner)
+
+    # -- index -------------------------------------------------------------------
+    def _ensure_loaded(self) -> None:
+        resumed = False
+        with self._lock:
+            if self._loaded:
+                return
+            self._loaded = True
+            if os.path.isdir(self.work_dir):
+                for name in os.listdir(self.work_dir):
+                    if _EXPORT_ID.fullmatch(name):
+                        shutil.rmtree(os.path.join(self.work_dir, name), ignore_errors=True)
+            try:
+                with open(self.index_path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except FileNotFoundError:
+                return
+            except (OSError, ValueError) as exc:
+                logger.warning("studio: ignoring unreadable export index %s (%s)", self.index_path, exc)
+                return
+            changed = False
+            stored = data.get("exports") if isinstance(data, dict) else None
+            # Oldest first, so records created in the same instant keep their queue order.
+            for raw in reversed(stored if isinstance(stored, list) else []):
+                if not isinstance(raw, dict) or not _EXPORT_ID.match(str(raw.get("id", ""))):
+                    continue
+                record = dict(raw)
+                record["time_left"] = None  # estimates never survive a process restart
+                record["_queued"] = self._sequence  # ascending with age, like the queue
+                self._sequence += 1
+                if record.get("status") in ACTIVE:
+                    if record.get("resume") is True:
+                        try:
+                            record["_job"] = self.resume_job(record)
+                        except Exception as exc:  # noqa: BLE001 - the request can no longer be built
+                            reason = str(exc) or type(exc).__name__
+                            record.update(status="failed", progress=None, message=RESUME_FAILED,
+                                          error=f"{RESUME_FAILED}: {reason}", finished=utc_now())
+                            record.pop("resume", None)
+                        else:
+                            self._requeue_locked(record)
+                            resumed = True
+                        changed = True
+                    else:
+                        # No resume flag: a crash or a killed process. Never pretend it ran.
+                        record.update(status="failed", progress=None, message=INTERRUPTED, error=INTERRUPTED)
+                        changed = True
+                if record.get("status") == "done":
+                    filename = record.get("filename") or ""
+                    if os.path.basename(filename) != filename or not os.path.isfile(
+                            self._record_path(record)):
+                        changed = True
+                        continue  # the file was deleted
+                self._records[record["id"]] = record
+            if changed:
+                self._save_locked()
+        if resumed:
+            with self._lock:
+                self._ensure_thread()
+
+    def _requeue_locked(self, record: dict, save: bool = False) -> None:
+        """Hand an active record back to the queue for the next launch (or the next run)."""
+        if record.pop("_cancel", None):  # the person cancelled it before the stop: keep that
+            record.pop("resume", None)
+            record.update(status="cancelled", progress=None, message="Cancelled", time_left=None,
+                          finished=utc_now())
+            if save:
+                self._save_locked()
+            return
+        record.update(status="queued", progress=None, message=RESUMING, time_left=None, resume=True)
+        for key in ("phase", "rendered_frames", "total_frames", "error", "log", "finished", "started"):
+            record.pop(key, None)
+        if save:
+            self._save_locked()
+
+    def _prunable(self, record: dict) -> bool:
+        """Whether trimming may drop this record from the index.
+
+        Active records (queued, rendering) always stay: the person is watching them.
+        A ``done`` record whose file still exists in the exports folder is kept for good:
+        trimming history must never delete a file the person did not delete.
+        """
+        if record.get("status") in ACTIVE:
+            return False
+        if record.get("status") != "done":
+            return True
+        filename = record.get("filename")
+        if not filename or os.path.basename(filename) != filename:
+            return True
+        root = os.path.realpath(self.exports_dir)
+        path = os.path.realpath(self._record_path(record))
+        try:
+            inside = path != root and os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        return not (inside and os.path.isfile(path))
+
+    def _own_folder(self, record: dict) -> Optional[str]:
+        """A batch record's own folder, or None for the exports folder itself."""
+        folder = record.get("folder")
+        if (isinstance(folder, str) and folder and folder not in (".", "..")
+                and os.path.basename(folder) == folder):
+            return os.path.join(self.exports_dir, folder)
+        return None
+
+    def _record_dir(self, record: dict) -> str:
+        """The folder a record's file lives in (a batch's own folder, else the exports folder)."""
+        return self._own_folder(record) or self.exports_dir
+
+    def _record_path(self, record: dict) -> str:
+        return os.path.join(self._record_dir(record), record.get("filename") or "")
+
+    def _save_locked(self) -> None:
+        records = sorted(self._records.values(), key=lambda r: (r.get("created", ""), r.get("_queued", 0)),
+                         reverse=True)
+        prunable = 0
+        for record in records:
+            if not self._prunable(record):
+                continue
+            prunable += 1
+            if prunable > self.max_records:
+                self._records.pop(record["id"], None)  # oldest first; the file (if any) stays
+        records = [r for r in records if r["id"] in self._records]
+        data = json.dumps({"version": 1, "exports": [public(r) for r in records]}, indent=1).encode("utf-8")
+        try:
+            os.makedirs(os.path.dirname(self.index_path), exist_ok=True)
+            file_ops.atomic_write(self.index_path, data)
+        except OSError as exc:
+            logger.warning("studio: could not write the export index (%s)", exc)
+
+    # -- public API ----------------------------------------------------------------
+    def start(self, record: dict, job: dict, check_limit: bool = True) -> dict:
+        """Queue an export. *record* holds the public fields (template, title, format, quality,
+        width, height, fps, ...); *job* the render job (template, params, settings, assets_dir).
+
+        A batch queues its rows in one go (``check_limit=False``): the queue still renders one
+        video at a time, so the limit that protects single exports must not split a list. A
+        running list's rows do not count against that limit either: one person's export must
+        never be refused because a list they started is still working through its rows.
+        """
+        self._ensure_loaded()
+        with self._lock:
+            active = sum(1 for r in self._records.values()
+                         if r.get("status") in ACTIVE and not r.get("batch_id"))
+            if check_limit and active >= self.max_active:
+                raise BusyError(f"{active} exports are already waiting. Try again when some have finished.")
+            export_id = secrets.token_hex(6)
+            while export_id in self._records:
+                export_id = secrets.token_hex(6)
+            entry = {"id": export_id, **record, "status": "queued", "progress": None,
+                     "message": "Waiting to start", "time_left": None, "created": utc_now(), "_job": dict(job),
+                     "_log": deque(maxlen=40), "_queued": self._sequence}
+            self._sequence += 1
+            entry.setdefault("request", {
+                "template": entry.get("template"),
+                "params": dict(job.get("params") or {}),
+                "settings": dict(job.get("settings") or {}),
+                "format": entry.get("format"),
+                "quality": entry.get("quality"),
+                "title": entry.get("title"),
+            })
+            self._records[export_id] = entry
+            self._save_locked()
+            self._ensure_thread()
+            self._wake.notify_all()
+            return public(entry)
+
+    def get(self, export_id: str) -> dict:
+        self._ensure_loaded()
+        with self._lock:
+            return public(self._get_locked(export_id))
+
+    def export_file_path(self, export_id: str) -> str:
+        """The absolute path of a finished export's file, checked to be inside the exports folder."""
+        self._ensure_loaded()
+        with self._lock:
+            record = self._get_locked(export_id)
+            filename = record.get("filename")
+            finished = record.get("status") == "done"
+            path = os.path.realpath(self._record_path(record)) if isinstance(filename, str) and filename else ""
+        root = os.path.realpath(self.exports_dir)
+        try:
+            inside = bool(path) and path != root and os.path.commonpath([root, path]) == root
+        except ValueError:
+            inside = False
+        if not finished or not inside or not os.path.isfile(path):
+            raise NotFoundError(f"No finished file for export {export_id!r}.")
+        return path
+
+    def list(self) -> list:
+        self._ensure_loaded()
+        with self._lock:
+            records = sorted(self._records.values(), key=lambda r: (r.get("created", ""), r.get("_queued", 0)),
+                             reverse=True)
+            return [public(r) for r in records]
+
+    def cancel(self, export_id: str) -> dict:
+        self._ensure_loaded()
+        runner = None
+        with self._lock:
+            record = self._get_locked(export_id)
+            if record["status"] == "queued":
+                record.pop("resume", None)  # cancelled by the person, not waiting to continue
+                record.update(status="cancelled", progress=None, message="Cancelled", finished=utc_now())
+                self._save_locked()
+            elif record["status"] == "rendering":
+                record["_cancel"] = True
+                record["message"] = "Stopping"
+                record["time_left"] = None
+                if self._current and self._current[0] == export_id:
+                    runner = self._current[1]
+            snapshot = public(record)
+        if runner is not None:
+            runner.cancel()
+        return snapshot
+
+    def remove(self, export_id: str) -> dict:
+        """Forget a finished export and delete its file."""
+        self._ensure_loaded()
+        with self._lock:
+            record = self._get_locked(export_id)
+            if record["status"] in ACTIVE:
+                raise ConflictError("This export is still running; cancel it first.")
+            filename = record.get("filename")
+            if filename and os.path.basename(filename) == filename:
+                try:
+                    os.unlink(self._record_path(record))
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    raise StudioError(f"The file could not be deleted ({exc.strerror or exc}).") from exc
+                own_folder = self._own_folder(record)
+                if own_folder:
+                    try:
+                        os.rmdir(own_folder)  # only succeeds once the list's last file is gone
+                    except OSError:
+                        pass
+            self._records.pop(export_id, None)
+            self._save_locked()
+            return public(record)
+
+    def forget(self, export_id: str) -> dict:
+        """Forget a finished export but keep its file in the exports folder."""
+        self._ensure_loaded()
+        with self._lock:
+            record = self._get_locked(export_id)
+            if record["status"] in ACTIVE:
+                raise ConflictError("This export is still running; cancel it first.")
+            self._records.pop(export_id, None)
+            self._save_locked()
+            return public(record)
+
+    def shutdown(self, timeout: float = 10.0, on_stopping: Optional[Callable] = None) -> None:
+        """Stop the running export and the queue thread. A clean stop hands every queued
+        or rendering record back to the queue (``queued`` with ``resume``) and writes the
+        index before waiting, so even a process killed during the wait leaves a complete
+        index that the next launch continues. *on_stopping* runs once the queue is
+        stopping, before waiting for the thread (the service closes the preview worker
+        there, so a storyboard in progress ends at once)."""
+        with self._lock:
+            self._stopping = True
+            if self._loaded:
+                for record in self._records.values():
+                    if record.get("status") in ACTIVE:
+                        self._requeue_locked(record)
+                self._save_locked()  # the resume flag is on disk before anything waits
+            current, thread = self._current, self._thread
+            self._wake.notify_all()
+        if current is not None:
+            current[1].cancel()
+        if on_stopping is not None:
+            on_stopping()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+        with self._lock:
+            if self._loaded:
+                for record in self._records.values():
+                    if record.get("status") in ACTIVE:
+                        self._requeue_locked(record)
+                self._save_locked()
+
+    # -- worker thread -------------------------------------------------------------
+    def _get_locked(self, export_id: str) -> dict:
+        record = self._records.get(export_id) if isinstance(export_id, str) else None
+        if record is None:
+            raise NotFoundError(f"No export {export_id!r}.")
+        return record
+
+    def _ensure_thread(self) -> None:
+        thread = self._thread
+        if thread is not None and thread.is_alive() and self._stopping:
+            self._lock.release()  # let a stopping thread wind down (its job was stopped)
+            try:
+                thread.join(15)
+            finally:
+                self._lock.acquire()
+            thread = self._thread
+        self._stopping = False
+        if thread is not None and thread.is_alive():
+            self._wake.notify_all()  # still finishing a job: it keeps serving the queue
+            return
+        self._thread = threading.Thread(target=self._run_forever, name="studio-exports", daemon=True)
+        self._thread.start()
+
+    def _next_queued_locked(self) -> Optional[str]:
+        queued = [r for r in self._records.values() if r.get("status") == "queued" and "_job" in r]
+        if not queued:
+            return None
+        return min(queued, key=lambda r: (r.get("created", ""), r.get("_queued", 0)))["id"]
+
+    def _run_forever(self) -> None:
+        while True:
+            with self._wake:
+                export_id = None
+                while not self._stopping:
+                    export_id = self._next_queued_locked()
+                    if export_id is not None:
+                        break
+                    self._wake.wait()
+                if self._stopping:
+                    return
+            try:
+                self._process(export_id)
+            except Exception:  # noqa: BLE001 - keep the queue alive
+                logger.exception("studio: export %s crashed the queue", export_id)
+                with self._lock:
+                    record = self._records.get(export_id)
+                    if record is not None and record.get("status") in ACTIVE and not self._stopping:
+                        record.update(status="failed", progress=None, message="Export failed", time_left=None,
+                                      error="Internal error in the export queue.")
+                        record.pop("_job", None)
+
+    def _update(self, record: dict, save: bool = False, **fields) -> None:
+        with self._lock:
+            if fields.get("status") in FINISHED:
+                fields["time_left"] = None
+            record.update(fields)
+            if save:
+                self._save_locked()
+
+    def _check_cancel(self, record: dict) -> None:
+        if record.get("_cancel") or self._stopping:
+            raise ExportCancelled()
+
+    def _timeout_for(self, record: dict, length: Optional[float]) -> float:
+        base = self.base_timeout if self.base_timeout is not None else default_render_timeout()
+        seconds = length or (record["_job"].get("settings") or {}).get("length") or 600
+        scale = max(1.0, record["width"] * record["height"] / (1920 * 1080)) * max(1.0, record["fps"] / 30)
+        return max(base, 120 + 4 * float(seconds) * scale)
+
+    def _publish(self, record: dict, src: str, ext: str) -> str:
+        folder = self._record_dir(record)
+        os.makedirs(folder, exist_ok=True)
+        name = f"{record['_slug']}-{record['id']}{ext.lower()}"
+        dest = os.path.join(folder, name)
+        if os.path.exists(dest):  # ids are unique: never replace another export's file
+            raise FileExistsError(f"An export file named {name} already exists.")
+        shutil.move(src, dest)
+        return dest
+
+    def _process(self, export_id: str) -> None:
+        with self._lock:
+            record = self._records.get(export_id)
+            if record is None or record.get("status") != "queued":
+                return
+            # A fresh render from frame 0: nothing from the stopped attempt carries over.
+            for key in ("resume", "phase", "rendered_frames", "total_frames", "error", "log", "finished",
+                        "started"):
+                record.pop(key, None)
+            record.setdefault("_log", deque(maxlen=40))
+            record.update(status="rendering", progress=0, message="Getting ready", time_left=None,
+                          started=utc_now())
+            record.setdefault("_slug", record.get("file_stem") or record.get("template") or "video")
+            self._save_locked()
+        job = record["_job"]
+        job_dir = os.path.join(self.work_dir, export_id)
+        duration = None
+        final = None
+        try:
+            os.makedirs(job_dir, exist_ok=True)
+            if record["format"] == "png":
+                self._update(record, message=DRAWING, phase="drawing", rendered_frames=0, total_frames=1)
+                out = os.path.join(job_dir, "poster.png")
+                self.still(job, record["width"], record["height"], out)
+                self._check_cancel(record)
+                self._update(record, progress=RENDER_PERCENT, message=FINISHING, phase="finishing", rendered_frames=1)
+                final = self._publish(record, out, ".png")
+            else:
+                try:
+                    plan = self.plan(job) or {}
+                except Exception as exc:  # noqa: BLE001 - progress is a nicety; the export decides
+                    logger.info("studio: no storyboard for export %s (%s)", export_id, exc)
+                    plan = {}
+                self._check_cancel(record)
+                plays = plan.get("plays") or None
+                duration = plan.get("length")
+                job_file = os.path.join(job_dir, "job.json")
+                with open(job_file, "w", encoding="utf-8") as f:
+                    json.dump({**job, "mode": "video"}, f)
+                runner = self.runner_factory()
+                with self._lock:
+                    self._current = (export_id, runner)
+                    record.update(progress=0, message=DRAWING, phase="drawing")
+                self._check_cancel(record)
+                estimate = FrameEstimate()
+
+                def on_progress(animation, percent):
+                    nonlocal duration
+                    with self._lock:
+                        if record.get("_cancel") or record["status"] != "rendering":
+                            return
+                        if isinstance(animation, dict):
+                            if record.get("phase") == "finishing":
+                                return  # late/stale frame events cannot reopen drawing
+                            frames, total = animation["rendered_frames"], animation["total_frames"]
+                            if frames < record.get("rendered_frames", 0):
+                                return
+                            finishing = animation["phase"] == "finishing"
+                            duration = total / record["fps"]
+                            record.update(
+                                rendered_frames=frames, total_frames=total,
+                                progress=max(record.get("progress") or 0,
+                                             min(RENDER_PERCENT, int(RENDER_PERCENT * frames / total))),
+                                phase="finishing" if finishing else "drawing",
+                                message=FINISHING if finishing else DRAWING,
+                                time_left=None if finishing else estimate.update(frames, total, record["fps"]),
+                            )
+                            return
+                        if "total_frames" in record:
+                            return
+                        # Compatibility with injected runners using the old per-play
+                        # callback. The CLI above uses only structured frame counts.
+                        if plays and animation is not None:
+                            overall = int((animation + max(0, min(100, percent)) / 100) / plays * 100)
+                            record["progress"] = max(record.get("progress") or 0, min(99, overall))
+                            record["message"] = f"Rendering animation {min(animation + 1, plays)} of {plays}"
+                        elif animation is not None:
+                            record["message"] = f"Rendering animation {animation + 1}"
+
+                def on_log(line):
+                    record["_log"].append(line)
+
+                video = VideoJob(job_dir=job_dir, job_file=job_file, media_dir=os.path.join(job_dir, "media"),
+                                 width=record["width"], height=record["height"], fps=record["fps"],
+                                 format=record["format"], transparent=bool(record.get("transparent")),
+                                 timeout=self._timeout_for(record, duration))
+                path = runner.run(video, on_progress, on_log)
+                self._check_cancel(record)
+                self._update(record, message=FINISHING, phase="finishing", time_left=None)
+                final = self._publish(record, path, os.path.splitext(path)[1] or f".{record['format']}")
+            with self._lock:
+                self._check_cancel(record)
+                rel = os.path.relpath(final, self.media_root).replace("\\", "/")
+                self._update(record, save=True, status="done", progress=100, message="Ready", phase="done",
+                             url="/media/" + rel, filename=os.path.basename(final), size=os.path.getsize(final),
+                             duration=duration, finished=utc_now())
+        except ExportCancelled:
+            if final is not None:
+                try:
+                    os.unlink(final)
+                except OSError:
+                    pass
+            if record.get("_cancel"):
+                self._update(record, save=True, status="cancelled", progress=None, message="Cancelled",
+                             finished=utc_now())
+            elif self._stopping:  # a clean stop: the next launch continues this export
+                with self._lock:
+                    if record.get("status") != "cancelled":  # shutdown already kept a cancel
+                        self._requeue_locked(record, save=True)
+            else:
+                self._update(record, save=True, status="failed", progress=None, message=INTERRUPTED,
+                             error=INTERRUPTED, finished=utc_now())
+        except Exception as exc:  # noqa: BLE001 - every failure ends up on the record
+            if self._stopping:
+                with self._lock:
+                    if record.get("status") != "cancelled":
+                        self._requeue_locked(record, save=True)
+            else:
+                message = str(exc) or type(exc).__name__
+                fields = {"status": "failed", "progress": None, "message": "Export failed", "error": message,
+                          "finished": utc_now()}
+                if record["_log"]:
+                    fields["log"] = list(record["_log"])[-20:]
+                self._update(record, save=True, **fields)
+        finally:
+            with self._lock:
+                if self._current and self._current[0] == export_id:
+                    self._current = None
+                if not record.get("resume"):
+                    record.pop("_job", None)  # a record handed back to the queue keeps its job
+            shutil.rmtree(job_dir, ignore_errors=True)

@@ -1,0 +1,32 @@
+/* Sound controls: the same quiet rows as the rest of the form. */
+.studio-sound h2 { display: flex; align-items: center; gap: .5rem; color: var(--color-fg-subtle); font-size: 12px; font-weight: 500; letter-spacing: .1em; line-height: 1.4; text-transform: uppercase; }
+.studio-sound h2 svg { width: 15px; height: 15px; }
+.studio-sound-tracks { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+.studio-sound-tracks h3 { margin-bottom: .25rem; color: var(--color-fg-muted); font-size: 12px; font-weight: 500; letter-spacing: .04em; line-height: 1.4; }
+.studio-sound-option { display: flex; align-items: center; gap: .25rem; padding-right: .4rem; border: 0; border-radius: 12px; background: var(--color-raised); transition: background 160ms, box-shadow 160ms; }
+.studio-sound-option:hover { background: var(--color-line); }
+.studio-sound-option.studio-sound-selected { background: var(--color-surface); box-shadow: inset 0 0 0 1.5px var(--color-ink); }
+.studio-sound-option.studio-sound-selected:hover { background: var(--color-surface); }
+.studio-sound-option [role="radio"] { display: flex; flex: 1; align-items: center; gap: .7rem; min-width: 0; min-height: 64px; padding: .7rem .85rem; border-radius: 12px; font-size: 13px; line-height: 1.4; text-align: left; cursor: pointer; }
+.studio-sound-option [role="radio"] > span:last-child { min-width: 0; }
+.studio-sound-option button:disabled { cursor: default; opacity: .5; }
+.studio-sound-option button:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 3px; }
+.studio-sound-option > button:last-child:not([role="radio"]) { min-width: 44px; min-height: 44px; border-radius: 999px; }
+.studio-sound-check { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0; border: 1px solid var(--color-line-strong); border-radius: 50%; color: var(--color-fg-subtle); }
+.studio-sound-selected .studio-sound-check { border-color: var(--color-ink); background: var(--color-ink); color: var(--color-ink-fg); }
+.studio-sound-check svg { width: 13px; height: 13px; }
+.studio-sound-option small { display: block; margin-top: .2rem; color: var(--color-fg-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.studio-sound-volume { display: grid; grid-template-columns: 1fr auto; gap: .65rem; margin: .75rem 0; font-size: 12.5px; }
+.studio-sound-volume label { grid-column: 1 / -1; color: var(--color-fg); font-size: 13px; font-weight: 500; }
+.studio-sound-volume output { min-width: 4ch; align-self: center; color: var(--color-fg-muted); font-variant-numeric: tabular-nums; }
+.studio-sound-range { appearance: none; -webkit-appearance: none; width: 100%; min-width: 0; height: 44px; padding: 0; border-radius: 999px; background: transparent; cursor: pointer; }
+.studio-sound-range:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+.studio-sound-range::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--color-ink) var(--sound-fill), var(--color-line) var(--sound-fill)); }
+.studio-sound-range::-webkit-slider-thumb { appearance: none; -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; border: 2px solid var(--color-ink); background: var(--color-surface); }
+.studio-sound-range::-moz-range-track { height: 4px; border-radius: 999px; background: var(--color-line); }
+.studio-sound-range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--color-ink); }
+.studio-sound-range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--color-ink); background: var(--color-surface); }
+.studio-sound-upload { margin-top: .5rem; padding: .9rem 1rem; border: 0; border-radius: 12px; background: var(--color-raised); }
+.studio-sound-upload p { margin-top: .55rem; color: var(--color-fg-muted); font-size: 12px; line-height: 1.5; }
+.studio-sound-upload [role="status"] { display: flex; flex-direction: column; gap: .5rem; font-size: 12.5px; }
+.studio-sound-upload progress { width: 100%; accent-color: var(--color-ink); }

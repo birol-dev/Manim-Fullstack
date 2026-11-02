@@ -1,4 +1,4 @@
-import { BookOpen, Wrench } from "lucide-react";
+import { BookOpen, LayoutGrid, Wrench } from "lucide-react";
 
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,13 @@ export function TopBar({ needsSetup, onOpenSetup }: TopBarProps) {
       </div>
 
       <div className="flex items-center gap-1">
+        {/* A full page load (not a hash change), so the unsaved-changes guard still asks first. */}
+        <Button asChild variant="ghost" size="sm">
+          <a href={import.meta.env.BASE_URL}>
+            <LayoutGrid />
+            Back to Studio
+          </a>
+        </Button>
         <Tooltip content="Manim reference docs">
           <Button asChild variant="ghost" size="icon-sm" aria-label="Manim reference docs">
             <a href={DOCS_URL} target="_blank" rel="noreferrer">

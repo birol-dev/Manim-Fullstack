@@ -1,0 +1,851 @@
+/** Export dialog (make a file from the video) and the list of recent exports. */
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { ArrowRight, Check, ChevronDown, Copy, Download, FileImage, FileVideo, Film, FolderDown, FolderOpen, Image as ImageIcon, ImagePlay, Layers, Play, RotateCw, Trash2, XCircle } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Progress } from "@/components/ui/progress";
+import { apiUrl, requestJson } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+import { cancelBatch, cancelExport, copyExportFile, friendlyError, getExport, getHostCapabilities, previewProblem, retryBatch, revealExport, startExport, type ExportRequest, type HostCapabilities } from "./api";
+import { Spinner } from "./components";
+import { ActionMenu } from "./ProjectMenu";
+import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
+import { useCatalog, useExports } from "./hooks";
+import {
+  ACTIVE_EXPORT,
+  EXPORT_FORMATS,
+  exportStatusLabel,
+  formatBytes,
+  formatLabel,
+  formatSeconds,
+  friendlyExportMessage,
+  qualityLabel,
+  QUALITIES,
+  timeAgo,
+  toDate,
+} from "./options";
+import type { ExportFormat, ExportJob, ExportQuality, FieldError } from "./types";
+
+const POLL_MS = 700;
+
+/** Keep an older poll/list response from moving this export's bar backwards. */
+function useExportProgress(job: ExportJob | null) {
+  const incoming = job?.status === "done" ? 100 : job?.progress == null || !Number.isFinite(job.progress) ? null : Math.max(0, Math.min(99, Math.round(job.progress)));
+  const [shown, setShown] = useState({ id: job?.id, value: incoming });
+  const value = shown.id === job?.id && shown.value != null ? Math.max(shown.value, incoming ?? 0) : incoming;
+  if (shown.id !== job?.id || shown.value !== value) setShown({ id: job?.id, value });
+  return value;
+}
+
+const SMOOTH_PROGRESS = "[&>div]:duration-700 motion-reduce:[&>div]:transition-none";
+
+function DownloadLink({ job, size = "md", className, secondary = false, iconOnly = false }: { job: ExportJob; size?: "sm" | "md"; className?: string; secondary?: boolean; iconOnly?: boolean }) {
+  if (!job.url) return null;
+  return (
+    <Button asChild variant={secondary ? "secondary" : "primary"} size={iconOnly ? "icon" : size} className={cn(iconOnly && "studio-download-icon-only", className)}>
+      <a href={apiUrl(job.url)} download={job.filename ?? true} aria-label="Download" title="Download">
+        <Download />
+        <span className="studio-download-label">Download</span>
+      </a>
+    </Button>
+  );
+}
+
+/** What this computer can do with a finished file; null until the server answers. */
+function useHostCapabilities(): HostCapabilities | null {
+  const [capabilities, setCapabilities] = useState<HostCapabilities | null>(null);
+  useEffect(() => {
+    let live = true;
+    getHostCapabilities()
+      .then((next) => { if (live) setCapabilities(next); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
+  return capabilities;
+}
+
+async function showInFolder(id: string) {
+  try {
+    await revealExport(id);
+  } catch (error) {
+    toast.error(friendlyError(error, "Couldn't show this file in its folder."));
+  }
+}
+
+async function copyFileToClipboard(id: string) {
+  try {
+    await copyExportFile(id);
+    toast.success("Copied — paste it into an email or chat");
+  } catch (error) {
+    toast.error(friendlyError(error, "Couldn't copy this file. Download it instead."));
+  }
+}
+
+function Result({ job, posterUrl }: { job: ExportJob; posterUrl?: string }) {
+  if (!job.url) return null;
+  const url = apiUrl(job.url);
+  if (job.format === "mp4" || job.format === "webm") {
+    return <video src={url} poster={posterUrl ? apiUrl(posterUrl) : undefined} controls loop playsInline className="max-h-72 w-full rounded-lg bg-black" aria-label="Your exported video" />;
+  }
+  if (job.format === "gif" || job.format === "png") {
+    return <img src={url} alt="Your export" className="studio-checker max-h-72 w-full rounded-lg object-contain" />;
+  }
+  return <p className="rounded-lg border border-line bg-raised px-3 py-6 text-center text-sm text-fg-muted">MOV files can't play in the browser. Download it to watch.</p>;
+}
+
+function exportStage(job: ExportJob): string {
+  if (job.phase === "drawing" || job.phase === "finishing") return job.message || (job.phase === "drawing" ? "Drawing frames…" : "Finishing your video…");
+  if (job.status === "queued" || /starting/i.test(job.message ?? "")) return "Starting";
+  if (/encod|convert|mux/i.test(job.message ?? "")) return "Encoding";
+  if (/rendering the image/i.test(job.message ?? "")) return "Drawing the picture";
+  if (/render|animation/i.test(job.message ?? "")) return "Rendering";
+  return friendlyExportMessage(job.message).replace(/\d+(?:\.\d+)?%/g, "").trim() || "Rendering";
+}
+
+function Choice<T extends string>({
+  name,
+  value,
+  options,
+  onChange,
+  legend,
+  frameRate,
+}: {
+  name: string;
+  value: T;
+  options: Array<{ value: T; label: string; hint: string }>;
+  onChange: (value: T) => void;
+  legend: string;
+  /** Templates that fix the export rate: show it on the qualities where smoothness matters. */
+  frameRate?: number | null;
+}) {
+  const files = name === "export-format";
+  const qualityLabels: Record<string, [string, string]> = {
+    draft: ["Draft", "480p"],
+    "720p": ["HD", "720p"],
+    "1080p": ["Full HD", frameRate ? `1080p · ${frameRate} fps` : "1080p"],
+    "1080p60": ["Smooth", "1080p · 60 fps"],
+    "4k": ["Ultra HD", frameRate ? `4K · ${frameRate} fps` : "4K"],
+  };
+  return (
+    <fieldset className="studio-export-choices">
+      <legend className="mb-1.5 text-[13px] font-medium text-fg">{legend}</legend>
+      <div className={files ? "studio-file-grid" : "studio-quality-segments"}>
+      {options.map((option) => (
+        <label
+          key={option.value}
+          className={cn(
+            files ? "studio-file-choice" : "studio-quality-choice",
+            value === option.value && "studio-export-choice-selected",
+          )}
+        >
+          <input
+            type="radio"
+            name={name}
+            value={option.value}
+            checked={value === option.value}
+            aria-label={option.label}
+            onChange={() => onChange(option.value)}
+            className="sr-only"
+          />
+          {files ? <>
+            {option.value === "mp4" ? <Film aria-hidden /> : option.value === "gif" ? <ImagePlay aria-hidden /> : option.value === "png" ? <ImageIcon aria-hidden /> : <Layers aria-hidden />}
+            <span className="studio-file-copy"><span className="studio-file-name">{option.label}</span><span className="studio-file-hint">{option.hint}</span></span>
+            <span className="studio-file-check" aria-hidden>{value === option.value && <Check />}</span>
+          </> : <>
+            <span>{qualityLabels[option.value]?.[0] ?? option.label}</span>
+            <small>{qualityLabels[option.value]?.[1]}</small>
+          </>}
+        </label>
+      ))}
+      </div>
+      {!files && <p className="studio-quality-hint">{options.find((option) => option.value === value)?.hint}</p>}
+    </fieldset>
+  );
+}
+
+interface ExportDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** What to export, read when the export starts. */
+  request: () => Omit<ExportRequest, "format" | "quality">;
+  transparentBackground: boolean;
+  onFieldErrors: (errors: FieldError[]) => void;
+  /** An export started, changed state or finished (refresh lists). */
+  onActivity?: () => void;
+  posterUrl?: string;
+  onStart?: () => void;
+  /** This finished result is visible, so it no longer needs a new-export badge. */
+  onSeen?: (id: string) => void;
+}
+
+export function ExportDialog({ open, onOpenChange, request, transparentBackground, onFieldErrors, onActivity, posterUrl, onStart, onSeen }: ExportDialogProps) {
+  const { catalog } = useCatalog();
+  const capabilities = useHostCapabilities();
+  const templateId = request().template;
+  // Long timers set META.export_fps: every quality is rendered at that rate, so the dialog must not promise 60.
+  const exportFps = catalog?.templates.find((item) => item.id === templateId)?.export_fps ?? null;
+  const [format, setFormat] = useState<ExportFormat>("mp4");
+  const [quality, setQuality] = useState<ExportQuality>("1080p");
+  const [job, setJob] = useState<ExportJob | null>(null);
+  const [jobPoster, setJobPoster] = useState<string | undefined>(undefined);
+  const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const cancellingRef = useRef(false);
+  const [problem, setProblem] = useState<{ message: string; fields: FieldError[] } | null>(null);
+  const [connection, setConnection] = useState(true);
+  const openRef = useRef(open);
+  const activityRef = useRef(onActivity);
+  const seenRef = useRef(onSeen);
+  useEffect(() => {
+    openRef.current = open;
+    activityRef.current = onActivity;
+    seenRef.current = onSeen;
+  });
+
+  const jobId = job?.id ?? null;
+  const jobStatus = job?.status;
+  const active = !!job && ACTIVE_EXPORT.has(job.status);
+  const progress = useExportProgress(job);
+  const frameRate = format === "png" ? null : exportFps;
+  // A stored 60 fps choice cannot be honored by a fixed-rate template.
+  const chosenQuality = frameRate && quality === "1080p60" ? "1080p" : quality;
+  useEffect(() => {
+    if (open && jobId && jobStatus === "done") seenRef.current?.(jobId);
+  }, [open, jobId, jobStatus]);
+  useEffect(() => {
+    if (!jobId || !active || cancelling) return;
+    let live = true;
+    let failures = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      try {
+        const next = await getExport(jobId);
+        if (!live || cancellingRef.current) return;
+        failures = 0;
+        setConnection(true);
+        setJob(next);
+        if (!ACTIVE_EXPORT.has(next.status)) {
+          activityRef.current?.();
+          if (!openRef.current && next.status === "done") {
+            toast.success(`${next.title || "Your video"} is ready`, {
+              action: next.url ? { label: "Download", onClick: () => window.open(apiUrl(next.url!), "_blank") } : undefined,
+            });
+          } else if (!openRef.current && next.status === "failed") {
+            toast.error("An export didn't work", { description: "Open Exports for details." });
+          }
+          return;
+        }
+      } catch {
+        if (!live) return;
+        failures += 1;
+        if (failures >= 3) setConnection(false);
+      }
+      timer = setTimeout(tick, POLL_MS);
+    };
+    timer = setTimeout(tick, POLL_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [jobId, active, cancelling]);
+
+  const start = async () => {
+    setStarting(true);
+    setProblem(null);
+    try {
+      setJobPoster(posterUrl);
+      onStart?.();
+      const created = await startExport({ ...request(), format, quality: chosenQuality });
+      setJob(created);
+      onActivity?.();
+    } catch (error) {
+      const fields = fieldErrorsOf(error);
+      if (fields.length) onFieldErrors(fields);
+      setProblem({
+        message: fields.length ? "Some fields need a fix first. They're marked in red in the form." : previewProblem(error),
+        fields,
+      });
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const cancel = async () => {
+    if (!job || cancellingRef.current) return;
+    cancellingRef.current = true;
+    setCancelling(true);
+    try {
+      const next = await cancelExport(job.id);
+      setJob(next);
+      onActivity?.();
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't cancel the export."));
+    } finally {
+      cancellingRef.current = false;
+      setCancelling(false);
+    }
+  };
+
+  const chosen = EXPORT_FORMATS.find((item) => item.value === format)!;
+  const showChoices = !job;
+  // A finished result belongs to the content it was made from: closing the dialog lets the next
+  // Export start fresh (the file stays in Exports). A running export is still shown on reopen.
+  const changeOpen = (next: boolean) => {
+    if (!next && job && !ACTIVE_EXPORT.has(job.status)) {
+      setJob(null);
+      setProblem(null);
+    }
+    onOpenChange(next);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={changeOpen}>
+      <DialogContent className="studio-export-dialog">
+        <DialogHeader className="studio-export-header">
+          <DialogTitle>
+            {!job ? "Export" : active ? `Making your ${job.format === "gif" ? "GIF" : job.format === "png" ? "picture" : "video"}…` : job.status === "done" ? "Your file is ready" : job.status === "cancelled" ? "Export cancelled" : "That didn't work"}
+          </DialogTitle>
+          <DialogDescription>
+            {!job
+              ? "Choose what kind of file you need."
+              : active
+                ? "You can close this. It keeps going in Your exports."
+                : job.status === "done"
+                  ? [formatLabel(job.format), qualityLabel(job.quality), formatBytes(job.size), job.duration ? formatSeconds(job.duration) : ""]
+                      .filter(Boolean)
+                      .join(" · ")
+                  : job.status === "failed"
+                    ? "Something went wrong while making the file."
+                    : "Nothing was saved."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="studio-export-body">
+        {showChoices && (
+          <div className="studio-export-options">
+            <Choice name="export-format" legend="File type" value={format} options={EXPORT_FORMATS} onChange={setFormat} />
+            {format === "mp4" && transparentBackground && <p className="text-xs text-warning">A see-through background needs MOV. This export will be a MOV file. Choose Theme under Look for an MP4.</p>}
+            {chosen.transparent && !transparentBackground && (
+              <p className="-mt-3 text-xs text-fg-subtle">
+                Tip: set Background to <span className="font-medium text-fg-muted">None</span> under Look to make the background see-through.
+              </p>
+            )}
+            {format !== "png" && <Choice name="export-quality" legend="Quality" value={chosenQuality} options={frameRate ? QUALITIES.filter((item) => item.value !== "1080p60") : QUALITIES} onChange={setQuality} frameRate={frameRate} />}
+            {format !== "png" && frameRate && (
+              <p className="studio-quality-hint">Made at {frameRate} frames per second: smooth for this kind of video, and much quicker to make.</p>
+            )}
+            {format === "png" && (
+              <Choice name="export-quality" legend="Size" value={quality} options={QUALITIES.filter((item) => item.value !== "1080p60")} onChange={setQuality} />
+            )}
+          </div>
+        )}
+
+        {problem && (
+          <div role="alert" className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-fg-muted">
+            <p>{problem.message}</p>
+            {problem.fields.length > 0 && (
+              <ul className="mt-1 list-disc pl-4">
+                {problem.fields.slice(0, 5).map((field) => (
+                  <li key={field.field + field.message}>{friendlyFieldMessage(field.message)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {job && (active || job.status === "done") && (
+          <div className="studio-export-result">
+            <div className="studio-result-well" data-state={active ? "making" : "done"} aria-busy={active}>
+              {active ? <>
+                {jobPoster ? <img src={apiUrl(jobPoster)} alt="Preview of your export" className="studio-export-pending-poster" /> : <div className="studio-shimmer absolute inset-0" />}
+                <span className="studio-export-percentage" role="status">{progress != null ? `${progress}%` : "Getting ready"}</span>
+                {progress != null ? <Progress value={progress} striped aria-label="Export progress" className={cn("studio-export-well-progress", SMOOTH_PROGRESS)} /> : (
+                  <div className="studio-export-well-progress bg-line" role="progressbar" aria-label="Export progress"><div className="absolute inset-y-0 w-1/3 animate-indeterminate bg-accent" /></div>
+                )}
+              </> : <Result job={job} posterUrl={jobPoster} />}
+            </div>
+            <div className="studio-export-detail">
+              {active ? <>
+                <p className="flex items-center gap-2 text-sm text-fg-muted" role="status"><Spinner className="size-3.5" />{exportStage(job)}</p>
+                {job.time_left && job.phase !== "finishing" && <p className="text-xs text-fg-subtle">{job.time_left}</p>}
+                {!connection && <p className="text-xs text-warning">Lost touch with the server. Still trying…</p>}
+              </> : <p className="studio-file-meta">{job.filename}</p>}
+            </div>
+          </div>
+        )}
+        {job?.status === "failed" && (job.error || job.message) && (
+          <details className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-xs text-fg-muted">
+            <summary className="cursor-pointer">Details</summary>
+            <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs">{job.error || job.message}</p>
+          </details>
+        )}
+        </div>
+
+        <DialogFooter className="studio-export-footer">
+          {!job && (
+            <>
+              <Button variant="ghost" size="md" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+              <Button variant="primary" size="md" onClick={start} disabled={starting}>
+                {starting ? <Spinner /> : <Download />}
+                {format === "png" ? "Make picture" : format === "gif" ? "Make GIF" : "Make video"}
+              </Button>
+            </>
+          )}
+          {job && active && (
+            <Button variant="danger-ghost" size="md" onClick={cancel} disabled={cancelling}>
+              {cancelling ? <Spinner /> : <XCircle />}
+              {cancelling ? "Cancelling…" : "Cancel export"}
+            </Button>
+          )}
+          {job && !active && (
+            <>
+              <Button variant="ghost" size="md" onClick={() => setJob(null)}>
+                {job.status === "done" ? "Make another" : (
+                  <>
+                    <RotateCw /> Try again
+                  </>
+                )}
+              </Button>
+              {job.status === "done" && capabilities?.reveal && (
+                <Button variant="secondary" size="md" onClick={() => showInFolder(job.id)}>
+                  <FolderOpen /> Show in folder
+                </Button>
+              )}
+              {job.status === "done" && capabilities?.copy_file && (
+                <Button variant="secondary" size="md" onClick={() => copyFileToClipboard(job.id)}>
+                  <Copy /> Copy file
+                </Button>
+              )}
+              {job.status === "done" && <DownloadLink job={job} />}
+            </>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function JobIcon({ job }: { job: ExportJob }) {
+  const Icon = job.format === "png" || job.format === "gif" ? FileImage : FileVideo;
+  return (
+    <span
+      className={cn(
+        "studio-export-icon",
+        job.status === "failed" && "text-danger",
+      )}
+    >
+      <Icon aria-hidden className="size-4" />
+    </span>
+  );
+}
+
+/** Forgets an export and deletes its file (the project that made it stays). */
+function removeExportFile(id: string) {
+  return requestJson<unknown>(`/api/studio/exports/${encodeURIComponent(id)}?remove=true`, { method: "DELETE" });
+}
+
+/** The request that made an export, echoed by the API so an old record can be made again. */
+type ExportJobRecord = ExportJob & { request?: ExportRequest | null };
+
+function storedRequest(job: ExportJob): ExportRequest | null {
+  const request = (job as ExportJobRecord).request;
+  return request && typeof request === "object" ? request : null;
+}
+
+const VIDEO_THUMB_FORMATS = new Set<string>(["mp4", "webm"]);
+const IMAGE_THUMB_FORMATS = new Set<string>(["gif", "png"]);
+
+/** A frame past the intro: 60% through, kept clear of both ends. */
+function thumbTime(duration?: number | null): number {
+  if (duration == null || !Number.isFinite(duration) || duration <= 0) return 1;
+  const latest = Math.max(0.5, duration - 0.3);
+  return Math.round(Math.min(Math.max(duration * 0.6, 0.5), latest) * 100) / 100;
+}
+
+/** A small still of a finished file; anything the browser cannot show keeps the file icon. */
+function ExportThumb({ job, onOpen }: { job: ExportJob; onOpen?: (job: ExportJob) => void }) {
+  const [failed, setFailed] = useState(false);
+  const title = job.title || "Untitled video";
+  const preview = job.status === "done" && !!job.url && !failed;
+  const video = preview && VIDEO_THUMB_FORMATS.has(job.format);
+  const image = preview && IMAGE_THUMB_FORMATS.has(job.format);
+  if (!video && !image) return <JobIcon job={job} />;
+  const seek = thumbTime(job.duration);
+  return (
+    <button type="button" className="studio-export-thumb" aria-label={`Open ${title}`} onClick={() => onOpen?.(job)} disabled={!onOpen}>
+      {video
+        ? <video
+            src={`${apiUrl(job.url!)}#t=${seek}`}
+            preload="metadata"
+            playsInline
+            muted
+            aria-hidden
+            tabIndex={-1}
+            onLoadedMetadata={(event) => {
+              const player = event.currentTarget;
+              if (Math.abs(player.currentTime - seek) > 0.05) player.currentTime = seek;
+            }}
+            onError={() => setFailed(true)}
+          />
+        : <img src={apiUrl(job.url!)} alt="" aria-hidden loading="lazy" onError={() => setFailed(true)} />}
+    </button>
+  );
+}
+
+/** The finished file, big enough to watch, sized to its own shape. */
+function ExportViewer({ job, onClose }: { job: ExportJob | null; onClose: () => void }) {
+  const video = !!job && VIDEO_THUMB_FORMATS.has(job.format);
+  const image = !!job && IMAGE_THUMB_FORMATS.has(job.format);
+  const player = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    // Opening this was a click, so the browser allows sound to start.
+    player.current?.play().catch(() => {});
+  }, [job]);
+  return <Dialog open={!!job} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <DialogContent className="studio-export-viewer">
+      {job && <>
+        <DialogHeader>
+          <DialogTitle>{job.title || "Untitled video"}</DialogTitle>
+          <DialogDescription>{[formatLabel(job.format), qualityLabel(job.quality), formatBytes(job.size)].filter(Boolean).join(" · ")}</DialogDescription>
+        </DialogHeader>
+        <div className="studio-export-viewer-media">
+          {!job.url
+            ? <p className="studio-export-viewer-note">This file is no longer available. Make it again from your video.</p>
+            : video
+              ? <video ref={player} src={apiUrl(job.url)} controls autoPlay playsInline aria-label={job.title || "Your exported video"} />
+              : image
+                ? <img src={apiUrl(job.url)} alt={job.title || "Your export"} />
+                : <p className="studio-export-viewer-note">MOV files can't play in the browser. Download it to watch.</p>}
+        </div>
+        <DialogFooter>{job.url && <DownloadLink job={job} />}</DialogFooter>
+      </>}
+    </DialogContent>
+  </Dialog>;
+}
+
+interface ExportRowProps {
+  job: ExportJob;
+  onCancel?: (job: ExportJob) => void;
+  onView?: (job: ExportJob) => void;
+  /** Called once the row has finished animating out. */
+  onDeleted?: (job: ExportJob) => void;
+  /** Refresh the list, so a started export shows up with its progress. */
+  onRefresh?: () => void;
+  /** Narrow rows (the editor's sheet) keep only the download icon. */
+  compact?: boolean;
+}
+
+export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact = false }: ExportRowProps) {
+  const active = ACTIVE_EXPORT.has(job.status);
+  const capabilities = useHostCapabilities();
+  const progress = useExportProgress(job);
+  const finished = job.status === "done" || job.status === "failed" || job.status === "cancelled";
+  const canDeleteFile = job.status === "done";
+  const request = storedRequest(job);
+  const title = job.title || "Untitled video";
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => {
+    if (!leaving || !onDeleted) return;
+    const timer = window.setTimeout(() => onDeleted(job), 180);
+    return () => window.clearTimeout(timer);
+  }, [leaving, onDeleted, job]);
+  const remove = async () => {
+    setDeleting(true);
+    try {
+      await removeExportFile(job.id);
+      setConfirming(false);
+      toast.success(canDeleteFile ? "Export deleted" : "Removed from list");
+      setLeaving(true);
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't delete that file."));
+    } finally {
+      setDeleting(false);
+    }
+  };
+  const retry = async () => {
+    if (!request || retrying) return;
+    setRetrying(true);
+    try {
+      await startExport(request);
+      onRefresh?.();
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't start that export again."));
+    } finally {
+      setRetrying(false);
+    }
+  };
+  return (
+    <li className="studio-export-row" data-leaving={leaving || undefined} aria-busy={deleting || retrying || undefined}>
+      <ExportThumb job={job} onOpen={job.status === "done" ? onView : undefined} />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        {job.status === "done" && onView
+          ? <button type="button" className="studio-export-title studio-export-title-button" onClick={() => onView(job)}>{title}</button>
+          : <span className="studio-export-title truncate text-fg">{title}</span>}
+        <span className="studio-export-meta">
+          {[formatLabel(job.format), qualityLabel(job.quality), job.status === "done" ? formatBytes(job.size) : exportStatusLabel({ status: job.status, progress: null }), timeAgo(job.created)]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+        {active && <>
+          <span className="text-xs text-fg-muted">{progress != null ? `${progress}% · ` : ""}{exportStage(job)}</span>
+          {job.time_left && job.phase !== "finishing" && <span className="text-xs text-fg-subtle">{job.time_left}</span>}
+          <Progress value={progress ?? 0} striped aria-label={`${title} progress`} className={cn("h-1", SMOOTH_PROGRESS)} />
+        </>}
+        {job.status === "failed" && (
+          <span className="truncate text-xs text-danger" title={job.error || job.message || undefined}>
+            Something went wrong while making this file.
+          </span>
+        )}
+      </div>
+      {job.status === "done" && <DownloadLink job={job} size="sm" secondary iconOnly={compact} />}
+      {active && onCancel && (
+        <Button variant="danger-ghost" size="sm" onClick={() => onCancel(job)}>
+          Cancel
+        </Button>
+      )}
+      {!active && !canDeleteFile && request && (
+        <Button variant="secondary" size="sm" onClick={retry} disabled={retrying}>
+          {retrying ? <Spinner /> : <RotateCw />}
+          Try again
+        </Button>
+      )}
+      {finished && <ActionMenu
+        className="studio-export-menu"
+        title={title}
+        items={[
+          ...(job.status === "done" && onView ? [{ label: "Open", icon: <Play aria-hidden />, onSelect: () => onView(job) }] : []),
+          ...(job.status === "done" && job.url ? [{ label: "Download", icon: <Download aria-hidden />, href: apiUrl(job.url), download: job.filename ?? true }] : []),
+          ...(job.status === "done" && capabilities?.reveal ? [{ label: "Show in folder", icon: <FolderOpen aria-hidden />, onSelect: () => showInFolder(job.id) }] : []),
+          ...(job.status === "done" && capabilities?.copy_file ? [{ label: "Copy file", icon: <Copy aria-hidden />, onSelect: () => copyFileToClipboard(job.id) }] : []),
+          ...(job.status === "done" && request ? [{ label: "Make again", icon: <RotateCw aria-hidden />, onSelect: retry }] : []),
+          canDeleteFile
+            ? { label: "Delete file", icon: <Trash2 aria-hidden />, danger: true, onSelect: () => setConfirming(true) }
+            : { label: "Remove from list", icon: <Trash2 aria-hidden />, danger: true, onSelect: remove },
+        ]}
+      />}
+      <Dialog open={confirming} onOpenChange={(open) => { if (!open && !deleting) setConfirming(false); }}>
+        <DialogContent
+          onFocusFallback={() => document.getElementById("studio-main")?.focus()}
+          onEscapeKeyDown={(event) => { if (deleting) event.preventDefault(); }}
+          onPointerDownOutside={(event) => { if (deleting) event.preventDefault(); }}
+        >
+          <DialogHeader>
+            <DialogTitle>Delete “{title}”?</DialogTitle>
+            <DialogDescription>The video file is removed from your computer. Your project stays.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="md" onClick={() => setConfirming(false)} disabled={deleting}>Keep it</Button>
+            <Button variant="danger" size="md" onClick={remove} disabled={deleting}>{deleting ? <Spinner /> : <Trash2 />} Delete file</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </li>
+  );
+}
+
+type ExportDayGroup = { key: "today" | "yesterday" | "earlier"; label: string; jobs: ExportJob[] };
+
+const DAY_MS = 86_400_000;
+const exportTime = (job: ExportJob) => toDate(job.finished ?? job.created)?.getTime() ?? 0;
+
+type ExportBatchGroup = { id: string; title: string; total: number; jobs: ExportJob[] };
+
+/** One group per batch, newest first; exports without a batch are left to their own rows. */
+function groupBatchExports(jobs: ExportJob[]): ExportBatchGroup[] {
+  const groups = new Map<string, ExportJob[]>();
+  for (const job of jobs) {
+    if (!job.batch_id) continue;
+    const batch = groups.get(job.batch_id) ?? [];
+    batch.push(job);
+    groups.set(job.batch_id, batch);
+  }
+  return [...groups.entries()].map(([id, batch]) => ({
+    id,
+    title: batch.find((job) => job.batch_title)?.batch_title || "Videos from a list",
+    total: Math.max(batch.length, ...batch.map((job) => job.batch_total ?? 0)),
+    jobs: [...batch].sort((a, b) => exportTime(b) - exportTime(a)),
+  }));
+}
+
+/** A whole list as one collapsible row; expanding shows the same rows as everywhere else. */
+function BatchGroupRow({ batch, onView, onRefresh }: {
+  batch: ExportBatchGroup;
+  onView?: (job: ExportJob) => void;
+  onRefresh?: () => void;
+}) {
+  const capabilities = useHostCapabilities();
+  const [open, setOpen] = useState(false);
+  const [working, setWorking] = useState<"cancel" | "retry" | null>(null);
+  const done = batch.jobs.filter((job) => job.status === "done").length;
+  const failed = batch.jobs.filter((job) => job.status === "failed").length;
+  const active = batch.jobs.filter((job) => ACTIVE_EXPORT.has(job.status));
+  const firstDone = batch.jobs.find((job) => job.status === "done");
+  const percent = batch.total > 0 ? Math.round((done / batch.total) * 100) : 0;
+  const cancel = async () => {
+    if (working) return;
+    setWorking("cancel");
+    try {
+      await cancelBatch(batch.id);
+      onRefresh?.();
+      toast.success("Stopped this list");
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't stop this list."));
+    } finally {
+      setWorking(null);
+    }
+  };
+  const retry = async () => {
+    if (working) return;
+    setWorking("retry");
+    try {
+      const result = await retryBatch(batch.id);
+      onRefresh?.();
+      toast.success(result.retried?.length ? `Making ${result.retried.length} again` : "Nothing left to make again");
+    } catch (error) {
+      toast.error(friendlyError(error, "Couldn't start these again."));
+    } finally {
+      setWorking(null);
+    }
+  };
+  return <li className="studio-batch-row border-b border-line py-4 last:border-0">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <button type="button" className="flex min-w-0 items-center gap-2 rounded-md text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
+        aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <ChevronDown aria-hidden className={cn("size-4 shrink-0 text-fg-subtle transition-transform", open && "rotate-180")} />
+        <span className="truncate text-sm font-medium text-fg">{batch.title}</span>
+      </button>
+      <span className="text-xs tabular-nums text-fg-muted">{done} of {batch.total} done</span>
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        {capabilities?.reveal && firstDone && <Button variant="secondary" size="sm" onClick={() => showInFolder(firstDone.id)}>
+          <FolderOpen /> Show folder
+        </Button>}
+        {active.length > 0 && <Button variant="danger-ghost" size="sm" onClick={cancel} disabled={working === "cancel"}>
+          {working === "cancel" ? <Spinner /> : <XCircle />} Cancel
+        </Button>}
+        {failed > 0 && <Button variant="secondary" size="sm" onClick={retry} disabled={working === "retry"}>
+          {working === "retry" ? <Spinner /> : <RotateCw />} Try again
+        </Button>}
+      </div>
+    </div>
+    <Progress value={percent} aria-label={`${batch.title} progress`} className="mt-2 h-1" />
+    {open && <ul className="studio-exports-list studio-exports-panel-list pl-6">
+      {batch.jobs.map((job) => <ExportRow key={job.id} job={job} onView={onView} onRefresh={onRefresh} compact />)}
+    </ul>}
+  </li>;
+}
+
+/** Newest first, grouped by the local day the file was finished (or created). */
+function groupExportsByDay(jobs: ExportJob[], now = new Date()): ExportDayGroup[] {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const groups: ExportDayGroup[] = [
+    { key: "today", label: "Today", jobs: [] },
+    { key: "yesterday", label: "Yesterday", jobs: [] },
+    { key: "earlier", label: "Earlier", jobs: [] },
+  ];
+  for (const job of [...jobs].sort((a, b) => exportTime(b) - exportTime(a))) {
+    const time = exportTime(job);
+    groups[time >= start ? 0 : time >= start - DAY_MS ? 1 : 2].jobs.push(job);
+  }
+  return groups.filter((group) => group.jobs.length > 0);
+}
+
+function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = false }: { jobs: ExportJob[]; onCancel?: (job: ExportJob) => void; onRefresh?: () => void; grouped?: boolean; compact?: boolean }) {
+  const [viewing, setViewing] = useState<ExportJob | null>(null);
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const visible = jobs.filter((job) => !hidden.has(job.id));
+  // A list is one row; single exports keep the "Making now" and day groups they always had.
+  const batches = grouped ? groupBatchExports(visible) : [];
+  const single = grouped ? visible.filter((job) => !job.batch_id) : visible;
+  // Active jobs sit above the day groups: they are the only thing that needs an answer now.
+  const active = grouped ? single.filter((job) => ACTIVE_EXPORT.has(job.status)) : [];
+  const finished = grouped ? single.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
+  const forget = (job: ExportJob) => {
+    setHidden((current) => new Set(current).add(job.id));
+    onRefresh?.();
+  };
+  const row = (job: ExportJob) => <ExportRow key={job.id} job={job} onCancel={onCancel} onView={setViewing} onDeleted={forget} onRefresh={onRefresh} compact={compact} />;
+  return <>
+    {grouped
+      ? <>
+        {active.length > 0 && <section className="studio-export-day" aria-labelledby="studio-export-day-making">
+          <h2 id="studio-export-day-making" className="studio-export-day-label">Making now</h2>
+          <ul className="studio-exports-list">{active.map(row)}</ul>
+        </section>}
+        {batches.length > 0 && <section className="studio-export-day" aria-labelledby="studio-export-day-lists">
+          <h2 id="studio-export-day-lists" className="studio-export-day-label">Lists</h2>
+          <ul className="studio-exports-list">
+            {batches.map((batch) => <BatchGroupRow key={batch.id} batch={batch} onView={setViewing} onRefresh={onRefresh} />)}
+          </ul>
+        </section>}
+        {groupExportsByDay(finished).map((group) => <section key={group.key} className="studio-export-day" aria-labelledby={`studio-export-day-${group.key}`}>
+          <h2 id={`studio-export-day-${group.key}`} className="studio-export-day-label">{group.label}</h2>
+          <ul className="studio-exports-list">{group.jobs.map(row)}</ul>
+        </section>)}
+      </>
+      : <ul className="studio-exports-list studio-exports-panel-list">{visible.map(row)}</ul>}
+    <ExportViewer job={viewing} onClose={() => setViewing(null)} />
+  </>;
+}
+
+export function ExportsPanel({ open, onOpenChange, refreshKey }: { open: boolean; onOpenChange: (open: boolean) => void; refreshKey?: number }) {
+  const { jobs, error, cancel, retry } = useExports(open, refreshKey);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent variant="sheet" className="studio-exports-panel">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>Exports</DialogTitle>
+          <DialogDescription>Files you've made, newest first.</DialogDescription>
+        </DialogHeader>
+        <div className="studio-exports-scroll">
+          {!!error && <div role="alert" className="mb-3 flex flex-col items-start gap-2 text-sm text-danger">
+            <p>Couldn't refresh exports. {friendlyError(error)}</p>
+            <Button variant="secondary" size="sm" onClick={retry}><RotateCw /> Try again</Button>
+          </div>}
+          {jobs === null ? (
+            <p className="flex items-center gap-2 py-6 text-sm text-fg-muted">
+              <Spinner /> Loading…
+            </p>
+          ) : error && jobs.length === 0 ? null : jobs.length === 0 ? (
+            <p className="py-6 text-sm text-fg-muted">Nothing yet. Use Export in a video to make a file.</p>
+          ) : (
+            <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} compact />
+          )}
+        </div>
+        <DialogFooter className="shrink-0"><Button variant="ghost" size="md" onClick={() => onOpenChange(false)}>Close</Button></DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The library's exports page: answer "is it ready?" first, then a compact timeline. */
+export function ExportsPage({ exports: { jobs, error, cancel, retry } }: { exports: ReturnType<typeof useExports> }) {
+  const active = jobs?.filter((job) => ACTIVE_EXPORT.has(job.status)).length ?? 0;
+  const ready = jobs?.filter((job) => job.status === "done").length ?? 0;
+  return <section className="studio-exports-page" aria-label="Exported files">
+    {!!error && <div role="alert" className="studio-inline-error"><span>Couldn't refresh exports. {friendlyError(error)}</span><Button variant="secondary" size="sm" onClick={retry}><RotateCw /> Try again</Button></div>}
+    {jobs === null
+      ? !error && <p role="status" className="studio-exports-loading"><Spinner /> Loading exports…</p>
+      : jobs.length === 0
+        ? !error && <div className="studio-empty" role="status">
+          <div className="studio-empty-picture studio-empty-export"><FolderDown aria-hidden /></div>
+          <h2>Nothing exported yet</h2>
+          <p>Finished videos land here, ready to share.</p>
+          <div className="studio-empty-actions"><Button asChild size="md"><a href="#/templates">Make a video <ArrowRight aria-hidden /></a></Button></div>
+        </div>
+        : <>
+          <div className="studio-exports-summary">
+            <p className="text-[13px] leading-relaxed text-fg-subtle" role="status">{active > 0 ? `Making ${active === 1 ? "your video" : `${active} videos`}…` : ready > 0 ? "Your videos are ready." : "Nothing to share yet."}</p>
+            <p className="studio-exports-hint">{jobs.length} {jobs.length === 1 ? "file" : "files"} · newest first</p>
+          </div>
+          <ExportsList jobs={jobs} onCancel={cancel} onRefresh={retry} grouped />
+        </>}
+  </section>;
+}

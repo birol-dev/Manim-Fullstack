@@ -301,10 +301,10 @@ def test_watcher_passes_exit_code_and_group_signals_still_work(tmp_path):
 # ---- 4. glued host paths -----------------------------------------------------------
 
 @pytest.fixture
-def deep_ws(tmp_path):
-    ws = tmp_path / "proj" / "app" / "workspace"
-    ws.mkdir(parents=True)
-    return str(ws)
+def deep_ws():
+    # Not under temp (pytest's tmp_path is) or home: the workspace rule is what
+    # these tests are about, and either prefix would be redacted on its own.
+    return os.path.join(os.path.abspath(os.sep), "redaction-fixture", "proj", "app", "workspace")
 
 
 def test_path_glued_to_a_word_is_redacted(deep_ws):

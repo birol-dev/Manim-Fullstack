@@ -125,6 +125,7 @@ function Tooltip({ content, shortcut, side = "bottom", align = "center", sideOff
       </TooltipPrimitive.Trigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
+          data-ui="tooltip-content"
           side={side}
           align={align}
           sideOffset={sideOffset}

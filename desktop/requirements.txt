@@ -1,0 +1,2 @@
+# Installed into desktop/.runtime only; backend requirements are installed too.
+pywebview==6.2.1

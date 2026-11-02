@@ -1,413 +1,172 @@
-"use strict";
-
-const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const header = document.querySelector(".site-header");
-const navToggle = document.querySelector(".nav-toggle");
-const navMenu = document.querySelector("#nav-menu");
-
-function setHeaderState() {
-  if (!header) return;
-  header.classList.toggle("is-scrolled", window.scrollY > 18);
-}
-
-setHeaderState();
-window.addEventListener("scroll", setHeaderState, { passive: true });
-
-function closeNavMenu() {
-  if (!navToggle || !navMenu) return;
-  navToggle.setAttribute("aria-expanded", "false");
-  navToggle.setAttribute("aria-label", "Open navigation menu");
-  navMenu.classList.remove("is-open");
-  document.body.classList.remove("nav-open");
-}
-
-function openNavMenu() {
-  if (!navToggle || !navMenu) return;
-  navToggle.setAttribute("aria-expanded", "true");
-  navToggle.setAttribute("aria-label", "Close navigation menu");
-  navMenu.classList.add("is-open");
-  document.body.classList.add("nav-open");
-}
-
-if (navToggle && navMenu) {
-  navToggle.addEventListener("click", () => {
-    const isOpen = navToggle.getAttribute("aria-expanded") === "true";
-    if (isOpen) {
-      closeNavMenu();
-    } else {
-      openNavMenu();
-    }
-  });
-
-  navMenu.querySelectorAll("a").forEach((link) => {
-    link.addEventListener("click", closeNavMenu);
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeNavMenu();
-  });
-
-  document.addEventListener("click", (event) => {
-    if (navToggle.getAttribute("aria-expanded") !== "true") return;
-    const target = event.target;
-    if (target instanceof Node && !navMenu.contains(target) && !navToggle.contains(target)) {
-      closeNavMenu();
-    }
-  });
-
-  window.addEventListener(
-    "resize",
-    () => {
-      if (window.innerWidth > 820) closeNavMenu();
-    },
-    { passive: true }
-  );
-}
-
-document.querySelectorAll(".faq-trigger").forEach((trigger) => {
-  trigger.addEventListener("click", () => {
-    const item = trigger.closest(".faq-item");
-    if (!item) return;
-
-    const willOpen = !item.classList.contains("is-open");
-    document.querySelectorAll(".faq-item").forEach((faq) => {
-      faq.classList.remove("is-open");
-      const faqButton = faq.querySelector(".faq-trigger");
-      faqButton?.setAttribute("aria-expanded", "false");
-    });
-
-    item.classList.toggle("is-open", willOpen);
-    trigger.setAttribute("aria-expanded", String(willOpen));
-  });
-});
-
-const revealTargets = document.querySelectorAll(
-  ".pain-card, .workflow-board article, .feature-row, .table-row, .timeline article, .audience-grid article, .quote-panel, .faq-item"
-);
-
-if (prefersReducedMotion) {
-  revealTargets.forEach((target) => target.classList.add("is-visible"));
-} else if ("IntersectionObserver" in window) {
-  const revealObserver = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) return;
-        entry.target.classList.add("is-visible");
-        revealObserver.unobserve(entry.target);
-      });
-    },
-    { threshold: 0.12, rootMargin: "0px 0px -80px 0px" }
-  );
-
-  revealTargets.forEach((target, index) => {
-    target.classList.add("reveal");
-    target.style.transitionDelay = `${Math.min(index * 28, 220)}ms`;
-    revealObserver.observe(target);
-  });
-} else {
-  revealTargets.forEach((target) => target.classList.add("is-visible"));
-}
-
-const canvas = document.querySelector("#equation-field");
-const context = canvas?.getContext("2d");
-
-let canvasWidth = 0;
-let canvasHeight = 0;
-
-function resizeCanvas() {
-  if (!canvas || !context) return;
-  const ratio = Math.min(window.devicePixelRatio || 1, 2);
-  const rect = canvas.getBoundingClientRect();
-  canvasWidth = rect.width;
-  canvasHeight = rect.height;
-  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
-}
-
-const glyphs = [
-  "∫",
-  "∂",
-  "π",
-  "λ",
-  "∑",
-  "θ",
-  "∇",
-  "lim",
-  "sin",
-  "cos",
-  "e^{iπ}",
-  "MathTex",
-  "Scene",
-  "Write",
-  "Transform",
-];
-
-let particles = [];
-let animationFrame = 0;
-
-function seedParticles() {
-  if (!canvas) return;
-  const isNarrow = canvasWidth < 560;
-  const divisor = isNarrow ? 32 : 22;
-  const maxCount = isNarrow ? 42 : 80;
-  const count = Math.max(isNarrow ? 18 : 34, Math.min(maxCount, Math.floor(canvasWidth / divisor)));
-
-  particles = Array.from({ length: count }, (_, index) => ({
-    x: Math.random() * canvasWidth,
-    y: Math.random() * canvasHeight,
-    speed: 0.14 + Math.random() * 0.34,
-    size: 13 + Math.random() * 18,
-    alpha: 0.08 + Math.random() * 0.22,
-    glyph: glyphs[index % glyphs.length],
-    hue: index % 3,
-  }));
-}
-
-function drawEquationField() {
-  if (!canvas || !context || canvasWidth <= 0 || canvasHeight <= 0) return;
-
-  context.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  particles.forEach((particle) => {
-    particle.y -= particle.speed;
-    particle.x += Math.sin((particle.y + particle.size) / 90) * 0.12;
-
-    if (particle.y < -40) {
-      particle.y = canvasHeight + 40;
-      particle.x = Math.random() * canvasWidth;
-    }
-
-    const color = particle.hue === 0 ? "240, 184, 77" : particle.hue === 1 ? "45, 167, 162" : "217, 107, 60";
-    context.font = `${particle.size}px "JetBrains Mono", monospace`;
-    context.fillStyle = `rgba(${color}, ${particle.alpha})`;
-    context.fillText(particle.glyph, particle.x, particle.y);
-  });
-
-  if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches && !document.hidden) {
-    animationFrame = window.requestAnimationFrame(drawEquationField);
-  }
-}
-
-function startEquationField() {
-  if (!canvas || !context) return;
-  if (animationFrame) {
-    window.cancelAnimationFrame(animationFrame);
-    animationFrame = 0;
-  }
-  resizeCanvas();
-  if (canvasWidth > 0 && canvasHeight > 0) {
-    seedParticles();
-    drawEquationField();
-  }
-}
-
-if (canvas && context) {
-  startEquationField();
-
-  window.addEventListener(
-    "resize",
-    () => {
-      startEquationField();
-    },
-    { passive: true }
-  );
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      if (animationFrame) {
-        window.cancelAnimationFrame(animationFrame);
-        animationFrame = 0;
-      }
-    } else if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      startEquationField();
-    }
-  });
-
-  if (document.fonts) {
-    document.fonts.ready.then(() => {
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        drawEquationField();
-      }
-    });
-  }
-}
-
-/* --- Scene Interactivity --- */
-const scenes = {
-  eulers: {
-    title: "workspace / eulers_identity.py",
-    status: "Rendering 78%",
-    code: `<span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
-
-<span class="code-keyword">class</span> <span class="code-class">EulersIdentity</span>(Scene):
-    <span class="code-keyword">def</span> <span class="code-fn">construct</span>(self):
-        eq = MathTex(
-            <span class="code-string">r"e^{i\\pi}+1=0"</span>,
-            font_size=<span class="code-num">92</span>
-        )
-        box = SurroundingRectangle(eq)
-        self.play(Write(eq))
-        self.play(Create(box))`,
-    preview: `<span>e<sup>iπ</sup> + 1 = 0</span>`,
-    logs: `<p><span>stdout</span> Building EulersIdentity</p>
-<p><span>progress</span> Animation 3 of 4</p>
-<p><span>file</span> media/videos/1080p60.mp4</p>`
-  },
-  vector: {
-    title: "workspace / vector_field.py",
-    status: "Rendering 45%",
-    code: `<span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
-
-<span class="code-keyword">class</span> <span class="code-class">VectorField</span>(Scene):
-    <span class="code-keyword">def</span> <span class="code-fn">construct</span>(self):
-        func = <span class="code-keyword">lambda</span> p: np.sin(p[<span class="code-num">0</span>]/<span class="code-num">2</span>)*UR + np.cos(p[<span class="code-num">1</span>]/<span class="code-num">2</span>)*LEFT
-        vf = ArrowVectorField(func)
-        self.play(Create(vf))`,
-    preview: `<span style="font-size: 1.5rem; text-align: center; line-height: 1.4;">F(x,y) = sin(x/2)î + cos(y/2)ĵ<br><span style="font-size: 1rem; opacity: 0.6; display: block; margin-top: 10px;">[Vector Field Arrows]</span></span>`,
-    logs: `<p><span>stdout</span> Building VectorField</p>
-<p><span>progress</span> Animation 1 of 2</p>
-<p><span>file</span> media/videos/vector_field.mp4</p>`
-  },
-  fourier: {
-    title: "workspace / fourier_trace.py",
-    status: "Rendering 60%",
-    code: `<span class="code-keyword">from</span> manim <span class="code-keyword">import</span> *
-
-<span class="code-keyword">class</span> <span class="code-class">FourierTrace</span>(Scene):
-    <span class="code-keyword">def</span> <span class="code-fn">construct</span>(self):
-        path = Circle(radius=<span class="code-num">2</span>)
-        fourier = FourierSeries(path, n_vectors=<span class="code-num">8</span>)
-        self.play(Create(fourier))`,
-    preview: `<span style="font-size: 1.8rem;">∑ c<sub>n</sub> e<sup>i n ω t</sup></span>`,
-    logs: `<p><span>stdout</span> Building FourierTrace</p>
-<p><span>progress</span> Animation 2 of 3</p>
-<p><span>file</span> media/videos/fourier_trace.mp4</p>`
-  }
+const $ = (selector) => document.querySelector(selector);
+const palettes = {
+  lilac: ['#e0eaff', '#474784', '#efa0b0', '#a58ecb'],
+  ember: ['#fff0ce', '#3b1515', '#f77c55', '#c5996c'],
+  lagoon: ['#d9f2e7', '#17465a', '#7cb7b6', '#b2d2a4'],
 };
+const names = { mesh: 'Mesh Gradient', warp: 'Warp', neuro: 'Neuro Noise' };
+const images = { mesh: 'mesh-gradient', warp: 'warp', neuro: 'neuro-noise' };
+let effect = 'mesh';
+let paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let mount;
+let engine;
+let usable = false;
 
-const sceneButtons = document.querySelectorAll("[data-scene]");
-const appTitle = document.querySelector("#app-title");
-const renderStatus = document.querySelector("#render-status");
-const codeContent = document.querySelector("#code-content");
-const canvasPreview = document.querySelector("#canvas-preview");
-const logStream = document.querySelector("#log-stream");
+function updatePlayback() {
+  const speed = Number($('#speed').value);
+  mount?.setSpeed(paused ? 0 : speed);
+  $('#pause-shader').textContent = paused ? '▶' : 'Ⅱ';
+  $('#pause-shader').setAttribute('aria-label', paused ? 'Play preview' : 'Pause preview');
+  $('#preview-status').textContent = !usable ? 'Example image' : paused || speed === 0 ? 'Paused' : 'Live preview';
+}
 
-sceneButtons.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const sceneKey = btn.getAttribute("data-scene");
-    const sceneData = scenes[sceneKey];
-    if (!sceneData) return;
+function uniforms() {
+  const colors = palettes[$('#palette').value].map(engine.getShaderColorFromString);
+  const base = { u_fit: 1, u_scale: Number($('#scale').value), u_rotation: 0, u_offsetX: 0, u_offsetY: 0, u_originX: 0.5, u_originY: 0.5, u_worldWidth: 0, u_worldHeight: 0 };
+  if (effect === 'mesh') return { ...base, u_colors: colors, u_colorsCount: colors.length, u_distortion: 0.8, u_swirl: 0.2, u_grainMixer: 0.04, u_grainOverlay: 0.03 };
+  if (effect === 'warp') return { ...base, u_fit: 0, u_colors: colors, u_colorsCount: colors.length, u_proportion: 0.4, u_softness: 1, u_distortion: 0.25, u_swirl: 0.8, u_swirlIterations: 10, u_shapeScale: 0.2, u_shape: 0, u_noiseTexture: engine.getShaderNoiseTexture() };
+  return { ...base, u_fit: 0, u_colorBack: colors[1], u_colorMid: colors[2], u_colorFront: colors[0], u_brightness: 0.05, u_contrast: 0.3 };
+}
 
-    sceneButtons.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
+function swatches() {
+  document.querySelectorAll('.palette-swatches i').forEach((node, index) => node.style.background = palettes[$('#palette').value][index]);
+}
 
-    if (appTitle) appTitle.textContent = sceneData.title || "";
-    if (renderStatus) renderStatus.textContent = sceneData.status || "";
-    if (codeContent) codeContent.innerHTML = sceneData.code || "";
-    if (canvasPreview) canvasPreview.innerHTML = sceneData.preview || "";
-    if (logStream) logStream.innerHTML = sceneData.logs || "";
+function showEffect() {
+  const host = $('#shader-canvas');
+  mount?.dispose();
+  mount = undefined;
+  host.querySelectorAll('canvas').forEach((canvas) => canvas.remove());
+  host.style.backgroundImage = `url('assets/shaders/${images[effect]}.webp')`;
+  host.setAttribute('aria-label', `${names[effect]} preview`);
+  $('#effect-caption').textContent = `${String(Object.keys(names).indexOf(effect) + 1).padStart(2, '0')} / ${names[effect]}`;
+  if (usable) {
+    try {
+      const shader = effect === 'mesh' ? engine.meshGradientFragmentShader : effect === 'warp' ? engine.warpFragmentShader : engine.neuroNoiseFragmentShader;
+      mount = new engine.ShaderMount(host, shader, uniforms(), { preserveDrawingBuffer: true }, paused ? 0 : Number($('#speed').value), 1400, 1, 1_500_000);
+    } catch { usable = false; host.querySelector('canvas')?.remove(); }
+  }
+  $('#shader-fallback').hidden = usable;
+  for (const id of ['save-shader', 'pause-shader', 'speed', 'scale', 'palette']) $(`#${id}`).disabled = !usable;
+  updatePlayback();
+}
+
+document.querySelectorAll('[data-effect]').forEach((button) => button.addEventListener('click', () => {
+  effect = button.dataset.effect;
+  document.querySelectorAll('[data-effect]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+  showEffect();
+}));
+$('#palette').addEventListener('change', () => { swatches(); mount?.setUniforms(uniforms()); });
+$('#speed').addEventListener('input', () => { $('#speed-value').textContent = `${Math.round(Number($('#speed').value) * 100)}%`; updatePlayback(); });
+$('#scale').addEventListener('input', () => { $('#scale-value').textContent = `${Math.round(Number($('#scale').value) * 100)}%`; mount?.setUniforms(uniforms()); });
+$('#pause-shader').addEventListener('click', () => { paused = !paused; updatePlayback(); });
+$('#save-shader').addEventListener('click', () => {
+  mount?.canvasElement.toBlob((blob) => {
+    if (!blob) { $('#download-status').textContent = 'Could not save that frame. Please try again.'; return; }
+    const url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = `manim-studio-${images[effect]}.png`;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    $('#download-status').textContent = 'Your PNG download has started.';
+  }, 'image/png');
+});
+swatches(); updatePlayback();
+try {
+  engine = await import('./assets/shader-engine.js');
+  // The vanilla renderer expects texture images to have finished decoding.
+  await engine.getShaderNoiseTexture().decode();
+  const probe = document.createElement('canvas'), gl = probe.getContext('webgl2');
+  usable = !!gl; gl?.getExtension('WEBGL_lose_context')?.loseContext();
+} catch { usable = false; }
+showEffect();
+window.addEventListener('pagehide', () => { mount?.dispose(); mount = undefined; });
+window.addEventListener('pageshow', (event) => { if (event.persisted) showEffect(); });
+
+const collections = {
+  filters: [['paper-texture', 'Paper Texture', 'Folds, fibers, and beautiful imperfections'], ['fluted-glass', 'Fluted Glass', 'A new perspective through sculpted glass'], ['water', 'Water', 'Ripples, reflections, and dancing light']],
+  logos: [['heatmap', 'Heatmap', 'A flowing thermal glow'], ['liquid-metal', 'Liquid Metal', 'Your logo, cast in living chrome'], ['gem-smoke', 'Gem Smoke', 'Luminous color around your silhouette']],
+  textures: [['grain-gradient', 'Grain Gradient', 'Color with a little character'], ['voronoi', 'Voronoi', 'Living cells and crystalline edges'], ['god-rays', 'God Rays', 'A little atmosphere. A lot of light.']],
+};
+document.querySelectorAll('[data-collection]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-collection]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+  const cards = collections[button.dataset.collection].map(([id, title, type]) => {
+    const card = document.createElement('a'), picture = document.createElement('div'), image = document.createElement('img'), caption = document.createElement('span'), small = document.createElement('small'), arrow = document.createElement('b');
+    card.className = 'template-card'; card.href = '#start';
+    image.src = `assets/shaders/${id}.webp`; image.alt = `${title} shader preview`; image.width = 768; image.height = 432;
+    picture.append(image); caption.textContent = title; small.textContent = type; arrow.textContent = '↗'; arrow.setAttribute('aria-hidden', 'true'); caption.append(arrow); card.append(picture, caption); return card;
   });
+  $('#template-grid').replaceChildren(...cards);
+}));
+
+document.querySelectorAll('[data-platform]').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('[data-platform]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+  const unix = button.dataset.platform === 'unix';
+  $('#setup-commands').textContent = `git clone https://github.com/birol-dev/Manim-Fullstack.git\ncd Manim-Fullstack\n${unix ? 'python3' : 'python'} run.py`;
+  $('#platform-note').textContent = unix ? 'macOS and Linux also need Cairo and Pango. Follow the setup guide below.' : 'The launcher prepares the app and opens it in your browser.';
+}));
+$('#copy-commands').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('#setup-commands').textContent); $('#copy-status').textContent = 'Setup commands copied.'; $('#copy-commands').textContent = 'Copied ✓'; }
+  catch { $('#copy-status').textContent = 'Select the commands above and copy them manually.'; $('#copy-commands').textContent = 'Select to copy'; }
+  setTimeout(() => $('#copy-commands').textContent = 'Copy ⧉', 2500);
 });
 
-/* --- Scroll Spy Navigation --- */
-const spySections = document.querySelectorAll("header[id], section[id]");
-const navLinks = document.querySelectorAll(".nav-menu a");
-
-function scrollSpy() {
-  const isNearTop = window.scrollY < 80;
-
-  if (isNearTop) {
-    navLinks.forEach((link) => {
-      link.classList.toggle("active", link.getAttribute("href") === "#top");
-    });
-    return;
+// Scroll position is the animation clock: reversing the scroll reverses the effect.
+const story = $('#scroll-story');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const chapters = [
+  ['Pick a shader.', 'A starting point for something yours.', 'Warp / a little curiosity'],
+  ['Make it yours.', 'Your color. Your texture. Your motion.', 'Warp / your own direction'],
+  ['Keep the effect.', 'PNG or WebM. Ready for your next idea.', 'Warp / ready to take with you'],
+];
+let storyMount;
+let scrollFrame = 0;
+let currentChapter = -1;
+function storyUniforms(progress) {
+  const start = ['#e8eadf', '#547f83', '#8ebfc0', '#b4bac9'].map(engine.getShaderColorFromString);
+  const finish = ['#fce8c6', '#3f2d67', '#a88dbb', '#e2ac95'].map(engine.getShaderColorFromString);
+  const colors = start.map((color, index) => color.map((channel, c) => channel + (finish[index][c] - channel) * progress));
+  return { u_fit: 0, u_scale: 0.65 + progress * 0.9, u_rotation: progress * 35, u_originX: 0.5, u_originY: 0.5, u_offsetX: 0, u_offsetY: 0, u_worldWidth: 0, u_worldHeight: 0,
+    u_colors: colors, u_colorsCount: 4, u_proportion: 0.45, u_softness: 0.95, u_distortion: 0.05 + progress * 0.8,
+    u_swirl: 0.15 + progress * 0.85, u_swirlIterations: 10, u_shapeScale: 0.17 + progress * 0.25, u_shape: 0, u_noiseTexture: engine.getShaderNoiseTexture() };
+}
+function renderStory(progress, explicit = false) {
+  progress = Math.min(1, Math.max(0, progress));
+  const chapter = progress < 0.33 ? 0 : progress < 0.72 ? 1 : 2;
+  if (chapter !== currentChapter) {
+    currentChapter = chapter;
+    $('#scrub-title').textContent = chapters[chapter][0]; $('#scrub-copy').textContent = chapters[chapter][1]; $('#scrub-badge').textContent = chapters[chapter][2];
+    $('#scrub-step').textContent = `0${chapter + 1} / 03`;
+    document.querySelectorAll('[data-chapter]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.chapter) === chapter)));
   }
-
-  let currentId = "";
-  spySections.forEach((section) => {
-    const rect = section.getBoundingClientRect();
-    if (rect.top <= 140 && rect.bottom > 140) {
-      currentId = section.getAttribute("id") || "";
-    }
-  });
-
-  if (currentId) {
-    navLinks.forEach((link) => {
-      link.classList.toggle("active", link.getAttribute("href") === `#${currentId}`);
-    });
+  $('#scrub-progress').value = progress;
+  if (!reducedMotion || explicit) {
+    story.style.setProperty('--scrub-scale', String(0.88 + Math.sin(progress * Math.PI) * 0.12));
+    story.style.setProperty('--scrub-rotate', `${-2 + progress * 4}deg`);
+    storyMount?.setUniforms(storyUniforms(progress));
+    storyMount?.setFrame(progress * 18_000);
   }
 }
-
-window.addEventListener("scroll", scrollSpy, { passive: true });
-scrollSpy();
-
-/* --- Hero Terminal Command Copy --- */
-const heroCopyBtn = document.querySelector("#hero-copy-btn");
-const heroInstallCmd = document.querySelector("#hero-install-cmd");
-
-if (heroCopyBtn && heroInstallCmd) {
-  let copyTimeout = null;
-
-  heroCopyBtn.addEventListener("click", async () => {
-    const commandText = heroInstallCmd.textContent.trim();
-    let copied = false;
-
-    if (navigator.clipboard && window.isSecureContext) {
-      try {
-        await navigator.clipboard.writeText(commandText);
-        copied = true;
-      } catch (err) {
-        copied = false;
-      }
-    }
-
-    if (!copied) {
-      try {
-        const textarea = document.createElement("textarea");
-        textarea.value = commandText;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
-        textarea.style.top = "0";
-        textarea.setAttribute("readonly", "true");
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        textarea.setSelectionRange(0, 99999);
-        copied = document.execCommand("copy");
-        document.body.removeChild(textarea);
-      } catch (err) {
-        copied = false;
-      }
-    }
-
-    const textSpan = heroCopyBtn.querySelector(".copy-text");
-
-    if (copied) {
-      heroCopyBtn.classList.add("copied");
-      if (textSpan) textSpan.textContent = "Copied!";
-      heroCopyBtn.setAttribute("aria-label", "Command copied to clipboard");
-    } else {
-      // Failsafe: select the text in the terminal element so the user can easily press Ctrl+C / Cmd+C
-      try {
-        const range = document.createRange();
-        range.selectNodeContents(heroInstallCmd);
-        const sel = window.getSelection();
-        sel?.removeAllRanges();
-        sel?.addRange(range);
-      } catch (err) {
-        // Selection fallback handled silently
-      }
-      heroCopyBtn.classList.add("copied");
-      if (textSpan) textSpan.textContent = "Press Ctrl+C";
-      heroCopyBtn.setAttribute("aria-label", "Press Ctrl+C to copy selected command");
-    }
-
-    if (copyTimeout) clearTimeout(copyTimeout);
-    copyTimeout = setTimeout(() => {
-      heroCopyBtn.classList.remove("copied");
-      if (textSpan) textSpan.textContent = "Copy";
-      heroCopyBtn.setAttribute("aria-label", "Copy terminal install command");
-    }, 2000);
-  });
+function updateStory() {
+  scrollFrame = 0;
+  if (reducedMotion) return;
+  const box = story.getBoundingClientRect();
+  if (box.top > innerHeight || box.bottom < 0) return;
+  renderStory(-box.top / Math.max(1, box.height - innerHeight));
 }
+function scheduleStory() { if (!scrollFrame) scrollFrame = requestAnimationFrame(updateStory); }
+function initStory() {
+  if (usable) {
+    try { storyMount = new engine.ShaderMount($('#scrub-canvas'), engine.warpFragmentShader, storyUniforms(0), { preserveDrawingBuffer: true }, 0, 0, 1, 1_500_000); }
+    catch { $('#scrub-canvas').querySelector('canvas')?.remove(); }
+  }
+  if (reducedMotion) renderStory(0, true); else scheduleStory();
+}
+document.querySelectorAll('[data-chapter]').forEach((button) => button.addEventListener('click', () => {
+  const progress = Number(button.dataset.chapter) / 2;
+  if (reducedMotion) renderStory(progress, true);
+  else { const box = story.getBoundingClientRect(); window.scrollTo({ top: scrollY + box.top + progress * (box.height - innerHeight), behavior: 'smooth' }); }
+}));
+addEventListener('scroll', scheduleStory, { passive: true }); addEventListener('resize', scheduleStory, { passive: true });
+addEventListener('pagehide', () => { cancelAnimationFrame(scrollFrame); storyMount?.dispose(); storyMount = undefined; });
+addEventListener('pageshow', (event) => { if (event.persisted) { $('#scrub-canvas').querySelectorAll('canvas').forEach((canvas) => canvas.remove()); initStory(); } });
+initStory();

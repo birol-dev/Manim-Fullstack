@@ -641,6 +641,7 @@ class ManimExecutor:
         output_stem=None,
         extra_args=None,
         stage=None,
+        extra_env=None,
     ):
         """Render *scene_name* from *script_name* and stream events to *log_callback*.
 
@@ -651,6 +652,8 @@ class ManimExecutor:
         *extra_args* are passed to Manim but not shown in the command echo.
         *stage* names the per-run folder (``STAGE_PREFIX`` + id) the per-run config
         sends Manim's final outputs to; they replace the real ones only on success.
+        *extra_env* adds variables to Manim's environment (studio exports pass the
+        job file this way).
         """
         output_stem = output_stem or os.path.splitext(script_name)[0]
         if self.is_running:
@@ -683,7 +686,7 @@ class ManimExecutor:
             # the server's stdin makes that prompt wait until the render timeout.
             "stdin": asyncio.subprocess.DEVNULL,
             "cwd": self.workspace_dir,
-            "env": self._subprocess_env(),
+            "env": {**self._subprocess_env(), **(extra_env or {})},
         }
         if platform.system() == "Windows":
             popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
