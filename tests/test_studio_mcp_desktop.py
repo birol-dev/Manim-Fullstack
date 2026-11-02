@@ -14,6 +14,9 @@ import time
 
 import pytest
 
+if sys.platform != "win32":
+    pytest.skip("The native desktop agent host uses Windows process and workspace locks.", allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "desktop"
 if str(DESKTOP) not in sys.path:
