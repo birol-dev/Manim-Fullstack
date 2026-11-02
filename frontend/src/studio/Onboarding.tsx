@@ -1,6 +1,7 @@
+import { StudioMark } from "./StudioMark";
 /** The welcome tour: five real questions, saved as they are answered, over a live template preview. */
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowLeft, Check, Clapperboard, Play } from "lucide-react";
+import { ArrowLeft, Check, Clapperboard } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { apiUrl } from "@/lib/api";
@@ -260,7 +261,7 @@ export function OnboardingPage() {
   return <main className="studio-onboarding" aria-labelledby={questionId}>
     <h2 className="sr-only">Welcome to Manim Studio</h2>
     <div className="studio-onboarding-logo">
-      <span className="studio-brand-mark" aria-hidden><Play fill="currentColor" /></span>
+      <span className="studio-brand-mark" aria-hidden><StudioMark /></span>
       <span className="studio-onboarding-wordmark">Manim Studio</span>
     </div>
 

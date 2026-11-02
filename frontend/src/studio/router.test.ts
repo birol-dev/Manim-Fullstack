@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { parseRoute, routeHash, type Route } from "./router";
 
 describe("settings and welcome routes", () => {
+  it("opens a dedicated shader workspace", () => {
+    expect(parseRoute("#/shaders")).toEqual({ kind: "shaders" });
+    expect(routeHash({ kind: "shaders" })).toBe("#/shaders");
+  });
   it("parses a settings section and the welcome tour", () => {
     expect(parseRoute("#/settings")).toEqual({ kind: "settings" });
     expect(parseRoute("#/settings/ai")).toEqual({ kind: "settings", section: "ai" });

@@ -1,0 +1,131 @@
+/* The shader workspace shares Studio's paper-and-ink palette; the artwork supplies the color. */
+:root[data-surface="studio"] .studio-shader-content { overflow: hidden; }
+:root[data-surface="studio"] .studio-shader-container { height: 100%; max-width: none; padding: 0; }
+.shader-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.shader-page-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 26px 30px 24px; border-bottom: 1px solid var(--color-line); }
+.shader-page-header h1 { display: flex; align-items: center; gap: 14px; margin: 5px 0 7px; font-family: var(--font-display); font-size: 42px; font-weight: 350; letter-spacing: -.035em; line-height: 1; }
+.shader-total { display: grid; place-items: center; width: 28px; height: 24px; margin-top: 5px; border: 1px solid var(--color-line-strong); border-radius: 7px; color: var(--color-fg-muted); font: 11px var(--font-mono); letter-spacing: 0; }
+.shader-page-header p { margin: 0; color: var(--color-fg-muted); font-size: 12px; }
+.shader-eyebrow { display: flex; align-items: center; gap: 7px; color: var(--color-fg-subtle); font-size: 10px; font-weight: 500; letter-spacing: .06em; }
+.shader-eyebrow svg { width: 13px; height: 13px; }
+.shader-file-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
+.shader-autosave { display: flex; align-items: center; justify-content: flex-end; gap: 5px; width: 100%; margin-bottom: 4px; color: var(--color-fg-subtle); font-size: 10px; }
+.shader-autosave svg { width: 12px; height: 12px; }
+.shader-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 7px 12px; border: 1px solid var(--color-line-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-fg); font-size: 11px; font-weight: 500; white-space: nowrap; transition: background 150ms, border-color 150ms; }
+.shader-button:hover { border-color: var(--color-fg-subtle); background: var(--color-raised); }
+.shader-button svg { width: 14px; height: 14px; flex-shrink: 0; }
+.shader-primary { border-color: var(--color-ink); background: var(--color-ink); color: var(--color-ink-fg); }
+.shader-primary:hover { background: var(--color-ink-hover); border-color: var(--color-ink-hover); }
+.shader-page button:disabled { cursor: not-allowed; opacity: .4; }
+.shader-page fieldset:disabled { opacity: .65; }
+.shader-workspace { display: grid; grid-template-columns: 238px minmax(280px, 1fr) 288px; flex: 1; min-height: 0; }
+.shader-browser { display: flex; flex-direction: column; min-height: 0; padding: 18px 15px 12px; border-right: 1px solid var(--color-line); background: var(--color-surface); }
+.shader-search { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 0 10px; border: 1px solid var(--color-line); border-radius: 8px; background: var(--color-canvas); }
+.shader-search svg { width: 14px; height: 14px; color: var(--color-fg-subtle); }
+.shader-search input { width: 100%; min-width: 0; height: 34px; outline: none; font-size: 12px; }
+.shader-search:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.shader-search input::placeholder { color: var(--color-fg-subtle); }
+.shader-categories { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 5px; padding: 15px 0; }
+.shader-categories button { display: flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; color: var(--color-fg-muted); font-size: 10px; }
+.shader-categories button[aria-pressed="true"] { background: var(--color-raised); border-color: var(--color-line-strong); color: var(--color-fg); }
+.shader-categories button:hover { color: var(--color-fg); background: var(--color-canvas); }
+.shader-categories button span { color: var(--color-fg-subtle); font-size: 9px; font-variant-numeric: tabular-nums; }
+.shader-card-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 16px 10px; min-height: 0; padding: 3px 3px 16px; margin: -3px -3px 0; overflow: auto; }
+.shader-card { display: flex; flex-direction: column; gap: 7px; min-width: 0; text-align: left; border-radius: 7px; }
+.shader-card > div { position: relative; width: 100%; aspect-ratio: 1.22; overflow: hidden; border-radius: 7px; border: 1px solid var(--color-line); background: var(--color-raised); }
+.shader-card img { width: 100%; height: 100%; object-fit: cover; transition: transform 250ms; }
+.shader-card:hover img { transform: scale(1.06); }
+.shader-card[aria-pressed="true"] > div { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.shader-card > span { padding: 0 1px; color: var(--color-fg-muted); font-size: 10px; line-height: 1.3; }
+.shader-card[aria-pressed="true"] > span { color: var(--color-fg); font-weight: 600; }
+.shader-card-selected { display: grid; place-items: center; position: absolute; right: 5px; bottom: 5px; width: 18px; height: 18px; border-radius: 50%; color: var(--color-accent-fg); background: var(--color-accent); }
+.shader-card-selected svg { width: 12px; height: 12px; }
+.shader-credit { display: block; flex-shrink: 0; padding: 12px 0 0; margin-top: auto; color: var(--color-fg-subtle); font-size: 9px; }
+.shader-credit:hover { color: var(--color-fg); }
+.shader-no-results { grid-column: 1 / -1; padding: 15px 0; color: var(--color-fg-muted); font-size: 12px; }
+.shader-no-results button { display: block; margin-top: 12px; text-decoration: underline; }
+.shader-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 18px 28px 20px; overflow: auto; }
+.shader-canvas-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+.shader-canvas-label { color: var(--color-fg-subtle); font-size: 10px; }
+.shader-page select { min-height: 30px; padding: 4px 24px 4px 8px; border: 1px solid var(--color-line-strong); border-radius: 6px; background-color: var(--color-surface); color: var(--color-fg); font-size: 11px; }
+.shader-stage { display: flex; justify-content: center; align-items: center; flex: 1 0 180px; min-height: 180px; padding: 18px 0; }
+.shader-artwork-wrap { width: 100%; max-width: 100%; filter: drop-shadow(0 7px 16px rgb(0 0 0 / .07)); }
+.shader-aspect-square { max-width: min(100%, 44vh); }
+.shader-aspect-portrait { max-width: min(100%, 29vh); }
+.shader-artwork { position: relative; width: 100%; overflow: hidden; background-color: #ecece8; background-image: repeating-conic-gradient(#e4e4df 0% 25%, transparent 0% 50%); background-size: 18px 18px; border-radius: 3px; }
+.shader-artwork > [data-paper-shader] { position: absolute !important; top: 0; left: 0; }
+.shader-preview-message { display: flex; position: absolute; inset: 0; align-items: center; justify-content: center; flex-direction: column; gap: 10px; padding: 24px; background: var(--color-surface); color: var(--color-fg-muted); text-align: center; font-size: 12px; }
+.shader-playback { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; margin: 8px 0 26px; color: var(--color-fg-subtle); font-size: 10px; }
+.shader-playback > div { display: flex; align-items: center; gap: 7px; }
+.shader-playback > span { font-variant-numeric: tabular-nums; }
+.shader-round-button { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--color-line-strong); border-radius: 50%; color: var(--color-fg); background: var(--color-surface); }
+.shader-round-button svg { width: 10px; height: 10px; }
+.shader-round-button:hover { background: var(--color-raised); }
+.shader-text-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; color: var(--color-fg-muted); font-size: 10px; }
+.shader-text-button svg { width: 12px; height: 12px; }
+.shader-text-button:hover { color: var(--color-fg); }
+.shader-effect-caption { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 19px 0; border-top: 1px solid var(--color-line); }
+.shader-effect-caption h2 { margin: 5px 0 0; font-family: var(--font-display); font-size: 29px; font-weight: 350; line-height: 1.1; letter-spacing: -.02em; }
+.shader-effect-caption p { max-width: 215px; margin: 0; color: var(--color-fg-muted); font-size: 11px; line-height: 1.65; }
+.shader-export-bar { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; }
+.shader-video-export { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-left: auto; }
+.shader-video-export select { min-height: 34px; }
+.shader-export-hint { margin: 0; color: var(--color-fg-subtle); font-size: 9px; line-height: 1.6; }
+.shader-busy { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 10px; margin: 5px 0 12px; font-size: 11px; color: var(--color-fg-muted); }
+.shader-busy button { text-decoration: underline; }
+.shader-busy progress { width: 80px; height: 4px; accent-color: var(--color-accent); }
+.shader-inspector { min-width: 0; min-height: 0; overflow: auto; padding: 0 20px 25px; border-left: 1px solid var(--color-line); background: var(--color-surface); }
+.shader-inspector > header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 20px 0 17px; border-bottom: 1px solid var(--color-line); background: var(--color-surface); }
+.shader-inspector > header > span { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; }
+.shader-inspector > header > span svg { width: 13px; height: 13px; }
+.shader-inspector fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+.shader-section-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 10px; font-weight: 600; }
+.shader-section-label small { color: var(--color-fg-subtle); font-weight: 400; font-size: 9px; }
+.shader-presets { padding: 18px 0; border-bottom: 1px solid var(--color-line); }
+.shader-presets [role="group"] { display: flex; flex-wrap: wrap; gap: 5px; }
+.shader-presets button { padding: 5px 8px; border: 1px solid var(--color-line); border-radius: 6px; font-size: 10px; color: var(--color-fg-muted); }
+.shader-presets button:hover { border-color: var(--color-line-strong); color: var(--color-fg); }
+.shader-presets button[aria-pressed="true"] { border-color: var(--color-fg); color: var(--color-fg); background: var(--color-raised); }
+.shader-source { padding: 17px 0; border-bottom: 1px solid var(--color-line); }
+.shader-upload { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px; border: 1px dashed var(--color-line-strong); border-radius: 7px; text-align: left; }
+.shader-upload:hover { border-color: var(--color-fg-subtle); background: var(--color-canvas); }
+.shader-upload > img { width: 37px; height: 37px; border-radius: 3px; object-fit: cover; }
+.shader-upload > svg { width: 18px; height: 18px; color: var(--color-fg-subtle); flex-shrink: 0; }
+.shader-upload > svg:last-child { width: 13px; height: 13px; margin-left: auto; }
+.shader-upload > span { display: flex; flex-direction: column; gap: 3px; color: var(--color-fg); font-size: 10px; }
+.shader-upload small { color: var(--color-fg-subtle); font-size: 8px; }
+.shader-source > .shader-text-button { margin: 9px 0 0; }
+.shader-source > .shader-select-field { margin: 12px 0 0; }
+.shader-source p { margin: 10px 0 0; font-size: 9px; color: var(--color-fg-subtle); line-height: 1.6; }
+.shader-control-groups > section, .shader-control-groups > details { padding: 15px 0; border-bottom: 1px solid var(--color-line); }
+.shader-control-groups > section:last-child, .shader-control-groups > details:last-child { border-bottom: 0; }
+.shader-control-groups summary { color: var(--color-fg-muted); font-size: 10px; font-weight: 600; cursor: pointer; }
+.shader-control-groups details[open] summary { margin-bottom: 16px; color: var(--color-fg); }
+.shader-group-fields { display: flex; flex-direction: column; gap: 17px; }
+.shader-slider-field > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 10px; }
+.shader-slider-field > div > span { display: flex; align-items: center; justify-content: flex-end; min-width: 60px; gap: 2px; color: var(--color-fg-subtle); font-size: 9px; font-variant-numeric: tabular-nums; }
+.shader-slider-field input[type="number"] { width: 45px; border: 0; background: transparent; text-align: right; font: inherit; color: var(--color-fg-muted); appearance: textfield; -moz-appearance: textfield; }
+.shader-page input[type="number"]::-webkit-inner-spin-button { appearance: none; }
+.shader-slider-field input[type="range"] { display: block; width: 100%; height: 3px; margin: 9px 0 3px; accent-color: var(--color-fg); cursor: pointer; }
+.shader-select-field, .shader-toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 10px; }
+.shader-select-field select { max-width: 145px; min-width: 90px; }
+.shader-toggle input, .shader-group-enable input { width: 13px; height: 13px; accent-color: var(--color-ink); }
+.shader-group-enable { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 10px; font-weight: 600; }
+.shader-group-enable:has(+ .shader-group-fields) { margin-bottom: 17px; }
+.shader-color-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; }
+.shader-color-value { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.shader-color-value input[type="color"] { width: 20px; height: 20px; padding: 0; border: 1px solid var(--color-line-strong); border-radius: 4px; background: transparent; cursor: pointer; }
+.shader-color-value input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.shader-color-value input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 3px; }
+.shader-hex { width: 65px; color: var(--color-fg-muted); background: transparent; font-size: 9px; font-family: var(--font-mono); }
+.shader-color-value .shader-opacity { width: 24px; text-align: right; color: var(--color-fg-subtle); font-size: 9px; appearance: textfield; -moz-appearance: textfield; }
+.shader-percent { color: var(--color-fg-subtle); font-size: 8px; margin-left: -3px; }
+.shader-palette { display: flex; flex-direction: column; gap: 12px; }
+.shader-error { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 10px 25px; background: var(--color-danger-soft); color: var(--color-danger); font-size: 12px; }
+.shader-error button { display: grid; place-items: center; width: 24px; height: 24px; }
+.shader-error svg { width: 14px; height: 14px; }
+@media (min-width: 1600px) { .shader-workspace { grid-template-columns: 270px minmax(280px, 1fr) 310px; } .shader-browser { padding-inline: 22px; } .shader-center { padding-inline: 50px; } .shader-stage { padding-block: 25px; } }
+@media (max-width: 1199px) { .shader-workspace { grid-template-columns: 190px minmax(250px, 1fr) 260px; } .shader-center { padding-inline: 20px; } .shader-inspector { padding-inline: 16px; } .shader-page-header { padding-inline: 22px; } .shader-file-actions .shader-button { font-size: 10px; } .shader-effect-caption { align-items: flex-start; flex-direction: column; gap: 10px; } .shader-effect-caption p { max-width: none; } .shader-video-export { margin-left: 0; } }
+@media (max-width: 899px) { .shader-page-header { padding: 20px; } .shader-page-header h1 { font-size: 35px; } .shader-page-header p { max-width: 250px; } .shader-autosave { display: none; } .shader-workspace { grid-template-columns: 168px minmax(230px, 1fr) 245px; } .shader-browser { padding-inline: 12px; } .shader-categories button { font-size: 9px; padding-inline: 6px; } .shader-card-list { gap: 14px 8px; } .shader-card > span { font-size: 9px; } .shader-center { padding-inline: 16px; } }
+@media (max-width: 719px) { :root[data-surface="studio"] .studio-shader-content { overflow: auto; } .shader-page { height: auto; min-height: 100%; } .shader-page-header { gap: 14px; flex-wrap: wrap; padding: 20px 16px; } .shader-page-header p { max-width: none; } .shader-file-actions { justify-content: flex-start; } .shader-workspace { display: flex; flex-direction: column; } .shader-browser { padding: 14px 16px; border-right: 0; border-bottom: 1px solid var(--color-line); } .shader-search { max-width: 100%; } .shader-categories { padding: 10px 0; } .shader-categories button { font-size: 10px; } .shader-card-list { display: flex; flex-wrap: nowrap; gap: 12px; padding: 4px 3px 6px; overflow-x: auto; } .shader-card { width: 94px; flex: 0 0 94px; } .shader-card > span { font-size: 10px; } .shader-credit { padding-top: 9px; font-size: 8px; } .shader-center { overflow: visible; padding: 16px 16px 22px; } .shader-stage { flex: none; min-height: 140px; padding: 0; } .shader-canvas-toolbar { margin-bottom: 16px; } .shader-playback { margin-bottom: 12px; } .shader-effect-caption { flex-direction: row; align-items: center; gap: 20px; } .shader-effect-caption h2 { font-size: 26px; } .shader-effect-caption p { max-width: 48%; font-size: 10px; } .shader-inspector { overflow: visible; border-top: 1px solid var(--color-line); border-left: 0; padding: 0 20px 30px; } .shader-inspector > header { position: static; } .shader-group-fields { gap: 20px; } .shader-slider-field > div, .shader-toggle, .shader-select-field, .shader-color-field { font-size: 12px; } .shader-page select { font-size: 12px; } .shader-inspector .shader-presets button { font-size: 11px; padding: 7px 11px; } .shader-slider-field input[type="range"] { height: 5px; margin-top: 13px; } .shader-artwork-wrap.shader-aspect-square { max-width: 65vw; } .shader-artwork-wrap.shader-aspect-portrait { max-width: 48vw; } }
+@media (prefers-reduced-motion: reduce) { .shader-card img, .shader-button { transition: none; } .shader-card:hover img { transform: none; } }

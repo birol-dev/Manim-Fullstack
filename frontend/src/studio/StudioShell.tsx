@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { ArrowLeftRight, BarChart3, ChevronRight, Code2, FolderDown, GraduationCap, Home, LayoutGrid, MapPin, Megaphone, Menu, PanelLeftClose, PanelLeftOpen, PartyPopper, Play, Plug, Repeat, Search, Settings, Timer, Trophy, Video, X } from "lucide-react";
+import { ArrowLeftRight, BarChart3, ChevronRight, Code2, FolderDown, GraduationCap, Home, LayoutGrid, MapPin, Megaphone, Menu, PanelLeftClose, PanelLeftOpen, PartyPopper, Plug, Repeat, Search, Settings, Sparkles, Timer, Trophy, Video, X } from "lucide-react";
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -11,9 +11,10 @@ import { routeHash, type Route, type useHashRoute } from "./router";
 import { useUpdateStatus } from "./setup";
 import type { Catalog, ProjectSummary } from "./types";
 import { useLibrary, type Library } from "./useLibrary";
+import { StudioMark } from "./StudioMark";
 import "./shell.css";
 
-type ShellRoute = Extract<Route, { kind: "gallery" | "templates" | "videos" | "exports" | "settings" }>;
+type ShellRoute = Extract<Route, { kind: "gallery" | "templates" | "videos" | "exports" | "settings" | "shaders" }>;
 type Exports = ReturnType<typeof useExports>;
 
 interface ShellProps {
@@ -143,13 +144,14 @@ function Rail({ route, collapsed, onNavigate, onExpand, projects, exports, activ
   };
   return <nav className="studio-rail-nav" aria-label="Studio">
     <a href="#/" className="studio-rail-logo" aria-label="Manim Studio home" onClick={onNavigate}>
-      <span className="studio-brand-mark"><Play aria-hidden fill="currentColor" /></span>
+      <span className="studio-brand-mark"><StudioMark /></span>
     </a>
     {collapsed && <Tooltip content="Show side panel" side="right">
       <button type="button" className="studio-rail-tool" aria-label="Expand sidebar" onClick={onExpand}><PanelLeftOpen /></button>
     </Tooltip>}
     {link({ kind: "gallery" }, "Home", <Home />, route.kind === "gallery")}
     {link({ kind: "templates" }, "Templates", <LayoutGrid />, route.kind === "templates")}
+    {link({ kind: "shaders" }, "Shaders", <Sparkles />, route.kind === "shaders")}
     {link({ kind: "videos" }, "Your videos", <Video />, route.kind === "videos", projects)}
     {link({ kind: "exports" }, "Exports", <FolderDown />, route.kind === "exports", exports, activity)}
     <div className="studio-rail-spacer" />
@@ -175,6 +177,7 @@ function DrawerNav({ route, onNavigate, projects, exports, activity, update }: N
   return <nav className="studio-drawer-nav" aria-label="Studio">
     {link({ kind: "gallery" }, "Home", <Home />, route.kind === "gallery")}
     {link({ kind: "templates" }, "Templates", <LayoutGrid />, route.kind === "templates")}
+    {link({ kind: "shaders" }, "Shaders", <Sparkles />, route.kind === "shaders")}
     {link({ kind: "videos" }, "Your videos", <Video />, route.kind === "videos", projects)}
     {link({ kind: "exports" }, "Exports", <FolderDown />, route.kind === "exports", exports, activity)}
     <div className="studio-nav-divider" />
@@ -209,6 +212,11 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
     return () => media.removeEventListener("change", changed);
   }, []);
   const focusSearch = useCallback(() => {
+    if (route.kind === "shaders") {
+      const search = mainRef.current?.querySelector<HTMLInputElement>('input[aria-label="Search shaders"]');
+      search?.focus(); search?.select();
+      return;
+    }
     if (mobile) {
       if (drawer) { searchRef.current?.focus(); searchRef.current?.select(); }
       else { focusOnOpen.current = true; setDrawer(true); }
@@ -218,7 +226,7 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
       cancelAnimationFrame(focusFrame.current);
       focusFrame.current = requestAnimationFrame(() => { searchRef.current?.focus(); searchRef.current?.select(); });
     }
-  }, [mobile, drawer]);
+  }, [mobile, drawer, route.kind]);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const target = event.target;
@@ -244,6 +252,7 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
   const pageTitle = route.kind === "templates" && !route.category ? "Templates" : route.kind === "videos" ? "Your videos" : route.kind === "exports" ? "Exports" : null;
   const title = route.kind === "gallery"
     ? "Home"
+    : route.kind === "shaders" ? "Shaders"
     : route.kind === "videos"
       ? "Your videos"
       : route.kind === "exports"
@@ -264,18 +273,18 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
     <a href="#studio-main" className="studio-skip-link" onClick={(event) => { event.preventDefault(); mainRef.current?.focus(); }}>Skip to content</a>
     {!mobile && <aside className="studio-sidebar" aria-label="Main navigation">
       <Rail route={route} collapsed={collapsed} onNavigate={() => setDrawer(false)} onExpand={expand} {...counts} />
-      {!collapsed && <Panel route={route} catalog={catalog} query={route.kind === "templates" ? route.query ?? "" : ""} onSearch={onSearch} onNavigate={() => setDrawer(false)} searchRef={searchRef} projects={library.projects} onCollapse={collapse} />}
+      {!collapsed && route.kind !== "shaders" && <Panel route={route} catalog={catalog} query={route.kind === "templates" ? route.query ?? "" : ""} onSearch={onSearch} onNavigate={() => setDrawer(false)} searchRef={searchRef} projects={library.projects} onCollapse={collapse} />}
     </aside>}
     <div className="studio-shell-main">
       {mobile && <header className="studio-shell-topbar">
         <a href="#/" className="studio-wordmark" aria-label="Manim Studio home">
-          <span className="studio-brand-mark"><Play aria-hidden fill="currentColor" /></span>
+          <span className="studio-brand-mark"><StudioMark /></span>
           <span>Manim Studio</span>
         </a>
         <button type="button" className="studio-shell-icon" aria-label="Open navigation" aria-haspopup="dialog" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu /></button>
       </header>}
-      <main ref={mainRef} id="studio-main" aria-label={title} tabIndex={-1} className="studio-shell-content studio-scroll">
-        <div className="studio-shell-container">
+      <main ref={mainRef} id="studio-main" aria-label={title} tabIndex={-1} className={`studio-shell-content studio-scroll${route.kind === "shaders" ? " studio-shader-content" : ""}`}>
+        <div className={`studio-shell-container${route.kind === "shaders" ? " studio-shader-container" : ""}`}>
           {category && <nav aria-label="Breadcrumb" className="studio-breadcrumb"><a href="#/templates">Templates</a><ChevronRight aria-hidden /><h1>{title}</h1></nav>}
           {pageTitle && <header className="studio-page-head"><h1>{pageTitle}</h1></header>}
           {children(library, exports)}
@@ -290,7 +299,7 @@ export function StudioShell({ route, catalog, push, replace, children }: ShellPr
         <DialogDescription className="sr-only">Browse templates, your videos and exports, and open settings.</DialogDescription>
         <div className="studio-drawer-head">
           <a href="#/" className="studio-wordmark" aria-label="Manim Studio home" onClick={() => setDrawer(false)}>
-            <span className="studio-brand-mark"><Play aria-hidden fill="currentColor" /></span>
+            <span className="studio-brand-mark"><StudioMark /></span>
             <span>Manim Studio</span>
           </a>
           <button type="button" className="studio-shell-icon" aria-label="Close navigation" onClick={() => setDrawer(false)}><X /></button>

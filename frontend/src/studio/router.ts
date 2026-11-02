@@ -6,6 +6,7 @@ export type Route =
   | { kind: "templates"; category?: string; query?: string }
   | { kind: "videos" }
   | { kind: "exports" }
+  | { kind: "shaders" }
   | { kind: "settings"; section?: string }
   | { kind: "welcome" }
   | { kind: "new"; template: string; preset: string }
@@ -33,6 +34,7 @@ export function parseRoute(hash: string): Route {
   }
   if (head === "videos") return { kind: "videos" };
   if (head === "exports") return { kind: "exports" };
+  if (head === "shaders") return { kind: "shaders" };
   if (head === "settings") return { kind: "settings", ...(rest[0] ? { section: decode(rest[0]) } : {}) };
   if (head === "welcome") return { kind: "welcome" };
   if (head === "author") return { kind: "author" };
@@ -55,6 +57,8 @@ export function routeHash(route: Route): string {
       return "#/videos";
     case "exports":
       return "#/exports";
+    case "shaders":
+      return "#/shaders";
     case "settings":
       return `#/settings${route.section ? `/${encodeURIComponent(route.section)}` : ""}`;
     case "welcome":

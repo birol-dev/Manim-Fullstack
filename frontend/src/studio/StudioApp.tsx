@@ -22,6 +22,7 @@ const AuthorApp = lazy(() => import("@/App"));
 const SettingsPage = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsPage })));
 const OnboardingPage = lazy(() => import("./Onboarding").then((module) => ({ default: module.OnboardingPage })));
 const MakeManyPage = lazy(() => import("./MakeMany").then((module) => ({ default: module.MakeManyPage })));
+const ShaderPage = lazy(() => import("./shaders/ShaderPage").then((module) => ({ default: module.ShaderPage })));
 
 function Loading({ label }: { label: string }) {
   return (
@@ -41,6 +42,12 @@ function Studio({ route, routeKey, replace, push, appearance, onAppearance }: Re
   if (route.kind === "settings") {
     return <StudioShell route={route} catalog={catalog} push={push} replace={replace}>
       {() => <Suspense fallback={<Loading label="Opening settings…" />}><SettingsPage section={route.section} appearance={appearance} onAppearance={onAppearance} /></Suspense>}
+    </StudioShell>;
+  }
+
+  if (route.kind === "shaders") {
+    return <StudioShell route={route} catalog={catalog} push={push} replace={replace}>
+      {() => <Suspense fallback={<Loading label="Opening shaders…" />}><ShaderPage /></Suspense>}
     </StudioShell>;
   }
 

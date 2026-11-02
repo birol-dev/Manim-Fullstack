@@ -30,6 +30,26 @@ The source quick start below also serves the Studio in a browser.
 
 ![Manim Composer: code editor, render preview, and console](docs/screenshot.png)
 
+## Shaders
+
+Open **Shaders** in the navigation for 30 effects: seven image filters, three logo
+animations, and 20 generative textures and backgrounds. Choose a shader and a preset,
+then adjust its colors and controls while the canvas updates. Image filters include a
+bundled flower picture; replace it with your own image. Logo effects accept a built-in
+shape or an uploaded logo with a transparent background.
+
+Export a **PNG**, record a 3, 5, or 10 second **WebM**, or choose **Add to images** to
+use a still frame in any template's image picker. Choose landscape (1280 × 720), square
+(1080 × 1080), or portrait (720 × 1280). The current draft is kept on this device;
+**Save settings** makes a portable file with uploaded pictures included, and
+**Open settings** restores it.
+
+The effects use [Paper Shaders](https://github.com/paper-design/shaders), licensed
+under Apache 2.0, with its license and notice bundled in the app. Shaders need WebGL 2;
+video recording also needs a browser with WebM recording support. Keep the tab visible
+while recording. All shader code, example images, and previews are bundled for offline use.
+See [the shader implementation notes](docs/SHADERS.md).
+
 ## Author mode features
 
 - **Editor** — Monaco with Python highlighting, live scene detection, unsaved drafts kept per file,

@@ -7,7 +7,7 @@
 :root[data-surface="studio"] .studio-rail-logo { display: grid; place-items: center; width: 48px; height: 48px; margin: 0 auto 8px; border-radius: 16px; transition: background 160ms ease-out; }
 :root[data-surface="studio"] .studio-rail-logo:hover { background: var(--color-raised); }
 :root[data-surface="studio"] .studio-rail-logo .studio-brand-mark { width: 32px; height: 32px; border-radius: 11px; }
-:root[data-surface="studio"] .studio-rail-logo .studio-brand-mark svg { width: 14px; height: 14px; }
+:root[data-surface="studio"] .studio-rail-logo .studio-brand-mark svg { width: 28px; height: 28px; }
 :root[data-surface="studio"] .studio-rail-tool { display: grid; place-items: center; width: 44px; height: 34px; margin: 0 auto 6px; border-radius: 12px; color: var(--color-fg-subtle); transition: background 160ms ease-out, color 160ms ease-out; }
 :root[data-surface="studio"] .studio-rail-tool:hover { background: var(--color-raised); color: var(--color-fg); }
 :root[data-surface="studio"] .studio-rail-tool svg { width: 17px; height: 17px; }

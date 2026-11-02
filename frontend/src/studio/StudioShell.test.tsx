@@ -9,6 +9,7 @@ import StudioApp from "./StudioApp";
 import { installFakeStudio, type FakeStudio } from "./test/fakeStudio";
 
 vi.mock("@/App", () => ({ default: () => <div>Author workspace</div> }));
+vi.mock("./shaders/ShaderPage", () => ({ ShaderPage: () => <div>Shader workspace</div> }));
 
 let viewport = { width: 1440, height: 900 };
 let studio: FakeStudio;
@@ -56,11 +57,21 @@ async function loaded() {
 }
 
 describe("rail and side panel", () => {
+  it("opens shaders in their own workspace even if the template catalog fails", async () => {
+    studio.reply = (call) => call.path === "/api/studio/catalog" ? { status: 500, body: { detail: "Unavailable" } } : null;
+    window.history.replaceState(null, "", "/#/shaders");
+    open();
+    expect(await screen.findByText("Shader workspace")).toBeInTheDocument();
+    expect(screen.getByRole("main", { name: "Shaders" })).toBeInTheDocument();
+    expect(within(await rail()).getByRole("link", { name: "Shaders" })).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("searchbox", { name: "Search designs" })).not.toBeInTheDocument();
+    expect(document.title).toBe("Shaders · Manim Studio");
+  });
   it("keeps every destination in the rail and the create list in the panel", async () => {
     open();
     await loaded();
     const nav = await rail();
-    for (const [name, href] of [["Home", "#/"], ["Templates", "#/templates"], ["Your videos", "#/videos"], ["Exports", "#/exports"]]) {
+    for (const [name, href] of [["Home", "#/"], ["Templates", "#/templates"], ["Shaders", "#/shaders"], ["Your videos", "#/videos"], ["Exports", "#/exports"]]) {
       expect(within(nav).getByRole("link", { name })).toHaveAttribute("href", href);
     }
     expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute("aria-current", "page");
