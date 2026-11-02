@@ -3,28 +3,78 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f5f4ef" />
-  <meta name="description" content="A better version of Manim Studio is coming soon." />
+  <meta name="theme-color" content="#758bb1" />
+  <meta name="description" content="Create your own effects with 30 live shaders. Transform images and logos, shape color and motion, and export something entirely yours." />
   <link rel="canonical" href="https://manimgui.birol.tech/" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preload" href="assets/fonts/newsreader.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="assets/alpine-dawn.webp" as="image" />
   <link rel="stylesheet" href="style.css" />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="Manim Studio" />
-  <meta property="og:title" content="A better version is coming soon." />
-  <meta property="og:description" content="Manim Studio. A better version is coming soon." />
+  <meta property="og:title" content="Create your own effects." />
+  <meta property="og:description" content="Bend light, fold paper, and bring your logo to life. Customize 30 shaders in a free, local creative studio." />
   <meta property="og:url" content="https://manimgui.birol.tech/" />
   <meta property="og:image" content="https://manimgui.birol.tech/og-image.svg" />
-  <meta property="og:image:alt" content="Manim Studio. A better version is coming soon." />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Manim Studio — Coming soon" />
-  <meta name="twitter:description" content="A better version is coming soon." />
+  <meta name="twitter:title" content="Manim Studio — Create your own effects." />
+  <meta name="twitter:description" content="Create your own image filters, logo effects, and living textures." />
   <meta name="twitter:image" content="https://manimgui.birol.tech/og-image.svg" />
-  <title>Manim Studio — Coming soon</title>
+  <title>Manim Studio — Create your own effects.</title>
+  <script type="module" src="script.js"></script>
 </head>
 <body>
-  <header class="wordmark">Manim Studio</header>
-  <main>
-    <h1>A better version <span>is coming soon.</span></h1>
+<a href="#main" class="skip-link">Skip to content</a>
+<div class="landscape">
+  <header class="site-header wrap">
+    <a class="wordmark" href="#" aria-label="Manim Studio home"><img class="brand-icon" src="assets/logo-light.svg" alt="" width="32" height="32" /> Manim Studio</a>
+    <nav aria-label="Main navigation"><a href="#possibilities">The collection</a><a href="#playground">Shaders</a><a href="#how-it-works">How it works</a></nav>
+    <a class="button button-small" href="#start">Get started <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main">
+    <section class="hero wrap" aria-labelledby="hero-title">
+      <a class="hero-note" href="#playground"><span class="note-dot" aria-hidden="true"></span> 30 shaders. A whole world of your own effects. <span aria-hidden="true">↗</span></a>
+      <h1 id="hero-title">Create your<br /><em>own effects.</em></h1>
+      <p class="hero-copy">Bend light. Fold paper. Give your logo a liquid-metal finish.<br class="desktop-break" /> Shape color, texture, and motion into something entirely yours.</p>
+      <div class="hero-actions"><a class="button button-peach" href="#start">Get the shader studio <span aria-hidden="true">↗</span></a><a class="button button-glass" href="#possibilities">See what’s possible <span aria-hidden="true">↓</span></a></div>
+      <p class="hero-meta">Free & open source <span>·</span> No account needed <span>·</span> Built with Manim</p>
+    </section>
+    <section id="playground" class="playground wrap" aria-labelledby="playground-title">
+      <div class="app-frame">
+        <header class="frame-bar"><div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div><h2 id="playground-title">The shader playground</h2><span class="frame-tag">A real preview. Go ahead, play.</span><span class="frame-corner" aria-hidden="true">✧</span></header>
+        <div class="app-body">
+          <aside class="demo-library" aria-label="Choose a demo effect"><span class="small-label">Find your texture</span><div class="effect-buttons" role="group" aria-label="Demo shaders">
+            <button type="button" data-effect="mesh" aria-pressed="true"><img src="assets/shaders/mesh-gradient.webp" alt="" /><span>Mesh Gradient<small>Soft, flowing color</small></span><span aria-hidden="true">↗</span></button>
+            <button type="button" data-effect="warp" aria-pressed="false"><img src="assets/shaders/warp.webp" alt="" /><span>Warp<small>Ink with a mind of its own</small></span><span aria-hidden="true">↗</span></button>
+            <button type="button" data-effect="neuro" aria-pressed="false"><img src="assets/shaders/neuro-noise.webp" alt="" /><span>Neuro Noise<small>Little currents of light</small></span><span aria-hidden="true">↗</span></button>
+          </div><p>Try three here.<br />Find all <strong>30</strong> in the app.</p><a href="https://github.com/paper-design/shaders" target="_blank" rel="noreferrer" class="paper-credit">Powered by Paper Shaders ↗</a></aside>
+          <div class="demo-stage"><div id="shader-canvas" role="img" aria-label="Animated Mesh Gradient preview"></div><p id="shader-fallback" hidden>This live preview needs WebGL 2. The example image is shown instead.</p><div class="stage-bottom"><span><i class="live-dot" aria-hidden="true"></i><span id="preview-status">Live preview</span></span><span id="effect-caption">01 / Mesh Gradient</span><button type="button" id="pause-shader" aria-label="Pause preview">Ⅱ</button></div></div>
+          <aside class="demo-controls" aria-label="Customize the preview"><span class="small-label">Make it yours</span><label for="palette">Palette</label><select id="palette"><option value="lilac">Lilac afternoon</option><option value="ember">Warm embers</option><option value="lagoon">Lagoon</option></select><div class="palette-swatches" aria-hidden="true"><i></i><i></i><i></i><i></i></div><label for="speed">Speed <output id="speed-value" for="speed">50%</output></label><input type="range" id="speed" min="0" max="1.5" step="0.05" value="0.5" /><label for="scale">Scale <output id="scale-value" for="scale">100%</output></label><input type="range" id="scale" min="0.5" max="2" step="0.05" value="1" /><button type="button" id="save-shader" class="button button-demo">Save a still <span aria-hidden="true">↓</span></button><p>No design is ever quite<br />the same. That’s the fun of it.</p><span class="sr-only" id="download-status" role="status"></span></aside>
+        </div>
+      </div>
+      <p class="playground-foot">A picture, a shape, or just a little color. <span>It starts with a little curiosity.</span></p>
+    </section>
   </main>
+</div>
+<section id="possibilities" class="section wrap" aria-labelledby="possibilities-title">
+  <div class="section-head"><div><p class="eyebrow">An effect for every kind of idea</p><h2 id="possibilities-title">Find your material.<br /><em>Then change the rules.</em></h2></div><p>Seven image filters. Three logo animations. Twenty generative effects. Start with a look you love, then follow your curiosity somewhere new.</p></div>
+  <div class="template-tabs" role="group" aria-label="Shader collections"><button type="button" data-collection="filters" aria-pressed="true">Image filters</button><button type="button" data-collection="logos" aria-pressed="false">Logo effects</button><button type="button" data-collection="textures" aria-pressed="false">Generative textures</button></div>
+  <div class="template-grid" id="template-grid" aria-live="polite">
+    <a class="template-card" href="#start"><div><img src="assets/shaders/paper-texture.webp" alt="Paper Texture shader applied to a flower image" width="768" height="432" loading="lazy" /></div><span>Paper Texture <small>Folds, fibers, and beautiful imperfections</small><b aria-hidden="true">↗</b></span></a>
+    <a class="template-card" href="#start"><div><img src="assets/shaders/fluted-glass.webp" alt="Fluted Glass shader refracting a flower image" width="768" height="432" loading="lazy" /></div><span>Fluted Glass <small>A new perspective through sculpted glass</small><b aria-hidden="true">↗</b></span></a>
+    <a class="template-card" href="#start"><div><img src="assets/shaders/water.webp" alt="Water shader distorting a flower image" width="768" height="432" loading="lazy" /></div><span>Water <small>Ripples, reflections, and dancing light</small><b aria-hidden="true">↗</b></span></a>
+  </div><p class="gallery-note">Real effects from the shader library. Your pictures, shapes, and colors go in next.</p>
+</section>
+<section class="workflow-section" id="how-it-works" aria-labelledby="workflow-title"><div class="wrap">
+  <div class="workflow-intro"><p class="eyebrow">Less setup. More making.</p><h2 id="workflow-title">A starting point.<br /><em>Not a finished effect.</em></h2><p>You set the direction.<br />The shader follows your lead.</p></div>
+  <ol class="steps"><li><span>01</span><div><h3>Choose your shader.</h3><p>Start with paper, glass, liquid metal, or a flowing field of color. Try a preset to find your direction.</p></div></li><li><span>02</span><div><h3>Create your own look.</h3><p>Drop in your image or logo. Adjust the texture, palette, light, and speed. Every change appears live.</p></div></li><li><span>03</span><div><h3>Take your effect with you.</h3><p>Save a PNG or an animated WebM. Keep your editable settings, or add a still to the Studio image library.</p></div></li></ol>
+</div></section>
+<section class="details-section section wrap" aria-labelledby="details-title"><div><p class="eyebrow">Made for the way you experiment</p><h2 id="details-title">Small adjustments.<br /><em>A different world.</em></h2></div><div class="detail-list"><article><span aria-hidden="true">⌂</span><div><h3>Bring something of your own.</h3><p>Upload a photo, a transparent logo, or a shape. Make it tactile, reflective, pixelated, or beautifully strange.</p></div></article><article><span aria-hidden="true">{ }</span><div><h3>Follow the happy accidents.</h3><p>Change colors, push the distortion, slow the motion. Start with a preset; finish with something entirely your own.</p></div></article><article><span aria-hidden="true">✧</span><div><h3>Keep the effect. Keep the settings.</h3><p>Export in landscape, square, or portrait. Save your settings with source images included, and pick up the idea later.</p></div></article></div></section>
+<section class="start-section" id="start" aria-labelledby="start-title"><div class="wrap start-grid"><div><p class="eyebrow">A small beginning</p><h2 id="start-title">Your next effect<br /><em>starts here.</em></h2><p>Free, open source, and ready to run locally.<br />Start from the source in a few commands.</p><a class="text-link" href="https://github.com/birol-dev/Manim-Fullstack" target="_blank" rel="noreferrer">Take a look around the source <span aria-hidden="true">↗</span></a></div><div class="setup-card"><div class="setup-top"><div role="group" aria-label="Setup platform"><button type="button" data-platform="windows" aria-pressed="true">Windows</button><button type="button" data-platform="unix" aria-pressed="false">macOS / Linux</button></div><button type="button" id="copy-commands">Copy <span aria-hidden="true">⧉</span></button></div><pre><code id="setup-commands">git clone https://github.com/birol-dev/Manim-Fullstack.git
+cd Manim-Fullstack
+python run.py</code></pre><p>Python 3.11+ and Node.js 20.19+ for the first build.<br /><span id="platform-note">The launcher prepares the app and opens it in your browser.</span></p><a href="https://github.com/birol-dev/Manim-Fullstack#quick-start" target="_blank" rel="noreferrer">Full setup guide ↗</a><span id="copy-status" class="sr-only" role="status"></span></div></div></section>
+<section class="faq-section section wrap" aria-labelledby="faq-title"><h2 id="faq-title">A few things<br /><em>you might wonder.</em></h2><div class="faq-list"><details><summary>Do I need to write shader code?</summary><p>No. Build your look with presets, sliders, color controls, and your own images. Python is only needed to run the app from source; creating effects in the Shaders tab is visual.</p></details><details><summary>What can I export?</summary><p>Templates can export MP4, GIF, WebM, MOV, and PNG. Shaders export PNG stills and WebM videos. You can also add shader stills to the app’s image library for use in templates.</p></details><details><summary>Can I use it offline?</summary><p>Yes, after the initial setup. Fonts, templates, shaders, and sample images are bundled. Any AI tools you choose to connect may need their own internet connection.</p></details><details><summary>Is it really free?</summary><p>Yes. Manim Studio is open source under the MIT license. Its shader library, Paper Shaders, uses Apache 2.0. There is no paid plan or account required to use the studio.</p></details></div></section>
+<footer class="site-footer wrap"><a class="wordmark" href="#"><img class="brand-icon" src="assets/logo-dark.svg" alt="" width="32" height="32" /> Manim Studio</a><p>A little curiosity goes a long way.</p><nav aria-label="Footer"><a href="https://github.com/birol-dev/Manim-Fullstack">GitHub ↗</a><a href="https://www.manim.community/">Manim Community ↗</a><a href="https://github.com/paper-design/shaders">Paper Shaders ↗</a></nav></footer>
+<noscript><p class="noscript-note">The templates and setup instructions work without JavaScript. Enable JavaScript to try the live shader playground.</p></noscript>
 </body>
 </html>

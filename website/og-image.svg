@@ -1,9 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title">
-  <title id="title">Manim Studio. A better version is coming soon.</title>
-  <rect width="1200" height="630" fill="#f5f4ef" />
-  <text x="64" y="76" fill="#20211e" font-family="monospace" font-size="18" letter-spacing="2">MANIM STUDIO</text>
+  <title id="title">Manim Studio. Create your own effects.</title>
+  <defs><linearGradient id="sky" x2=".8" y2="1"><stop stop-color="#284b95"/><stop offset="1" stop-color="#b6a7c1"/></linearGradient></defs>
+  <rect width="1200" height="630" fill="url(#sky)" />
+  <text x="64" y="76" fill="#fffdf7" font-family="serif" font-size="26" letter-spacing="-1">Manim Studio</text>
   <g text-anchor="middle" font-family="Georgia, serif" font-size="86" letter-spacing="-4">
-    <text x="600" y="300" fill="#20211e">A better version</text>
-    <text x="600" y="398" fill="#76786f" font-style="italic">is coming soon.</text>
+    <text x="600" y="290" fill="#fffdf7">Create your</text>
+    <text x="600" y="388" fill="#fffdf7" font-style="italic">own effects.</text>
   </g>
 </svg>
