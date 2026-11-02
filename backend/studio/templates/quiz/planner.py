@@ -61,7 +61,6 @@ def plan_layout(lay, R, theme, *, question: str, options: list, explanation: str
         q_max, o_max, e_max, ring = 78.0, 42.0, 32.0, 1.1
     else:
         q_max, o_max, e_max, ring = (80.0, 46.0, 34.0, 1.4) if tall else (72.0, 40.0, 32.0, 1.2)
-    q_min, o_min, e_min = 24.0, 24.0, 24.0
     e_lines_max = 2 if lay.is_landscape else 4
 
     e_width = R.width

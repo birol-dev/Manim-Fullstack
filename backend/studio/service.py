@@ -882,7 +882,7 @@ class StudioService:
         return await asyncio.to_thread(self.get_batch_sync, batch_id)
 
     def cancel_batch_sync(self, batch_id: str) -> dict:
-        batch = self.get_batch_sync(batch_id)
+        self.get_batch_sync(batch_id)
         manager = self._export_manager()
         cancelled = 0
         for record in manager.list():

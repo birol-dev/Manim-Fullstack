@@ -14,7 +14,7 @@ from studio.themes import THEMES
 
 def test_before_after_gallery_has_three_valid_cards_without_external_pictures():
     assert len(PRESETS) == 3
-    cards = next(s["cards"] for s in registry.catalog()["sections"] if s["id"] == "creator")
+    cards = next(s["cards"] for s in registry.catalog()["sections"] if s["id"] == "compare")
     assert len([c for c in cards if c["template"] == META.id]) == 3
     for preset in PRESETS:
         _, params, _ = registry.validate_job(META.id, preset.params, preset.settings)

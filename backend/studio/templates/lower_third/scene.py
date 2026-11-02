@@ -69,7 +69,7 @@ class Template(StudioScene):
 
     # ------------------------------------------------------------------- motion
     def _play(self, strip: P.Strip):
-        p, lay, m, u = self.p, self.layout, self.motion, self.layout.unit
+        p, m, u = self.p, self.motion, self.layout.unit
         intro = m.t(0.9)
         outro = m.t(0.5)
         hold = float(p.hold)

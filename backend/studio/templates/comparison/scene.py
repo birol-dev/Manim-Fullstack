@@ -15,6 +15,7 @@ def inset(box, x0, y0, x1, y1):
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-right"
 
     def words(self, source, box, size=32, color=None):
         words = fit_text(source, width=box.width, height=box.height, size=size, min_size=24,

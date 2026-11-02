@@ -16,6 +16,7 @@ def clock(value):
 class Template(StudioScene):
     Params = Params
     META = META
+    logo_region = "bottom-right"
 
     def words(self, source, box, size=36, color=None):
         words = fit_text(source, width=box.width, height=box.height, size=size, min_size=24,

@@ -9,7 +9,6 @@ import pytest
 from starlette.testclient import TestClient
 
 import main
-from studio import preferences as preferences_module
 from studio import service as service_module
 from studio.preferences import MAX_BYTES, MAX_FAVOURITE_DESIGNS, MAX_RECENT_COLORS, MAX_SEEN_EXPORTS, PreferenceStore
 from studio.registry import TemplateError
