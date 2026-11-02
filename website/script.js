@@ -93,7 +93,7 @@ document.querySelectorAll('[data-collection]').forEach((button) => button.addEve
     const card = document.createElement('a'), picture = document.createElement('div'), image = document.createElement('img'), caption = document.createElement('span'), small = document.createElement('small'), arrow = document.createElement('b');
     card.className = 'template-card'; card.href = '#start';
     image.src = `assets/shaders/${id}.webp`; image.alt = `${title} shader preview`; image.width = 768; image.height = 432;
-    picture.append(image); caption.textContent = title; small.textContent = type; arrow.textContent = '↗'; arrow.setAttribute('aria-hidden', 'true'); caption.append(small, arrow); card.append(picture, caption); return card;
+    picture.append(image); caption.textContent = title; small.textContent = type; arrow.textContent = '↗'; arrow.setAttribute('aria-hidden', 'true'); caption.append(arrow); card.append(picture, caption); return card;
   });
   $('#template-grid').replaceChildren(...cards);
 }));
@@ -109,3 +109,64 @@ $('#copy-commands').addEventListener('click', async () => {
   catch { $('#copy-status').textContent = 'Select the commands above and copy them manually.'; $('#copy-commands').textContent = 'Select to copy'; }
   setTimeout(() => $('#copy-commands').textContent = 'Copy ⧉', 2500);
 });
+
+// Scroll position is the animation clock: reversing the scroll reverses the effect.
+const story = $('#scroll-story');
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const chapters = [
+  ['Pick a shader.', 'A starting point for something yours.', 'Warp / a little curiosity'],
+  ['Make it yours.', 'Your color. Your texture. Your motion.', 'Warp / your own direction'],
+  ['Keep the effect.', 'PNG or WebM. Ready for your next idea.', 'Warp / ready to take with you'],
+];
+let storyMount;
+let scrollFrame = 0;
+let currentChapter = -1;
+function storyUniforms(progress) {
+  const start = ['#e8eadf', '#547f83', '#8ebfc0', '#b4bac9'].map(engine.getShaderColorFromString);
+  const finish = ['#fce8c6', '#3f2d67', '#a88dbb', '#e2ac95'].map(engine.getShaderColorFromString);
+  const colors = start.map((color, index) => color.map((channel, c) => channel + (finish[index][c] - channel) * progress));
+  return { u_fit: 0, u_scale: 0.65 + progress * 0.9, u_rotation: progress * 35, u_originX: 0.5, u_originY: 0.5, u_offsetX: 0, u_offsetY: 0, u_worldWidth: 0, u_worldHeight: 0,
+    u_colors: colors, u_colorsCount: 4, u_proportion: 0.45, u_softness: 0.95, u_distortion: 0.05 + progress * 0.8,
+    u_swirl: 0.15 + progress * 0.85, u_swirlIterations: 10, u_shapeScale: 0.17 + progress * 0.25, u_shape: 0, u_noiseTexture: engine.getShaderNoiseTexture() };
+}
+function renderStory(progress, explicit = false) {
+  progress = Math.min(1, Math.max(0, progress));
+  const chapter = progress < 0.33 ? 0 : progress < 0.72 ? 1 : 2;
+  if (chapter !== currentChapter) {
+    currentChapter = chapter;
+    $('#scrub-title').textContent = chapters[chapter][0]; $('#scrub-copy').textContent = chapters[chapter][1]; $('#scrub-badge').textContent = chapters[chapter][2];
+    $('#scrub-step').textContent = `0${chapter + 1} / 03`;
+    document.querySelectorAll('[data-chapter]').forEach((button) => button.setAttribute('aria-pressed', String(Number(button.dataset.chapter) === chapter)));
+  }
+  $('#scrub-progress').value = progress;
+  if (!reducedMotion || explicit) {
+    story.style.setProperty('--scrub-scale', String(0.88 + Math.sin(progress * Math.PI) * 0.12));
+    story.style.setProperty('--scrub-rotate', `${-2 + progress * 4}deg`);
+    storyMount?.setUniforms(storyUniforms(progress));
+    storyMount?.setFrame(progress * 18_000);
+  }
+}
+function updateStory() {
+  scrollFrame = 0;
+  if (reducedMotion) return;
+  const box = story.getBoundingClientRect();
+  if (box.top > innerHeight || box.bottom < 0) return;
+  renderStory(-box.top / Math.max(1, box.height - innerHeight));
+}
+function scheduleStory() { if (!scrollFrame) scrollFrame = requestAnimationFrame(updateStory); }
+function initStory() {
+  if (usable) {
+    try { storyMount = new engine.ShaderMount($('#scrub-canvas'), engine.warpFragmentShader, storyUniforms(0), { preserveDrawingBuffer: true }, 0, 0, 1, 1_500_000); }
+    catch { $('#scrub-canvas').querySelector('canvas')?.remove(); }
+  }
+  if (reducedMotion) renderStory(0, true); else scheduleStory();
+}
+document.querySelectorAll('[data-chapter]').forEach((button) => button.addEventListener('click', () => {
+  const progress = Number(button.dataset.chapter) / 2;
+  if (reducedMotion) renderStory(progress, true);
+  else { const box = story.getBoundingClientRect(); window.scrollTo({ top: scrollY + box.top + progress * (box.height - innerHeight), behavior: 'smooth' }); }
+}));
+addEventListener('scroll', scheduleStory, { passive: true }); addEventListener('resize', scheduleStory, { passive: true });
+addEventListener('pagehide', () => { cancelAnimationFrame(scrollFrame); storyMount?.dispose(); storyMount = undefined; });
+addEventListener('pageshow', (event) => { if (event.persisted) { $('#scrub-canvas').querySelectorAll('canvas').forEach((canvas) => canvas.remove()); initStory(); } });
+initStory();

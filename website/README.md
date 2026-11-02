@@ -9,7 +9,10 @@ Local preview: `python -m http.server 8080 --directory website` from the reposit
 All fonts, artwork, shader previews, and shader code are local. The playground has
 three working effects, palettes, speed/scale controls, pause, and PNG capture. It
 falls back to a sample image without WebGL 2, and honors reduced motion. The
-shader collection and platform-specific setup commands are interactive. The site
+shader collection and platform-specific setup commands are interactive. The pinned
+scroll showcase uses scroll position as the shader clock, so scrolling backwards
+reverses the effect. It has chapter buttons, a skip link, and a static reduced-motion
+presentation. The site
 focuses on making custom effects with the app's image filters, logo animations,
 and generative textures. See BRAND.md for the refracted-light logo and variants.
 
