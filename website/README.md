@@ -1,50 +1,62 @@
 # Manim Studio website
 
-The site lives entirely in `website/` and uses the existing static hosting setup.
-Serve this directory as the site root. No framework, runtime build, package file,
-hosting manifest, domain change, or environment variables are required.
+Serve `website/` as the root on the existing static host. The seven checked-in
+HTML pages work directly, without a framework, runtime build, or hosting changes.
 
-Local preview: `python -m http.server 8080 --directory website` from the repository root.
+Preview from the repository root:
 
-All fonts, artwork, shader previews, and shader code are local. The playground applies
-Fluted Glass, Water, and Paper Texture to the same generated nature photograph.
-An accessible before/after slider reveals the original. Strength, scale, Water
-motion, pause, and PNG capture use real shader rendering. It falls back to actual
-rendered examples without WebGL 2, and honors reduced motion. The
-shader collection and platform-specific setup commands are interactive. The pinned
-scroll showcase starts with the original nature photograph, then uses scroll
-position as the Water shader clock and effect strength. Scrolling backwards
-reverses the transformation. It has chapter buttons, a skip link, and a static reduced-motion
-presentation. The site
-focuses on making custom effects with the app's image filters, logo animations,
-and generative textures. See BRAND.md for the refracted-light logo and variants.
+```text
+python -m http.server 8080 --bind 127.0.0.1 --directory website
+```
 
-`node website/build.mjs` optionally refreshes app-derived assets after frontend
-dependencies are installed. The generated files are checked in, so static hosts
-can serve this folder with their default configuration.
+## Pages and authoring
 
-## Artwork and notices
+- `index.html`: overview of the complete local creative studio and a nature filter demo.
+- `templates.html`: real gallery examples, editing, layouts, and export formats.
+- `shaders.html`: all seven image filters with a working before/after playground.
+- `workflows.html`: spreadsheet batches, a downloadable example, music, and sound.
+- `author.html`: the Python scene editor, rendering, timeline, and assets.
+- `ai.html`: compatible AI connections through MCP and how saved projects are shared.
+- `get-started.html`: Windows releases, source setup, platform commands, and FAQs.
 
-`assets/alpine-dawn.webp` is original artwork generated with the built-in imagegen
-tool. The direction was: a serene alpine lake at dawn, still reflective blue water,
-layered lilac mountains, a small apricot glow, a rocky island, painterly gouache and
-oil texture, spacious sky for white text; no trees, green hills, coastline, fences,
-people, lettering, or UI. It replaces the first rejected coastal-valley illustration.
-The reference influenced the open composition, serif typography, and translucent
-product panel; the artwork, copy, layouts, and working demo are original.
+The header and footer link to real HTML pages in the same browser tab. Mobile
+navigation has an accessible menu, Escape dismissal, and a no-JavaScript fallback.
 
-`assets/nature-river.webp` is a second original image generated with the built-in
-imagegen tool: editorial landscape photography of an emerald forest river,
-waterfall, mossy rocks, and misty alpine mountains. Its exact generation prompt
-is saved in `assets/nature-river.prompt.txt`. The generated PNG is preserved in
-Codex's generated-images folder; this optimized WebP is the source used by the site.
-`assets/shaders/nature-*.webp` are real Paper shader renders of that image, at
-768 × 432, strength 0.65, scale 1, and frame 1400 ms. These are new assets; the
-previous previews remain available. `image-effects.js` holds the shared uniforms
-used for both the live demos and those rendered examples. The hero keeps a single
-Get Studio action and briefly mentions video templates, batch creation, and sound.
+Edit the content and shared layouts in `pages.mjs`, then run:
 
-The shader engine and original sample previews come from Paper Shaders 0.0.82 (Apache 2.0).
-Fonts are Newsreader and Inter, both under the SIL Open Font License. Their license
-and notice files are bundled in `assets/licenses/`. This website does not include
-user projects or uploads.
+```text
+node website/pages.mjs
+```
+
+This regenerates all seven HTML files and the sitemap, copies six real bundled
+template posters, and writes the sample CSV. Commit the outputs with their source.
+Shared styling lives in `style.css`; navigation, category filters, and source setup
+controls live in `script.js`. Shader code loads only on the two playground pages.
+
+`node website/build.mjs` additionally refreshes bundled fonts, licenses, and the
+shader engine from installed frontend dependencies, then regenerates the pages.
+All generated assets are checked in, so serving the site needs no dependencies.
+
+## Image filters and artwork
+
+The scenic background is the original generated `assets/alpine-dawn.webp`: an alpine
+lake at dawn, reflective blue water, lilac mountains, and a small apricot glow.
+`assets/nature-river.webp` is original generated editorial nature photography of
+an emerald forest river, waterfall, mossy rocks, and misty alpine mountains. Its
+generation prompt is preserved in `assets/nature-river.prompt.txt`.
+
+Every displayed effect uses that forest photograph. The gallery shows Fluted Glass,
+Lens Distortion, Water, Paper Texture, Halftone Dots, Halftone CMYK, and Image
+Dithering. No abstract texture or logo-effect examples appear in the website UI.
+The `assets/shaders/nature-*.webp` files are actual shader renders at 768 × 432,
+strength 0.65, scale 1, frame 1400 ms, using the uniforms in `image-effects.js`.
+
+`playground.js` provides real controls, PNG export, reset, and the before/after
+slider. Non-WebGL browsers see the rendered examples with live controls disabled.
+Motion respects reduced-motion preferences and stops when the playground is out
+of view or the page is hidden. Back/forward cache restoration recreates the canvas.
+
+All fonts, images, shader code, and template posters are local. See `BRAND.md` for
+the refracted-light logo. Paper Shaders 0.0.82 is Apache 2.0; Newsreader and Inter
+are under the SIL Open Font License. Licenses and notices are in `assets/licenses/`.
+No user projects or uploads are included.

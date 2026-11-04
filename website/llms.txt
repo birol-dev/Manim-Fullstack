@@ -1,14 +1,32 @@
 # Manim Studio
 
-A free, open-source local creative studio, powered by Manim Community.
+A free, open-source local creative studio powered by Manim Community.
+No account is needed. Projects and assets are kept on the user's computer.
 
-Create videos from editable templates for countdowns, interval timers, comparisons,
-numbers, charts, announcements, quotes, and quizzes. Explore 30 Paper Shaders with
-image and logo uploads, presets, and live controls. Templates export video and
-images; shaders export PNG and WebM. Projects and assets are kept locally.
+- Overview: https://manimgui.birol.tech/
+- Templates: https://manimgui.birol.tech/templates.html
+- Image filters: https://manimgui.birol.tech/shaders.html
+- Batch creation and sound: https://manimgui.birol.tech/workflows.html
+- Python scene editor: https://manimgui.birol.tech/author.html
+- AI connections: https://manimgui.birol.tech/ai.html
+- Installation and setup: https://manimgui.birol.tech/get-started.html
+- Source: https://github.com/birol-dev/Manim-Fullstack
 
-The website includes an interactive preview of three shaders and source setup
-instructions. Python 3.11+ and Node.js 20.19+ are needed for the initial source build.
+Templates cover countdowns, intervals, comparisons, charts, counters, announcements,
+celebrations, quotes, and quizzes. Export MP4, GIF, WebM, MOV, or PNG, in landscape,
+vertical, square, and portrait layouts. Batch creation accepts CSV, TSV, and XLSX,
+or pasted lists, with up to 200 variations. Music and effects can be added to video;
+PNG and GIF are silent.
 
-Website: https://manimgui.birol.tech/
-Repository: https://github.com/birol-dev/Manim-Fullstack
+The website's live image playground demonstrates seven image filters on a nature
+photograph: Fluted Glass, Lens Distortion, Water, Paper Texture, Halftone Dots,
+Halftone CMYK, and Image Dithering. It exports PNG. The app adds image uploads,
+more controls, and short WebM recordings. Live shaders need WebGL 2.
+
+Author mode provides a Python editor, live rendering progress, a timeline, render
+comparison, and an asset library. Compatible AI clients can connect over MCP to
+find templates, edit projects, inspect storyboards, and queue exports. AI clients
+may send information to their provider according to their own settings.
+
+Windows desktop packages include the template runtime. Source setup needs Python
+3.11+ and Node.js 20.19+ for the initial build; macOS and Linux need Cairo and Pango.
