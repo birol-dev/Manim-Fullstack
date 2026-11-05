@@ -32,18 +32,19 @@ class Detail(Item):
 LAYOUTS = {
     "bold": "Bold type",
     "split": "Photo + text",
+    "showcase": "Device showcase",
     "poster": "Ticket card",
 }
 
 
 class Params(TemplateParams):
-    layout: Literal["bold", "split", "poster"] = choice(
+    layout: Literal["bold", "split", "showcase", "poster"] = choice(
         "bold", title="Layout", labels=LAYOUTS,
         option_help={"bold": "Big centered words with the big text on a color band.",
                      "split": "Your photo beside the words, or a color panel without a photo.",
+                     "showcase": "A device-style frame for a product photo or screenshot.",
                      "poster": "A ticket card with the big text on the stub."},
-        description="Bold type: big centered words, the big text on a color band. Photo + text: your photo "
-                    "(or a color panel) beside the words. Ticket card: a ticket with the big text on the stub.")
+        description="Choose big centered type, a full-bleed photo and text, a device-style product frame, or a ticket card.")
     teaser: str = text("", title="Teaser (optional)", max_length=40, placeholder="Something new is coming…",
                        help="An opening line before the reveal. Leave empty to skip it.",
                        description="Shown on its own first, then the announcement is revealed. Leave empty to "
@@ -84,7 +85,7 @@ PRESETS = [
             ],
             "call_to_action": "Show this video at checkout",
         },
-        settings={"theme": "pop", "energy": "punchy"},
+        settings={"theme": "print_grid", "energy": "punchy"},
         tags=["sale", "discount", "shop"],
     ),
     Preset(

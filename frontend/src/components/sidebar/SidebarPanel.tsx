@@ -11,7 +11,7 @@ interface SidebarPanelProps {
 export function SidebarPanel({ title, actions, children }: SidebarPanelProps) {
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface">
-      <PaneHeader className="h-10 justify-between pr-1.5">
+      <PaneHeader className="author-pane-heading h-10 justify-between pr-1.5">
         <PaneTitle>{title}</PaneTitle>
         {actions && <div className="flex items-center gap-0.5">{actions}</div>}
       </PaneHeader>

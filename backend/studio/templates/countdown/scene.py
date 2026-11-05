@@ -1,6 +1,6 @@
 import math
 
-from manim import LEFT, PI, TAU, Arc, Circle, FadeIn, FadeOut, ValueTracker, VGroup, there_and_back
+from manim import LEFT, PI, TAU, Arc, Circle, Dot, FadeIn, FadeOut, Line, ValueTracker, VGroup, there_and_back
 
 from studio.kit import Counter, StudioScene, fit_text, shapes, size_for_height
 
@@ -51,20 +51,39 @@ class Template(StudioScene):
             self._big_numbers(main_box, title, note, seconds, accent)
             return
 
-        if p.style == "ring":
-            radius = min(main_box.width, main_box.height) / 2 * 0.92
-            stroke = max(radius * 9, 6)
+        if p.style in ("ring", "dial"):
+            dial = p.style == "dial"
+            radius = min(main_box.width, main_box.height) * (.39 if dial else .46)
+            stroke = max(radius * (5 if dial else 9), 6)
             track = Circle(radius=radius).set_stroke(theme.line, width=stroke).move_to(main_box.center)
+
+            def point(angle, factor):
+                return [main_box.center[0] + radius * factor * math.cos(angle),
+                        main_box.center[1] + radius * factor * math.sin(angle), 0]
+
+            if dial:
+                ticks = VGroup(*[
+                    Line(point(i * TAU / 48, 1.12), point(i * TAU / 48, 1.23 if i % 4 == 0 else 1.18))
+                    .set_stroke(theme.muted if i % 4 == 0 else theme.line, width=2 if i % 4 == 0 else 1.3)
+                    for i in range(48)
+                ])
+                rim = Circle(radius=radius * .84).set_stroke(theme.line, width=1.2).move_to(main_box.center)
+                track = VGroup(track, rim, ticks)
 
             def make_arc():
                 frac = max(left.get_value(), 0) / seconds
-                arc = Arc(radius=radius, start_angle=PI / 2, angle=-TAU * max(frac, 1e-4),
-                          arc_center=main_box.center)
-                return arc.set_stroke(accent if left.get_value() > warn_at or not warn_at else warn, width=stroke)
+                angle = -TAU * max(frac, 1e-4)
+                ink = accent if left.get_value() > warn_at or not warn_at else warn
+                arc = Arc(radius=radius, start_angle=PI / 2, angle=angle, arc_center=main_box.center)
+                arc.set_stroke(ink, width=stroke)
+                if dial:
+                    tip = Dot(point(PI / 2 + angle, 1), radius=radius * .047, color=ink)
+                    return VGroup(arc, tip)
+                return arc
 
             arc = make_arc()
             arc.add_updater(lambda a: a.become(make_arc()))
-            digit_h = radius * 0.42
+            digit_h = radius * (.52 if dial else .42)
             meter = VGroup(track, arc)
             center = main_box.center
         elif p.style == "minimal":
@@ -108,6 +127,12 @@ class Template(StudioScene):
                          sample_values=sample).move_to(center)
         warn_digits = Counter(min(seconds, warn_at), size=size, font=theme.font, weight="BOLD", color=warn,
                               formatter=clock, sample_values=sample).move_to(center) if warn_at else None
+        if p.style == "dial":
+            # Keep the widest readout clear of the inner rim without resizing mid-count.
+            scale = min(1, radius * 1.48 / max(digits.width, .01))
+            digits.scale(scale).move_to(center)
+            if warn_digits is not None:
+                warn_digits.scale(scale).move_to(center)
         self.keep_particles_clear(meter, [*self._confetti_foreground, digits, warn_digits])
 
         self.add(track)

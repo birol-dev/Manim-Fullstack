@@ -11,9 +11,11 @@ the MCP resources to a server built by ``studio.mcp_server.create_server``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .sound import EFFECTS, TRACKS
 
-TOPICS = ("start", "templates", "writing", "platforms", "look", "sound", "export", "many", "troubleshooting")
+TOPICS = ("start", "templates", "writing", "platforms", "look", "broll", "sound", "export", "many", "troubleshooting")
 
 SUMMARIES = {
     "start": "The workflow, from the goal to the download link.",
@@ -21,6 +23,7 @@ SUMMARIES = {
     "writing": "Tactics for on-screen text, and every field's character limit.",
     "platforms": "Aspect, length and safe zone for each destination.",
     "look": "Themes, backgrounds, energy, ending and brand colours.",
+    "broll": "Plan, animate, and review custom Manim diagrams and technical B-roll.",
     "sound": "Effects, bundled music, uploads, volume and fading.",
     "export": "Formats, qualities, transparency, render times, retries.",
     "many": "One video per row of a list: make_many, columns and skipped rows.",
@@ -301,7 +304,21 @@ def _render_look(catalog: dict) -> str:
 Pick one theme per video and keep it. Rough fit: `clean` for business, classes and
 everyday notices; `midnight` for tech, evening events and quotes; `pop` for promotions
 and celebrations; `newsroom` for editorial and product news; `pastel` for warm,
-community and kids content; `chalk` for teaching.
+community and kids content; `chalk` for teaching. `print_grid` uses bold type, a quiet
+registration grid and a bright accent for editorial titles, launches or quotes.
+`afterglow` uses a dark horizon and neon accents for motion, tech and countdowns.
+
+For a product or UI reveal, use `announcement` with `layout="showcase"` and upload the
+image with `add_image`. The device frame fits the whole image, with room beside or
+below for the headline and action. Keep one visual as the focal point. Use the
+storyboard to check spacing and the preview to verify the image is readable.
+
+Choose the template's layout before choosing colors. `quote` with
+`layout="editorial"` places the text and credit beside a ruled margin. `lower_third`
+with `style="signal"` opens with a diamond and a rule, then brings in the text.
+`countdown` with `style="dial"` adds a clock face and a pointer. For an
+`interval_timer`, `style="console"` gives the current phase a large readout and
+shows a separate session meter when several phases play.
 
 ## Background
 
@@ -573,12 +590,17 @@ Tool errors come back as `ToolError` with JSON like
   a stuck render is better replaced than waited on."""
 
 
+def _render_broll(_catalog: dict) -> str:
+    return Path(__file__).with_name("guides").joinpath("broll.md").read_text(encoding="utf-8")
+
+
 _RENDERERS = {
     "start": _render_start,
     "templates": _render_templates,
     "writing": _render_writing,
     "platforms": _render_platforms,
     "look": _render_look,
+    "broll": _render_broll,
     "sound": _render_sound,
     "export": _render_export,
     "many": _render_many,
@@ -683,7 +705,8 @@ Goal: {goal}
 Audience: {audience or "not given - choose a sensible audience and say what you assumed"}
 Platform: {platform or "not given - use 9:16 for phones, 16:9 for everything else"}
 
-Work in this order:
+For custom diagrams or B-roll, follow `guide("broll")` and its Author mode workflow.
+For an installed design, work in this order:
 1. `search_templates(query="{goal}")` for candidates, then `get_template(template)` for the
    exact params schema and presets. Never invent a field: unknown fields are refused.
 2. Pick the closest preset and call `quick_video(template, preset=..., params={{...}},
@@ -817,10 +840,11 @@ def register_guidance(server, service) -> None:
 
     @server.tool(title="Guide", description=(
         "Read the Manim Studio guide before making anything. Topics: start (the workflow), templates, "
-        "writing, platforms, look, sound, export, many (one video per list row), troubleshooting. "
+        "writing, platforms, look, broll (custom Manim diagrams and B-roll), sound, export, "
+        "many (one video per list row), troubleshooting. "
         "Returns markdown."))
     async def guide(topic: str = "start") -> str:
-        """Guidance for making a good video: start, templates, writing, platforms, look, sound,
+        """Guidance for making a good video: start, templates, writing, platforms, look, broll, sound,
         export, many or troubleshooting. Unknown topics list the topics."""
         return await topic_markdown(service, topic)
 

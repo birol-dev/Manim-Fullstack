@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 
 import numpy as np
-from manim import Circle, Group, ImageMobject, Star, VGroup, VMobject
+from manim import Circle, Group, ImageMobject, Line, Star, VGroup, VMobject
 
 from studio.kit import StudioScene, fit_text, media, shapes
+from studio.kit.layout import Region
 
 from .reveal import Choreography, Piece, Pulse
 from .schema import META, Params
@@ -173,12 +174,18 @@ class Template(StudioScene):
     logo_height = {"16:9": 7, "9:16": 5, "1:1": 5, "4:5": 5}
     logo_reserved_aspects = ("1:1", "4:5")
 
+    def _stage(self):
+        safe, u = self.layout.safe, self.layout.unit
+        if self.p.layout == "editorial":
+            return Region(safe.left + 7 * u, safe.right - 2 * u, safe.top - 4 * u, safe.bottom + 4 * u)
+        return safe
+
     def build(self):
         if self.s.aspect in self.logo_reserved_aspects:
             self.reserve_logo_band()
         p, theme, lay, m = self.p, self.theme, self.layout, self.motion
         u = lay.unit
-        stage = lay.safe
+        stage = self._stage()
         left = p.align == "left"
         accent = p.accent or theme.accent(0)
 
@@ -220,10 +227,21 @@ class Template(StudioScene):
         # ---- the choreography
         pieces = []
         t0 = 0.0
+        if p.layout == "editorial":
+            x = lay.safe.left + u
+            rules = VGroup(
+                Line([x, stage.top, 0], [x, stage.bottom, 0]).set_stroke(theme.line, width=1.6),
+                Line([x, stage.bottom, 0], [stage.right, stage.bottom, 0]).set_stroke(theme.line, width=1.6),
+            )
+            # A short registration bar enters first, like the opening cue in a title sequence.
+            cue = Line([x, stage.top, 0], [x + 4.5 * u, stage.top, 0]).set_stroke(accent, width=5)
+            pieces += [Piece(cue, 0.0, m.t(.30), "slide", dist=2 * u),
+                       Piece(rules, m.t(.10), m.t(.48), "fade")]
+            t0 = m.t(.25)
         if mark is not None:
             for i, comma in enumerate(mark):
-                pieces.append(Piece(comma, m.t(0.06 * i), m.t(0.6), "pop"))
-            t0 = m.t(0.3)
+                pieces.append(Piece(comma, t0 + m.t(0.06 * i), m.t(0.6), "pop"))
+            t0 += m.t(0.3)
         if kicker is not None:
             pieces.append(Piece(kicker, m.t(0.1), m.t(0.5), "rise", dist=2 * u))
             t0 = max(t0, m.t(0.4))
@@ -262,17 +280,20 @@ class Template(StudioScene):
     def _compose(self, lv: dict, marked: str, plain: str, accent: str, left: bool) -> dict:
         """Build header, attribution and the fitted text at one density level."""
         p, theme, lay = self.p, self.theme, self.layout
-        u, stage = lay.unit, lay.safe
+        u, stage = lay.unit, self._stage()
         compact = lay.is_landscape
         bg = self.s.background.color if self.s.background.kind in ("solid", "gradient") and self.s.background.color             else theme.bg
         gold = STAR_GOLD if contrast(STAR_GOLD, bg) >= 1.7 else accent
-        wrap_w = stage.width * (1.0 if lay.is_portrait else (0.92 if lv["wide"] else 0.8) if compact else 0.94)
+        wrap_w = stage.width if p.layout == "editorial" else (
+            stage.width * (1.0 if lay.is_portrait else (0.92 if lv["wide"] else 0.8) if compact else 0.94))
         k = lv["gap"]
         n = len(plain)
         weight = theme.display_weight if n <= 110 else ("BOLD" if theme.display_weight == "HEAVY" else "SEMIBOLD")
 
         header = []  # (name, mobject, gap below)
         mark_h = lv["mark_l"] if compact else lv["mark"]
+        if p.layout == "editorial":
+            mark_h *= .58
         mark = quote_mark(mark_h * u, accent) if (p.quote_marks and mark_h > 0) else None
         if mark is not None:
             header.append(("mark", mark, 4 * u * k))

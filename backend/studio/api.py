@@ -155,6 +155,7 @@ def _setup_status(manager, setup, connection: dict) -> dict:
         "components": manager.components(),
         "ai_apps": setup.entries(connection),
         "data_folder": manager.workspace,
+        "python_authoring": connection.get("python_authoring"),
     }
 
 

@@ -12,6 +12,7 @@ import type { PreviewItem } from "@/lib/types";
 
 interface PreviewPaneProps {
   preview: PreviewItem | null;
+  agentStatus?: string;
   /** The render of the open file, if one is running. */
   active: ActiveRender | null;
   /** A render of another file, running while this one is open (shown as a slim banner, not the overlay). */
@@ -32,6 +33,7 @@ interface PreviewPaneProps {
   onCancel: () => void;
   onCompare: () => void;
   onShowConsole: () => void;
+  onOpenGuide?: () => void;
 }
 
 function ProgressRing({ percent }: { percent: number | null }) {
@@ -163,6 +165,19 @@ function UnplayableVideo({ url, downloadName }: { url: string; downloadName: str
   );
 }
 
+function MotionSlate() {
+  return (
+    <svg className="author-motion-slate" viewBox="0 0 192 78" fill="none" aria-hidden="true">
+      <path d="M5 20V7h13m156 0h13v13M5 58v13h13m156 0h13V58" stroke="currentColor" opacity=".45" />
+      <path d="M22 58C49 58 59 24 86 24s34 30 68 30h15" stroke="currentColor" strokeDasharray="3 4" opacity=".65" />
+      <rect x="31" y="33" width="22" height="22" rx="2" transform="rotate(-18 42 44)" stroke="currentColor" opacity=".7" />
+      <path d="m88 15 12 12-12 12-12-12 12-12Z" fill="currentColor" fillOpacity=".12" stroke="currentColor" />
+      <circle cx="146" cy="47" r="15" fill="currentColor" fillOpacity=".10" stroke="currentColor" />
+      <circle cx="22" cy="58" r="2" fill="currentColor" /><circle cx="169" cy="54" r="2" fill="currentColor" />
+    </svg>
+  );
+}
+
 export function PreviewPane(props: PreviewPaneProps) {
   const { preview, active, lastOutcome } = props;
   // The URL of a video that failed to load (a new render has a new URL, so it is tried again).
@@ -173,12 +188,13 @@ export function PreviewPane(props: PreviewPaneProps) {
   const announcement = useRenderAnnouncement(active, props.stepCount, Boolean(props.stopping), lastOutcome);
 
   return (
-    <section aria-label="Preview" className="flex h-full min-h-0 flex-col bg-surface">
+    <section aria-label="Preview" className="author-preview flex h-full min-h-0 flex-col bg-surface">
       <p role="status" aria-live="polite" className="sr-only" data-testid="render-announcement">
         {announcement}
       </p>
-      <PaneHeader className="h-10 justify-between pr-1.5">
+      <PaneHeader className="author-pane-heading h-10 justify-between pr-1.5">
         <div className="flex min-w-0 items-center gap-2">
+          <Film aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
           <PaneTitle>Preview</PaneTitle>
           {/* While rendering, the header names the job, not the clip behind the overlay. */}
           {active ? (
@@ -221,7 +237,9 @@ export function PreviewPane(props: PreviewPaneProps) {
         </div>
       </PaneHeader>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
+      {props.agentStatus && <div className="author-preview-agent"><span aria-hidden />{props.agentStatus}</div>}
+
+      <div data-empty={!preview && !active && !failed} className="author-preview-stage relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black">
         {preview ? (
           preview.kind === "image" ? (
             <img key={preview.url} src={preview.url} alt={preview.title} className="max-h-full max-w-full object-contain" />
@@ -261,7 +279,8 @@ export function PreviewPane(props: PreviewPaneProps) {
           />
         ) : (
           <EmptyState
-            icon={<Film />}
+            className="author-preview-empty"
+            icon={<MotionSlate />}
             title="Nothing rendered yet"
             description={
               props.renderBlocked && props.canRender ? (
@@ -271,8 +290,8 @@ export function PreviewPane(props: PreviewPaneProps) {
                 </span>
               ) : (
                 <>
-                  Render {props.selectedScene ? <span className="text-fg-muted">{props.selectedScene}</span> : "a scene"} to preview it
-                  here. Shortcut: <Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd>
+                  Render {props.selectedScene ? <code className="text-fg">{props.selectedScene}</code> : "a scene"} to see it in motion.
+                  <span className="author-preview-shortcut"><Kbd>{MOD_KEY}</Kbd> <Kbd>Enter</Kbd></span>
                 </>
               )
             }
@@ -294,10 +313,13 @@ export function PreviewPane(props: PreviewPaneProps) {
                   </Button>
                 </Tooltip>
               ) : (
-                <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
-                  <Play className="fill-current" />
-                  Render
-                </Button>
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button variant="primary" size="sm" onClick={props.onRender} disabled={!props.canRender}>
+                    <Play className="fill-current" />
+                    Render
+                  </Button>
+                  {props.onOpenGuide && <Button variant="secondary" size="sm" onClick={props.onOpenGuide}>Render help</Button>}
+                </div>
               )
             }
           />

@@ -95,7 +95,7 @@ export default function StudioApp() {
       if (appearance === "system") delete document.documentElement.dataset.theme;
       else document.documentElement.dataset.theme = appearance;
     } else {
-      delete document.documentElement.dataset.surface;
+      document.documentElement.dataset.surface = "author";
       delete document.documentElement.dataset.theme;
     }
     return () => { delete document.documentElement.dataset.surface; delete document.documentElement.dataset.theme; };
@@ -110,8 +110,8 @@ export default function StudioApp() {
   }, [route.kind]);
   if (route.kind === "author") {
     return (
-      <Suspense fallback={<Loading label="Opening author mode…" />}>
-        <AuthorApp />
+      <Suspense fallback={<Loading label={route.design ? "Opening Design Studio…" : "Opening author mode…"} />}>
+        <AuthorApp initialDesign={route.design} initialFile={route.file} initialScene={route.scene} />
       </Suspense>
     );
   }

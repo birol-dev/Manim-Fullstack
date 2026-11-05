@@ -33,6 +33,7 @@ export interface SetupStatus {
   components: SetupComponent[];
   ai_apps: AIApp[];
   data_folder: string;
+  python_authoring?: boolean | null;
 }
 
 export type UpdateState = "idle" | "checking" | "available" | "downloading" | "ready" | "failed" | "unavailable";
@@ -54,6 +55,11 @@ export const downloadUpdate = () => postJson<UpdateStatus>("/api/studio/setup/up
 export const installUpdate = () => postJson<UpdateStatus>("/api/studio/setup/update/install", {});
 export const connectAIApp = (id: string) => postJson<AIApp>(`/api/studio/setup/ai-apps/${encodeURIComponent(id)}/connect`, {});
 export const disconnectAIApp = (id: string) => requestJson<AIApp>(`/api/studio/setup/ai-apps/${encodeURIComponent(id)}/connect`, { method: "DELETE" });
+export const setPythonAuthoring = (enabled: boolean) => requestJson<{ enabled: boolean }>("/api/author/ai-python", {
+  method: "PUT",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ enabled }),
+});
 export const installComponent = (id: string) => postJson<SetupComponent>(`/api/studio/setup/components/${encodeURIComponent(id)}/install`, {});
 export const revealDataFolder = () => requestJson<void>("/api/studio/setup/reveal-data-folder", { method: "POST" });
 

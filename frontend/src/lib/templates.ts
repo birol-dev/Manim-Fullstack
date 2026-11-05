@@ -1,3 +1,5 @@
+import indexLookup from "./starters/index_lookup.py?raw";
+
 export interface SceneTemplate {
   id: string;
   title: string;
@@ -9,7 +11,17 @@ export interface SceneTemplate {
   code: string;
 }
 
+export const INDEX_LOOKUP_STARTER: SceneTemplate = {
+  id: "index-lookup",
+  title: "Index lookup",
+  description: "Follow one key from a sorted index to its matching row in a short technical explainer.",
+  category: "Diagrams",
+  filename: "index_lookup.py",
+  code: indexLookup,
+};
+
 export const SCENE_TEMPLATES: SceneTemplate[] = [
+  INDEX_LOOKUP_STARTER,
   {
     id: "square-to-circle",
     title: "Square to Circle",
@@ -155,7 +167,6 @@ class EquationMorph(Scene):
 `,
   },
 ];
-
 export const LATEX_TEMPLATES = [
   { name: "Euler's identity", code: "e^{i\\pi} + 1 = 0" },
   { name: "Quadratic formula", code: "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}" },

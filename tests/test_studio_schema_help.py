@@ -68,6 +68,7 @@ def test_duration_and_choice_descriptions_keep_the_agent_contract():
     assert countdown["seconds"]["description"] == "How long the timer runs, in seconds (5 minutes = 300)."
     assert countdown["seconds"]["x-help"] == "How long the timer runs."
     assert countdown["style"]["description"] == (
-        "Ring: a circle that empties. Progress bar: a bar that shrinks. Big numbers: large seconds "
+        "Ring: a circle that empties. Instrument dial: a clock face with a moving pointer. "
+        "Progress bar: a bar that shrinks. Big numbers: large seconds "
         "that pop (best for short countdowns like 10 to 1). Segments disappear one at a time; "
         "minimal shows only the clock.")

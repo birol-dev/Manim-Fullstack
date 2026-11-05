@@ -12,7 +12,7 @@ from studio.themes import THEMES
 def test_lower_third_presets_are_transparent_and_in_the_creator_gallery():
     assert len(PRESETS) == 3
     assert META.default_aspect == "16:9"
-    assert {p.params["style"] for p in PRESETS} == {"panel", "block", "underline"}
+    assert {p.params["style"] for p in PRESETS} == {"signal", "block", "underline"}
     cards = next(s["cards"] for s in registry.catalog()["sections"] if s["id"] == "creator")
     assert {c["id"] for c in cards if c["template"] == META.id} == {p.id for p in PRESETS}
     for preset in PRESETS:
@@ -75,7 +75,7 @@ def _inside(inner, outer):
 
 
 @pytest.mark.parametrize("aspect", ASPECTS)
-@pytest.mark.parametrize("style", ["panel", "block", "underline"])
+@pytest.mark.parametrize("style", ["panel", "block", "underline", "signal"])
 @pytest.mark.parametrize("theme", THEMES)
 def test_lower_third_maximum_text_fits_every_shape_style_and_theme(make_scene, aspect, style, theme):
     for side, short in (("left", False), ("center", True), ("right", False)):

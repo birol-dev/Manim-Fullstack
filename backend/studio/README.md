@@ -72,6 +72,20 @@ serves the immutable baked movie, including range requests, directly from the in
 The tool uses `workspace/studio/tmp/poster-bake` as scratch space. In a restricted environment,
 use `--work-dir frontend/node_modules/.cache/poster-bake`.
 
+## Visual design and shared drafts
+
+Open **Design Studio** for an original Manim shot. Connected agents can write and render Python, and their work appears in the activity list next to the editable script and preview. Mark top-level text or colors with `# studio: Label` to make them editable in the design panel. **Try Index lookup** opens a working example.
+
+**Print Grid** pairs bold type and a bright accent with print registration marks.
+**Afterglow** uses a muted neon horizon and a receding grid. Both are available in
+**Look** and in MCP render settings. Announcement's **Device showcase** layout
+fits a product image or screenshot into a frame beside or above the text.
+
+Open **With AI** beside the preview to save a shareable draft and copy an MCP
+brief for its project. Agents should read the current project, apply changes with
+`base_revision`, and inspect a storyboard. The open editor picks up saved changes
+when local edits finish saving. Undo can restore the prior design.
+
 ## Motion previews
 
 `POST /api/studio/motion` accepts `{project, template, params, settings}`. `project` is
@@ -268,6 +282,26 @@ serves an audition (`kind` is `music` or `effects`).
 Exports return immediately; poll `get_export` for the completed download URL.
 Project updates replace each supplied object; fetch first to preserve other fields.
 Draft projects can save incomplete input, while previews and exports validate it.
+
+### Custom Python scenes
+
+Turn on **Allow AI apps to write and run Python** in Studio's **AI apps** settings
+for a local workspace. Connected clients with that workspace's MCP credential
+can then write and execute scripts with the same user permissions as Studio.
+
+Use `list_scripts` and `read_script` to find and inspect Author mode files.
+`write_script(filename, code, base_version=None)` saves a complete Manim Community
+script. Omit the version to create a file. To edit an existing script, send the
+version from the latest read or save. The response includes detected scenes and
+syntax errors. `render_scene(filename, scene, quality="l", version=...)` queues a
+render of the saved source. Poll `get_scene_render` for progress, logs and the
+output, or use `cancel_scene_render` to stop it. The editor and agent share the
+same files, render slots and media library. Job status is kept for the current
+Studio session.
+
+`inspect_scene_render` returns a contact sheet from a finished video or still.
+Use `guide("broll")` or `studio://guide/broll` for the shot-planning workflow,
+design notes, and a runnable Manim example.
 
 ### Teaching the agent: guide, prompts, resources, quick_video
 

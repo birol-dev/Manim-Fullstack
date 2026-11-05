@@ -10,6 +10,7 @@ and otherwise starts its backend in the background (desktop/agent_host.py).
 from __future__ import annotations
 
 import argparse
+from base64 import b64decode
 import functools
 import json
 import os
@@ -24,6 +25,7 @@ if __package__ in (None, ""):
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import TextContent
+from starlette.exceptions import HTTPException
 
 from studio.errors import StudioError
 from studio.mcp_guide import register_guidance
@@ -60,12 +62,24 @@ def settings_schema(template: dict) -> dict:
     return schema
 
 
-def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPServer:
+def create_server(service, *, base_url: str = "http://127.0.0.1:8000", author=None) -> MCPServer:
     """Build tools without importing Manim. A service may also be a REST bridge."""
+    author = author if author is not None else getattr(service, "author", None)
+    author_instructions = (
+        '\nFor technical diagrams, visual explainers, or B-roll, start with guide("broll") and use custom Manim scenes. '
+        "Plan one visual claim per shot and time the changes to the narration. Establish the starting state, "
+        "keep the diagram anchored, highlight one path or change at a time, then hold the result. "
+        "Use a consistent palette, high-contrast labels, clear spacing, and margins for captions and cropping. "
+        "Keep examples and numbers accurate. Save a complete scene with write_script, queue a low-quality "
+        "render_scene, poll get_scene_render, and inspect_scene_render before revising or rendering at final quality. "
+        "Share the design_url from get_scene_render so the user can watch and edit the shot in Design Studio. "
+        "The script and output appear in Author mode. Read an existing script and pass its version before editing it. "
+        "Python tools require Python authoring in Studio's AI apps settings."
+    ) if author is not None else ""
     server = MCPServer(
         "Manim Studio", version=APP_VERSION,
         instructions=(
-            "Manim Studio makes short animated videos from installed templates. Call guide() first if "
+            "Manim Studio makes animated videos from templates and custom Manim scenes. Call guide() first if "
             "unsure: it teaches the workflow, writing, platforms, look, sound and export.\n"
             "Workflow: search_templates -> get_template (exact params schema and presets) -> quick_video or "
             "create_project -> preview(mode=\"storyboard\") and look at the image -> update_project -> "
@@ -73,8 +87,10 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
             "Rules: never invent fields; keep text inside its maxLength (the layout is tested against them); "
             "get_project before update_project, because params and settings replace the whole object; images "
             "must be uploaded with add_image first; exports are background jobs, never assume one is done.\n"
+            "Design for the viewing size. Give each frame a clear focal point and keep labels short, legible, and spaced.\n"
             "Pick the aspect for the platform: 16:9 for YouTube and slides, 9:16 with safe_zone=true for "
-            "Shorts/Reels/TikTok, 4:5 or 1:1 for Instagram feed. No Python code is accepted."))
+            "Shorts/Reels/TikTok, 4:5 or 1:1 for Instagram feed."
+            + author_instructions))
 
     def origin(ctx):
         try:
@@ -85,6 +101,8 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
         return f"http://{host}" if host else base_url
 
     register_guidance(server, service)
+    if author is not None:
+        _register_author_tools(server, author, origin)
 
     @server.tool()
     @_tool_errors
@@ -346,6 +364,64 @@ def create_server(service, *, base_url: str = "http://127.0.0.1:8000") -> MCPSer
     return server
 
 
+def _register_author_tools(server, author, origin):
+    async def call(action, **fields):
+        try:
+            return await author(action, fields)
+        except HTTPException as exc:
+            raise ToolError(exc.detail if isinstance(exc.detail, str) else json.dumps(exc.detail)) from None
+
+    @server.tool()
+    async def list_scripts() -> dict:
+        """List Python files in the Author mode workspace. Requires Python authoring enabled in Studio."""
+        return await call("list_scripts")
+
+    @server.tool()
+    async def read_script(filename: str) -> dict:
+        """Read a workspace .py file and get its scene names and version. Read before editing an existing script."""
+        return await call("read_script", filename=filename)
+
+    @server.tool()
+    async def write_script(filename: str, code: str, base_version: str | None = None) -> dict:
+        """Save complete Manim Community Python source as a .py file in Author mode. Returns parsed scenes,
+        syntax errors if any, and a version. Omit base_version to create a file. To edit, use the version from
+        read_script or the last save. This saves the file without executing it."""
+        return await call("write_script", filename=filename, code=code, base_version=base_version)
+
+    @server.tool()
+    async def render_scene(filename: str, scene: str, quality: Literal["l", "m", "h", "k"] = "l",
+                           version: str | None = None, use_opengl: bool = False) -> dict:
+        """Queue a scene from a saved Python file for rendering in Author mode. Pass the version from
+        write_script or read_script to check you are rendering that revision. Use l for a draft, m for 720p,
+        h for 1080p or k for 4K. Poll get_scene_render with the returned id."""
+        return await call("render_scene", filename=filename, scene=scene, quality=quality, version=version,
+                          use_opengl=use_opengl)
+
+    @server.tool()
+    async def get_scene_render(render_id: str, ctx: Context) -> dict:
+        """Read a Python render job's status, progress and recent logs. When done, its output is in
+        Author mode's media library. Queued and rendering are active states."""
+        result = await call("get_scene_render", render_id=render_id)
+        result["app_url"] = origin(ctx) + "/#/author"
+        result["design_url"] = (origin(ctx) + "/#/author/design?file=" + quote(result["filename"], safe="")
+                                + "&scene=" + quote(result["scene"], safe=""))
+        return result
+
+    @server.tool()
+    async def cancel_scene_render(render_id: str) -> dict:
+        """Stop a queued or running Python scene render and return the final job status."""
+        return await call("cancel_scene_render", render_id=render_id)
+
+    @server.tool(structured_output=False)
+    async def inspect_scene_render(render_id: str) -> list:
+        """Return a contact sheet of a finished Author render. Inspect the image for layout, contrast,
+        clipping and readable labels. A video gets time-stamped samples and a still gets one frame."""
+        result = await call("inspect_scene_render", render_id=render_id)
+        image = Image(data=b64decode(result["data"]), format="png")
+        timing = {key: result[key] for key in ("duration", "timestamps")}
+        return [TextContent(type="text", text=json.dumps(timing)), image.to_image_content()]
+
+
 class RestBridge:
     """One stdio client proxies the running app, sharing its cache, projects and export queue.
 
@@ -485,6 +561,9 @@ class RestBridge:
 
     async def list_music_tracks(self):
         return await self.request("GET", "/music-tracks")
+
+    async def author(self, action, fields):
+        return await self.request("POST", "/author/" + action, json=fields)
 
 
 def main():

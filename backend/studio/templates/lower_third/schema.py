@@ -24,7 +24,7 @@ META = TemplateMeta(
     tags=["lower third", "name", "caption", "presenter", "podcast", "interview", "overlay", "transparent"],
 )
 
-STYLES = {"panel": "Soft card", "block": "Solid color", "underline": "Underline"}
+STYLES = {"panel": "Soft card", "block": "Solid color", "underline": "Underline", "signal": "Signal strip"}
 SIDES = {"left": "Left", "center": "Centered", "right": "Right"}
 
 
@@ -43,13 +43,15 @@ class Params(TemplateParams):
         option_help={"left": "Sits at the bottom left.", "center": "Sits at the bottom center.",
                      "right": "Sits at the bottom right."},
         description="Where the strip sits at the bottom of the frame: left, centered or right.")
-    style: Literal["panel", "block", "underline"] = choice(
+    style: Literal["panel", "block", "underline", "signal"] = choice(
         "panel", title="Style", labels=STYLES,
         option_help={"panel": "A soft card with a colored edge.",
                      "block": "A solid card in your accent color.",
-                     "underline": "A soft card with a colored line under the name."},
+                     "underline": "A soft card with a colored line under the name.",
+                     "signal": "A diamond cue opens a sharp-edged title strip."},
         description="Soft card: a light or dark card with an accent bar. Solid color: the whole card in the "
-                    "accent color. Underline: a soft card with a colored line along the bottom.")
+                    "accent color. Underline: a soft card with a colored line along the bottom. "
+                    "Signal strip: a diamond cue and an opening rule.")
     hold: int = integer(
         4, title="Time on screen", ge=1, le=25, unit="seconds",
         help="How long the strip stays before it slides out.",
@@ -75,10 +77,10 @@ class Params(TemplateParams):
 PRESETS = [
     Preset(
         id="presenter-name", title="Presenter name",
-        summary="A calm name card for the start of a talking-head video.",
+        summary="A sharp title strip led by a diamond cue, ready to overlay footage.",
         params={"name": "Maya Torres", "role": "Product designer at Northwind", "side": "left",
-                "style": "panel", "hold": 5},
-        settings={"theme": "clean", "background": {"kind": "transparent"}},
+                "style": "signal", "hold": 5},
+        settings={"theme": "print_grid", "background": {"kind": "transparent"}},
         tags=["presenter", "name", "talking head", "introduction"],
     ),
     Preset(

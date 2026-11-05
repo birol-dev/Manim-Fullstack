@@ -1,7 +1,9 @@
 """Repeated, named timer phases for workouts, focus sessions and breathing."""
+from typing import Literal
+
 from pydantic import model_validator
 
-from studio.schema import Item, Preset, TemplateMeta, TemplateParams, duration, integer, items, text, toggle
+from studio.schema import Item, Preset, TemplateMeta, TemplateParams, choice, duration, integer, items, text, toggle
 
 META = TemplateMeta(
     id="interval_timer", title="Interval timer", category="timers",
@@ -22,6 +24,11 @@ class Phase(Item):
 
 class Params(TemplateParams):
     title: str = text("Work. Rest. Repeat.", title="Title", max_length=48)
+    style: Literal["ring", "console"] = choice("ring", title="Style",
+        labels={"ring": "Ring", "console": "Focus console"},
+        option_help={"ring": "A circle empties with each step.", "console": "A framed clock with a progress meter."},
+        description="Ring: a circle empties with each step. Focus console: a framed clock with a step meter "
+                    "and a separate session meter when several steps play.")
     phases: list[Phase] = items([Phase(label="Work", seconds=40), Phase(label="Rest", seconds=20)],
         title="Timed steps", min_items=2, max_items=6, item_title="Step",
         description="Two to six steps, played in order. Each step has a name and duration.")
@@ -46,30 +53,9 @@ def schedule(params):
 
 
 PRESETS = [
-    Preset(id="pomodoro-session", title="Pomodoro session", summary="Four 25-minute focus blocks with five-minute breaks.",
-        params={"title": "Make room for deep work", "phases": [{"label": "Focus", "seconds": 1500},
-            {"label": "Take a break", "seconds": 300}], "rounds": 4, "finish_text": "Good work. You're done."},
-        settings={"theme": "midnight", "energy": "calm"}, tags=["pomodoro", "focus", "study"]),
-    Preset(id="tabata-rounds", title="Tabata workout", summary="Eight rounds of 20 seconds on and 10 seconds off.",
-        params={"title": "20 on / 10 off", "phases": [{"label": "Move", "seconds": 20},
-            {"label": "Recover", "seconds": 10}], "rounds": 8, "finish_text": "Workout complete"},
-        settings={"theme": "pop", "energy": "punchy"}, tags=["tabata", "workout", "fitness"]),
-    Preset(id="hiit-circuit", title="HIIT circuit", summary="Six 40-second efforts with 20-second recovery breaks.",
-        params={"title": "One round at a time", "rounds": 6},
-        settings={"theme": "clean"}, tags=["hiit", "workout", "circuit"]),
-    Preset(id="box-breathing", title="Box breathing", summary="Inhale, hold, exhale, hold: four equal steps, six cycles.",
-        params={"title": "Find your rhythm", "phases": [{"label": "Breathe in", "seconds": 4},
-            {"label": "Hold", "seconds": 4}, {"label": "Breathe out", "seconds": 4},
-            {"label": "Hold", "seconds": 4}], "rounds": 6, "end_with_first": False,
-            "finish_text": "Back to your own pace"},
-        settings={"theme": "pastel", "energy": "calm"}, tags=["breathing", "calm", "cycle"]),
-    Preset(id="study-sprints", title="Study sprints", summary="Three ten-minute study blocks with two-minute breaks.",
-        params={"title": "A little, then a little more", "phases": [{"label": "Study", "seconds": 600},
-            {"label": "Stretch & reset", "seconds": 120}], "rounds": 3, "finish_text": "Session finished"},
-        settings={"theme": "chalk"}, tags=["study", "focus", "revision"]),
-    Preset(id="classroom-stations", title="Classroom stations", summary="Four stations, with time to work and time to move.",
-        params={"title": "Work together. Then rotate.", "phases": [{"label": "Station activity", "seconds": 180},
-            {"label": "Move to the next station", "seconds": 30}], "rounds": 4,
-            "finish_text": "Back to your seats"},
-        settings={"theme": "newsroom"}, tags=["classroom", "stations", "teaching"]),
+    Preset(id="pomodoro-session", title="Focus timer", summary="One 25-minute focus block. Add rounds for five-minute breaks.",
+        params={"title": "Focus time", "style": "console", "phases": [{"label": "Focus", "seconds": 1500},
+            {"label": "Break", "seconds": 300}], "rounds": 1, "end_with_first": True, "finish_text": "Take a break"},
+        settings={"theme": "afterglow", "energy": "calm"},
+        tags=["pomodoro", "25-minute", "deep focus", "study", "sprints", "classroom", "stations"]),
 ]

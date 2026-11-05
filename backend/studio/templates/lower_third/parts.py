@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import re
-from manim import Circle, VGroup
+from manim import PI, Circle, Square, VGroup
 
 from studio.kit import fit_text, shapes
 from studio.kit.text import measure
@@ -106,7 +106,7 @@ def build(style: str, name_text: str, role_text: str, pal: Palette, *, unit: flo
           name_size: float, role_size: float, max_width: float) -> Strip:
     """One measured strip, centered at the origin and no wider than *max_width*."""
     pad_x, pad_y = 4.0 * unit, 2.6 * unit
-    marker_w = {"panel": 1.4 * unit, "block": 1.7 * unit, "underline": 0.0}[style]
+    marker_w = {"panel": 1.4 * unit, "block": 1.7 * unit, "underline": 0.0, "signal": 2.8 * unit}[style]
     gap = 2.0 * unit if marker_w else 0.0
     text_w = max(max_width - 2 * pad_x - marker_w - gap, 2.0 * unit)
     weight = pal.display_weight
@@ -128,14 +128,14 @@ def build(style: str, name_text: str, role_text: str, pal: Palette, *, unit: flo
     if role is not None:
         block.arrange(np.array([0, -1.0, 0]), aligned_edge=np.array([-1.0, 0, 0]),
                       buff=max(1.2 * unit, 0.20 * name.height))
-    bottom_extra = 1.6 * unit if style == "underline" else 0.0
+    bottom_extra = 1.6 * unit if style in ("underline", "signal") else 0.0
     height = max(block.height + 2 * pad_y + bottom_extra, 2.6 * unit)
     width = max(2 * pad_x + marker_w + gap + block.width, 22.0 * unit)
-    text_y = bottom_extra / 2 if style == "underline" else 0.0
+    text_y = bottom_extra / 2
     text_x = -width / 2 + pad_x + marker_w + gap
 
     card = shapes.card(width, height, color=pal.accent if on_solid else pal.surface,
-                       radius=min(pal.radius, height / 2.4),
+                       radius=0 if style == "signal" else min(pal.radius, height / 2.4),
                        stroke=None if on_solid else pal.line, stroke_width=0 if on_solid else 1.4)
     shadow = card.copy().set_fill(pal.text, 0.16).set_stroke(width=0)
     shadow.shift([0.12 * unit, -0.28 * unit, 0])
@@ -151,12 +151,19 @@ def build(style: str, name_text: str, role_text: str, pal: Palette, *, unit: flo
         marker.move_to([-width / 2 + pad_x + marker_w / 2, text_y, 0])
 
     block.move_to([text_x + block.width / 2, text_y, 0])
+    if style == "signal":
+        marker = Square(side_length=marker_w / 2 ** .5).rotate(PI / 4)
+        marker.set_fill(pal.accent, 1).set_stroke(width=0).set_z_index(1)
+        marker.move_to([-width / 2 + pad_x + marker_w / 2, name.get_center()[1], 0])
 
     bar = None
     if style == "underline":
         bar_w = max(width - 2 * pad_x * 0.7, 2.0 * unit)
         bar = shapes.card(bar_w, 0.9 * unit, color=pal.accent, radius=0.45 * unit)
         bar.move_to([0, -height / 2 + 1.3 * unit, 0])
+    elif style == "signal":
+        bar = shapes.card(width * .53, 1.1 * unit, color=pal.accent, radius=0)
+        bar.move_to([-width / 2 + bar.width / 2, -height / 2 + bar.height / 2, 0]).set_z_index(1)
 
     strip = Strip()
     strip.card_group = VGroup(shadow, card)

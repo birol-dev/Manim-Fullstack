@@ -1,9 +1,10 @@
 """Announcement: kicker, headline, a huge element, details with icons, call to action, QR.
 
-Three layouts share one motion language:
+Four layouts share one motion language:
 
 * ``bold``   centered type; the big text slams onto a full-bleed color band.
 * ``split``  a photo (or a color panel carrying the big text) beside / above the text.
+* ``showcase`` a contained screenshot or product photo in a device-style frame.
 * ``poster`` a ticket card dealt onto the screen; the big text and QR sit on the stub.
 
 Beats: (teaser) -> kicker -> headline word by word -> big reveal -> details stagger ->
@@ -21,13 +22,14 @@ from manim import (
     Circle,
     FadeIn,
     FadeOut,
+    Group,
     LaggedStart,
     Rectangle,
     UpdateFromAlphaFunc,
     VGroup,
 )
 
-from studio.kit import StudioScene, shapes
+from studio.kit import StudioScene, media, shapes
 from studio.kit.layout import Region
 
 from . import blocks as B
@@ -44,10 +46,10 @@ class Template(StudioScene):
     logo_region = "top-right"
     logo_height = 7
     logo_reserved_layouts = {
-        "16:9": ("bold", "poster"),
-        "9:16": ("bold", "poster"),
-        "1:1": ("bold", "split", "poster"),
-        "4:5": ("bold", "split", "poster"),
+        "16:9": ("bold", "showcase", "poster"),
+        "9:16": ("bold", "showcase", "poster"),
+        "1:1": ("bold", "split", "showcase", "poster"),
+        "4:5": ("bold", "split", "showcase", "poster"),
     }
 
     # -- entry -----------------------------------------------------------------
@@ -64,7 +66,7 @@ class Template(StudioScene):
         self.logo_path = self.asset(p.logo)
         self.details = [d for d in p.details if d.text][:4]
 
-        layout = {"bold": self._bold, "split": self._split, "poster": self._poster}[p.layout]
+        layout = {"bold": self._bold, "split": self._split, "showcase": self._split, "poster": self._poster}[p.layout]
         teaser = self._teaser() if p.teaser else None
         beats, hold = layout()
         self._run(teaser, [b for b in beats if b is not None], [h for h in hold if h is not None])
@@ -233,7 +235,7 @@ class Template(StudioScene):
         return lambda run_time: B.breathe(target, run_time=run_time, period=1.8, amount=0.035)
 
     @staticmethod
-    def _stack(items, gaps, region, *, align, max_extra, valign="center"):
+    def _stack(items, gaps, region, *, align, max_extra, valign="center", min_gap_scale=0):
         """Place mobjects top to bottom in *region*; spare height widens the gaps (up to *max_extra* each),
         the rest centers the stack."""
         items = [(mob, gap) for mob, gap in zip(items, gaps) if mob is not None]
@@ -244,11 +246,12 @@ class Template(StudioScene):
             # Dense tickets and square cards give up spacing before shrinking ink.
             ink = sum(mob.height for mob, _ in items)
             gaps = sum(g for _, g in items[1:])
-            gap_scale = max(0.0, min(1.0, (region.height - ink) / gaps)) if gaps else 0.0
+            gap_scale = max(min_gap_scale, min(1.0, (region.height - ink) / gaps)) if gaps else 0.0
             items = [(mob, gap * gap_scale) for mob, gap in items]
-            if ink > region.height:
+            available = region.height - gaps * gap_scale
+            if ink > available:
                 for mob, _ in items:
-                    mob.scale(region.height / ink)
+                    mob.scale(available / ink)
             total = sum(mob.height for mob, _ in items) + sum(g for _, g in items[1:])
         spare = max(0.0, region.height - total)
         extra = min(spare / (len(items) - 1), max_extra) if len(items) > 1 else 0.0
@@ -410,6 +413,10 @@ class Template(StudioScene):
         if lay.is_landscape:
             panel = Region(-fw / 2, -fw / 2 + fw * share, fh / 2, -fh / 2)
             T = Region(panel.right + margin, S.right, S.top, S.bottom)
+        elif self.p.layout == "showcase":
+            bottom = S.top - S.height * share
+            panel = Region(S.left, S.right, S.top, bottom)
+            T = Region(S.left, S.right, bottom - margin, S.bottom)
         else:
             panel = Region(-fw / 2, fw / 2, fh / 2, fh / 2 - fh * share)
             T = Region(S.left, S.right, panel.bottom - margin, S.bottom)
@@ -426,6 +433,8 @@ class Template(StudioScene):
         margin = u * 6
         if land:
             shares = [0.46, 0.40]
+        elif p.layout == "showcase":
+            shares = [0.45, 0.39, 0.33]
         elif portrait:
             shares = [0.42, 0.36]
         else:
@@ -434,11 +443,12 @@ class Template(StudioScene):
                   dict(detail=27, kicker=26, cta=28, qr=18, gap=3.2),
                   dict(detail=24, kicker=24, cta=26, qr=16, gap=2.4)]
         head_max = 76 if portrait else (66 if land else 58)
+        head_min = 42 if p.layout == "showcase" else 32
 
         def candidate(share, lv):
             panel, T, P = self._split_regions(share)
             qr_side, region = None, T
-            if T.width / max(T.height, 1e-6) > 1.45 and p.qr_text:
+            if p.layout != "showcase" and T.width / max(T.height, 1e-6) > 1.45 and p.qr_text:
                 qs = min(T.height * 0.62, T.width * 0.3)
                 qr_side = self._qr(qs)
                 if qr_side is not None:
@@ -446,8 +456,9 @@ class Template(StudioScene):
                     qr_side.move_to([T.right - qs / 2, T.bottom + qs / 2, 0])
             W = region.width
             kick = B.kicker(p.kicker, pal, max_width=W, size=lv["kicker"], style="bar") if p.kicker else None
+            compact_showcase = p.layout == "showcase" and not land and lv is levels[-1]
             det = B.details_block(self.details, pal, width=W, size=lv["detail"], columns=1, chips=False,
-                                  align="left") if n else None
+                                  align="left", gap_scale=.7 if compact_showcase else 1) if n else None
             if qr_side is None:
                 footer = self._footer(W, qr_size=u * lv["qr"], cta_size=lv["cta"], button_fill=pal.accent,
                                       button_color=pal.on_accent)
@@ -464,7 +475,7 @@ class Template(StudioScene):
             count = len(fixed) + (1 if p.headline else 0)
             gap = u * lv["gap"]
             flex = region.height - sum(x.height for x in fixed) - gap * (count - 1)
-            need = max(self._head_min(W, 3, "left", min_size=32), u * 4)
+            need = max(self._head_min(W, 3, "left", min_size=head_min), u * 4)
             return dict(panel=panel, P=P, region=region, qr_side=qr_side, logo=logo, kick=kick, det=det,
                         footer=footer, gap=gap, flex=flex, need=need)
 
@@ -472,12 +483,39 @@ class Template(StudioScene):
         panel, P, region, qr_side = c["panel"], c["P"], c["region"], c["qr_side"]
         logo, kick, det, footer, gap, flex = c["logo"], c["kick"], c["det"], c["footer"], c["gap"], c["flex"]
         W = region.width
-        head = B.headline(p.headline, pal, width=W, height=max(flex, c["need"]), size=head_max, min_size=32,
+        head = B.headline(p.headline, pal, width=W, height=max(flex, c["need"]), size=head_max, min_size=head_min,
                           max_lines=3, align="left") if p.headline else None
         self._stack([logo, kick, head, det, footer], [0, gap * 0.8, gap * 0.6, gap, gap * 1.1], region,
-                    align="left", max_extra=gap * 1.2)
+                    align="left", max_extra=gap * 1.2, min_gap_scale=.45 if p.layout == "showcase" else 0)
 
-        # -- the panel: photo (with the big text on a sticker) or a color field carrying the big text
+        if p.layout == "showcase":
+            beats = self._showcase_beats(P)
+            panel_big = sticker = None
+        else:
+            beats, panel_big, sticker = self._split_panel(panel, P)
+        intro = self._intro(logo, kick, head, "left")
+        if intro:
+            beats.append(LaggedStart(*intro, lag_ratio=0.3))
+        if panel_big is not None:
+            beats.append(B.slam_chars(panel_big, run_time=m.t(0.4), lag=m.t(0.06), scale=1.8))
+        if sticker is not None:
+            beats.append(self._spin_in(sticker, run_time=m.t(0.6)))
+        if det is not None:
+            beats.append(self._details_in(det))
+        last = []
+        if footer is not None:
+            last.append(self._footer_in(footer, anchor="left"))
+        if qr_side is not None:
+            last.append(self._qr_in(qr_side))
+        if last:
+            beats.append(LaggedStart(*last, lag_ratio=0.3))
+        target = (footer.button or footer.qr) if footer is not None else qr_side
+        return beats, [self._breathe(target)]
+
+    def _split_panel(self, panel, P):
+        """The full-bleed photo or color field for the Photo + text layout."""
+        p, pal, m, u = self.p, self.pal, self.motion, self.u
+        land = self.layout.is_landscape
         photo = sticker = panel_big = rings = None
         if self.photo:
             try:
@@ -520,24 +558,52 @@ class Template(StudioScene):
             if rings is not None:
                 reveal.append(FadeIn(rings, scale=0.9, run_time=m.t(0.9), rate_func=B.QUART))
             beats.append(self._under(LaggedStart(*reveal, lag_ratio=0.3), [fill, rings]))
-        intro = self._intro(logo, kick, head, "left")
-        if intro:
-            beats.append(LaggedStart(*intro, lag_ratio=0.3))
-        if panel_big is not None:
-            beats.append(B.slam_chars(panel_big, run_time=m.t(0.4), lag=m.t(0.06), scale=1.8))
-        if sticker is not None:
-            beats.append(self._spin_in(sticker, run_time=m.t(0.6)))
-        if det is not None:
-            beats.append(self._details_in(det))
-        last = []
-        if footer is not None:
-            last.append(self._footer_in(footer, anchor="left"))
-        if qr_side is not None:
-            last.append(self._qr_in(qr_side))
-        if last:
-            beats.append(LaggedStart(*last, lag_ratio=0.3))
-        target = (footer.button or footer.qr) if footer is not None else qr_side
-        return beats, [self._breathe(target)]
+        return beats, panel_big, sticker
+
+    def _showcase_beats(self, region):
+        """Fit the artwork inside the screen so details at its edges stay visible."""
+        pal, theme, m = self.pal, self.theme, self.motion
+        photo = None
+        if self.photo:
+            try:
+                image = media.image(self.photo, max_px=1600)
+                if image.width > 0 and image.height > 0:
+                    photo = image
+            except Exception:
+                photo = None
+        # The bezel follows the artwork, with room for its slim header and border.
+        screen_ratio = min(2.1, max(.55, photo.width / photo.height)) if photo is not None else 1.7
+        ratio = screen_ratio * .80 + .11
+        height = min(region.height * (.78 if photo is not None and self.p.big_text else .88),
+                     region.width * .92 / ratio)
+        width = height * ratio
+        bezel = shapes.card(width, height, color=theme.surface, radius=.14, stroke=theme.line, stroke_width=2)
+        bezel.move_to(region.center + UP * region.height * .05)
+        pad = height * .055
+        screen = shapes.card(width - pad * 2, height * .80, color=theme.bg, radius=.06)
+        screen.move_to(bezel.get_bottom() + UP * (pad + screen.height / 2))
+        line = shapes.pill(width * .26, height * .025, color=pal.accent)
+        line.move_to(bezel.get_corner(UP + LEFT) + RIGHT * (pad + line.width / 2) + DOWN * (height * .07))
+        line.set_z_index(2)
+
+        contents = Group(bezel, screen)
+        if photo is not None:
+            photo.scale(min(screen.width / photo.width, screen.height / photo.height))
+            contents.add(photo.move_to(screen))
+        elif self.p.big_text:
+            words = B.big_type(self.p.big_text, pal, width=screen.width * .86, height=screen.height * .62,
+                               color=pal.accent)
+            contents.add(words.move_to(screen))
+
+        beats = [LaggedStart(FadeIn(contents, shift=UP * pad, run_time=m.t(.55)),
+                             B.grow_width(line, run_time=m.t(.35), edge=LEFT), lag_ratio=.35)]
+        if photo is not None and self.p.big_text:
+            label = B.button(self.p.big_text, pal, max_width=region.width * .76, size=26, fill=pal.accent,
+                             color=pal.on_accent, radius=.06)
+            label.scale(min(1, region.height * .135 / label.height))
+            label.next_to(bezel, DOWN, buff=pad)
+            beats.append(FadeIn(label, shift=UP * pad, run_time=m.t(.35)))
+        return beats
 
     @staticmethod
     def _under(beat, mobs):

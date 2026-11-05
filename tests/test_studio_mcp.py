@@ -35,7 +35,7 @@ def text_of(result):
     return "\n".join(c.text for c in result.content if c.type == "text")
 
 
-GUIDE_TOPICS = ("start", "templates", "writing", "platforms", "look", "sound", "export", "troubleshooting")
+GUIDE_TOPICS = ("start", "templates", "writing", "platforms", "look", "broll", "sound", "export", "troubleshooting")
 
 
 def test_agent_motion_preview(tmp_path):
@@ -351,6 +351,7 @@ def test_guide_teaches_from_the_live_catalog(tmp_path):
             assert f"`{fmt['id']}`" in rendered["export"]
         assert "safe_zone=true" in rendered["platforms"] and "check the platform's current limit" in rendered["platforms"]
         assert "retry_export" in rendered["troubleshooting"] and "add_image" in rendered["troubleshooting"]
+        assert "inspect_scene_render" in rendered["broll"] and "Clip01IndexLookup" in rendered["broll"]
 
         unknown = text_of(run(server.call_tool("guide", {"topic": "nonsense"})))
         for topic in GUIDE_TOPICS:

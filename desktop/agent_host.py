@@ -4,7 +4,7 @@ The stdio MCP server runs with the desktop runtime Python. This host reuses a
 backend that is already listening (the app's, or another agent host's), starts a
 headless one when nothing answers, yields the data folder when the app asks for
 it, and stops an idle backend so a forgotten AI session leaves nothing running,
-except while an export is queued or rendering (its next launch continues it).
+except while an export or an Author render is queued or rendering.
 No Manim imports are needed here, so the stdio process can import this first.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ from sidecar import DEFAULT_PORT
 
 CATALOG_PATH = "/api/studio/catalog"
 EXPORTS_PATH = "/api/studio/exports"
+AUTHOR_ACTIVE_PATH = "/api/studio/author/active"
 ACTIVE_EXPORTS = ("queued", "rendering")
 
 
@@ -195,7 +196,7 @@ class AgentHost:
                     return
 
     def _exports_active(self) -> bool:
-        """Whether the owned backend has an export queued or rendering.
+        """Whether the owned backend has an export or Author render in progress.
 
         Stopping it would interrupt work the person is waiting for. A backend that
         cannot answer is treated as idle: that is what the host did before exports
@@ -204,15 +205,22 @@ class AgentHost:
         backend = self._backend
         if backend is None:
             return False
-        request = urllib.request.Request(backend.url + EXPORTS_PATH,
-                                         headers={"Authorization": f"Bearer {self._agent_token()}"})
-        try:
-            with self._http.open(request, timeout=self.ping_timeout) as response:
-                exports = json.load(response)
-        except (OSError, ValueError, http.client.HTTPException):
-            return False
-        return isinstance(exports, list) and any(
-            isinstance(record, dict) and record.get("status") in ACTIVE_EXPORTS for record in exports)
+        def read(path):
+            request = urllib.request.Request(backend.url + path,
+                                             headers={"Authorization": f"Bearer {self._agent_token()}"})
+            try:
+                with self._http.open(request, timeout=self.ping_timeout) as response:
+                    return json.load(response)
+            except (OSError, ValueError, http.client.HTTPException):
+                return None
+
+        exports = read(EXPORTS_PATH)
+        if isinstance(exports, list) and any(
+            isinstance(record, dict) and record.get("status") in ACTIVE_EXPORTS for record in exports
+        ):
+            return True
+        author = read(AUTHOR_ACTIVE_PATH)
+        return isinstance(author, dict) and author.get("active") is True
 
     def _drop_request(self):
         try:

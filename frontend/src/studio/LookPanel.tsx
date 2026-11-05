@@ -85,7 +85,8 @@ function ThemeSwatches({ themes, value, onChange, labelId }: { themes: Theme[]; 
             <span
               aria-hidden
               className="studio-theme-sample"
-              style={{ background: theme.bg, color: theme.text }}
+              data-theme-look={theme.id}
+              style={{ backgroundColor: theme.bg, color: theme.text }}
             >
               <span className="text-base font-bold leading-none">Aa</span>
               <span className="flex gap-0.5">

@@ -56,6 +56,15 @@ describe("App", () => {
     expect(screen.getByText("Balanced profile · 720p30")).toBeInTheDocument();
   });
 
+  it("opens working examples from the Author quick guide", async () => {
+    const { user } = await renderApp();
+    await user.click(screen.getByRole("button", { name: "Quick guide" }));
+    const guide = screen.getByRole("dialog", { name: "From script to screen" });
+    await user.click(within(guide).getByRole("button", { name: "Browse starters" }));
+    expect(await screen.findByRole("heading", { name: "Square to Circle" })).toBeInTheDocument();
+    await waitFor(() => expect(guide).not.toBeInTheDocument());
+  });
+
   it("renders over the WebSocket, shows progress, and previews the result", async () => {
     const { user, server } = await renderApp();
     const { socket, start, id } = await startRender(user);

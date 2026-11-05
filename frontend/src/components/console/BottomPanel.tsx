@@ -127,7 +127,7 @@ export function BottomPanel(props: BottomPanelProps) {
       onValueChange={(value) => props.onTabChange(value as BottomTab)}
       className="@container/bottom flex h-full min-h-0 flex-col bg-surface"
     >
-      <div className="flex h-9 shrink-0 items-stretch justify-between gap-2 border-b border-line pl-1 pr-1.5">
+      <div className="author-pane-heading flex h-9 shrink-0 items-stretch justify-between gap-2 border-b border-line pl-1 pr-1.5">
         <TabsList className="shrink-0">
           <TabsTrigger value="console">
             Console <CountBadge count={errorCount} tone="danger" />

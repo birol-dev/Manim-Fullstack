@@ -311,7 +311,7 @@ describe("api", () => {
 describe("templates", () => {
   it("defines renderable scenes with matching file names", () => {
     for (const template of SCENE_TEMPLATES) {
-      expect(template.code).toMatch(/^from manim import \*/);
+      expect(template.code).toMatch(/^from manim import \S/);
       expect(template.code).toMatch(/class \w+\(\w*Scene\):/);
       expect(template.filename).toMatch(/^[a-z0-9_]+\.py$/);
     }

@@ -7,7 +7,7 @@ a MOV with an alpha channel, ready to lay over a camera clip.
 
 from __future__ import annotations
 
-from manim import DOWN, LEFT, RIGHT, UP, FadeIn, FadeOut, GrowFromCenter, LaggedStart
+from manim import DOWN, LEFT, RIGHT, UP, FadeIn, FadeOut, GrowFromCenter, GrowFromEdge, LaggedStart
 
 from studio.kit import StudioScene, ease_out, overshoot
 
@@ -89,11 +89,17 @@ class Template(StudioScene):
         else:
             slide = DOWN * (strip.height + 4 * u)
 
-        pieces = [FadeIn(strip.card_group, shift=slide, run_time=intro * 0.8, rate_func=ease_out)]
-        if strip.marker is not None:
-            pieces.append(GrowFromCenter(strip.marker, run_time=intro * 0.6, rate_func=overshoot))
-        if strip.bar is not None:
-            pieces.append(GrowFromCenter(strip.bar, run_time=intro * 0.6, rate_func=overshoot))
+        if p.style == "signal":
+            edge = RIGHT if p.side == "right" else LEFT
+            pieces = [GrowFromCenter(strip.marker, run_time=intro * .30, rate_func=overshoot),
+                      GrowFromEdge(strip.card_group, edge, run_time=intro * .58, rate_func=ease_out),
+                      GrowFromEdge(strip.bar, edge, run_time=intro * .52, rate_func=ease_out)]
+        else:
+            pieces = [FadeIn(strip.card_group, shift=slide, run_time=intro * 0.8, rate_func=ease_out)]
+            if strip.marker is not None:
+                pieces.append(GrowFromCenter(strip.marker, run_time=intro * 0.6, rate_func=overshoot))
+            if strip.bar is not None:
+                pieces.append(GrowFromCenter(strip.bar, run_time=intro * 0.6, rate_func=overshoot))
         lines = [line for line in (strip.name, strip.role) if line is not None]
         if lines:
             pieces.append(LaggedStart(

@@ -16,7 +16,8 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from functools import partial
+from typing import List, Literal, Optional
 from urllib.parse import quote
 
 logger = logging.getLogger("uvicorn.error")
@@ -53,6 +54,8 @@ from origins import is_host_allowed, is_origin_allowed, is_peer_allowed
 from studio import api as studio_api
 from studio.service import service as studio_service
 from studio.auth import COOKIE, agent_token, app_allowed, bearer, matches
+from studio.author_mcp import RenderJobs, python_available, python_enabled, set_python_enabled
+from studio.author_preview import inspect_render
 from studio.setup_mcp import connection_record
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
@@ -78,7 +81,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool, ValidationError
 
 APP_VERSION = "1.1.0"
 
@@ -308,7 +311,7 @@ async def _lifespan(_app: FastAPI):
         if studio_mcp is not None:
             # MCP session managers are single-use. Recreate the transport when the
             # same ASGI application starts again (tests and embedded hosts do this).
-            studio_mcp = create_server(studio_service)
+            studio_mcp = create_server(studio_service, author=_author_call)
             studio_mcp_gateway.app = studio_mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
             async with studio_mcp.session_manager.run():
                 yield
@@ -317,6 +320,7 @@ async def _lifespan(_app: FastAPI):
     finally:
         if task is not None and not task.done():
             task.cancel()
+        await author_renders.stop()
         await studio_service.shutdown()  # the preview worker and a running studio export
 
 
@@ -362,8 +366,8 @@ async def reject_untrusted_requests(request: Request, call_next):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
-    # Native clients use the agent token only on Studio routes. The IDE retains its
-    # separate desktop session; MCP exposes no arbitrary-code tool.
+    # Native clients use the agent token on Studio routes. Author mode's editor
+    # keeps its own session, including the permission to enable Python tools.
     agent_route = request.url.path.startswith(("/api/studio/", "/media/studio/"))
     agent_allowed = agent_route and bool(bearer(request.headers)) and matches(bearer(request.headers), agent_token(WORKSPACE_DIR))
     if not request.url.path.startswith("/mcp") and not app_allowed(request) and not agent_allowed:
@@ -1010,9 +1014,7 @@ def _version_conflict(detail: str, current_version: Optional[str]) -> JSONRespon
     )
 
 
-@app.get("/api/file-content")
-def get_file_content(filename: str):
-    """Return a script's code with its parsed scenes and timeline."""
+def _read_script(filename: str):
     filename, filepath = _script_path(filename)
     if not os.path.isfile(filepath):
         raise HTTPException(status_code=404, detail="Python script not found.")
@@ -1025,6 +1027,13 @@ def get_file_content(filename: str):
         raise HTTPException(status_code=403, detail=UNREADABLE_DETAIL)
     except OSError as e:
         raise HTTPException(status_code=500, detail=_os_error_detail(e, "read the script"))
+    return filename, data
+
+
+@app.get("/api/file-content")
+def get_file_content(filename: str):
+    """Return a script's code with its parsed scenes and timeline."""
+    filename, data = _read_script(filename)
     content = data.decode("utf-8", errors="replace")
     return {"filename": filename, "code": content, "version": content_version(data), **_parsed(content)}
 
@@ -2053,6 +2062,11 @@ async def websocket_render(websocket: WebSocket):
         return
 
     await websocket.accept()
+    await _author_render_session(websocket.receive_text, websocket.send_text)
+
+
+async def _author_render_session(receive_text, send_text, *, source=None):
+    """Drive the same render protocol for the editor and background MCP jobs."""
     current: Optional[_RenderState] = None
     conn_executor = ManimExecutor(WORKSPACE_DIR, app_root=BASE_DIR)
 
@@ -2065,7 +2079,7 @@ async def websocket_render(websocket: WebSocket):
             # escaped as \udXXX it is still valid JSON.
             text = json.dumps(payload, separators=(",", ":"))
         try:
-            await websocket.send_text(text)
+            await send_text(text)
             return True
         except (WebSocketDisconnect, RuntimeError):
             return False
@@ -2173,7 +2187,10 @@ async def websocket_render(websocket: WebSocket):
             # queued render uses exactly the code that passed the checks below even
             # if the file changes on disk while it waits.
             code_content = request["code"]
-            if code_content is None:
+            if source is not None:
+                data = source
+                checked = data.decode("utf-8", errors="replace")
+            elif code_content is None:
                 try:
                     # Same escape check as the file endpoints: a link out of the
                     # workspace is not rendered from.
@@ -2279,8 +2296,8 @@ async def websocket_render(websocket: WebSocket):
             else:
                 await slots.acquire()
             try:
-                if waited:
-                    await send({"type": "started", "render_id": render_id, "waited": True})
+                if waited or source is not None:
+                    await send({"type": "started", "render_id": render_id, "waited": waited})
                 state.phase = "rendering"
                 result = await conn_executor.execute(
                     manim_path=manim_command,
@@ -2341,7 +2358,7 @@ async def websocket_render(websocket: WebSocket):
 
     try:
         while True:
-            data = await websocket.receive_text()
+            data = await receive_text()
             if len(data.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
                 await reject_oversized(data)
                 continue
@@ -2404,10 +2421,106 @@ async def websocket_render(websocket: WebSocket):
 
     except WebSocketDisconnect:
         await stop_current_render("disconnected")
+    except asyncio.CancelledError:
+        await stop_current_render("cancelled")
+        raise
     except Exception as e:
         failed_id = current.render_id if current is not None else None
         await stop_current_render("error")
         await send({"type": "error", "render_id": failed_id, "message": f"Server WebSocket error: {e}"})
+
+
+author_renders = RenderJobs()
+AuthorAction = Literal["list_scripts", "read_script", "write_script", "render_scene", "get_scene_render",
+                       "inspect_scene_render", "cancel_scene_render"]
+
+
+async def _author_call(action: AuthorAction, fields: dict) -> dict:
+    if not python_enabled(WORKSPACE_DIR):
+        raise HTTPException(403, "Enable Python authoring in Studio's AI apps settings on a local server.")
+    if action == "list_scripts":
+        return {"scripts": await asyncio.to_thread(_list_scripts)}
+    if action == "read_script":
+        return await asyncio.to_thread(get_file_content, fields.get("filename"))
+    if action == "write_script":
+        base_version = fields.get("base_version")
+        try:
+            request = SaveRequest(filename=fields.get("filename"), code=fields.get("code"),
+                                  base_version=base_version, create_only=base_version is None)
+        except ValidationError:
+            raise HTTPException(422, "Provide a filename, Python code and, for an edit, the current file version.") from None
+        result = await asyncio.to_thread(save_file, request)
+        if isinstance(result, JSONResponse):
+            raise HTTPException(result.status_code, json.loads(result.body))
+        author_renders.script_saved(result["filename"], result["version"])
+        return result
+    if action == "render_scene":
+        try:
+            request = _validate_start_message({key: value for key, value in fields.items()
+                                               if key in ("filename", "scene", "quality", "use_opengl")})
+        except _RenderRequestError as exc:
+            raise HTTPException(400, str(exc)) from None
+        _, source = await asyncio.to_thread(_read_script, request["filename"])
+        if len(source) > MAX_CODE_BYTES:
+            raise HTTPException(413, f"Code payload exceeds maximum size ({MAX_CODE_BYTES} bytes).")
+        version = content_version(source)
+        if fields.get("version") is not None and fields["version"] != version:
+            raise HTTPException(412, "This script changed. Read it again before rendering.")
+        # Loading the source yields to the event loop, so recheck before starting a job.
+        if not python_enabled(WORKSPACE_DIR):
+            raise HTTPException(403, "Python authoring was turned off.")
+        session = partial(_author_render_session, source=source)
+        return author_renders.start(session, request, version, WORKSPACE_DIR, BASE_DIR)
+    render_id = fields.get("render_id")
+    if not isinstance(render_id, str):
+        raise HTTPException(422, "Provide a render ID.")
+    if action == "cancel_scene_render":
+        return await author_renders.cancel(render_id)
+    job = author_renders.get(render_id)
+    if action == "inspect_scene_render":
+        return await asyncio.to_thread(inspect_render, job.workspace, job.view(), job.output_stamp)
+    return job.view()
+
+
+def _require_agent(request: Request):
+    if not matches(bearer(request.headers), agent_token(WORKSPACE_DIR)):
+        raise HTTPException(401, "Agent connection needs its bearer token.")
+
+
+@app.post("/api/studio/author/{action}")
+async def author_bridge(action: AuthorAction, fields: dict, request: Request):
+    """The stdio bridge uses the same Author actions as HTTP MCP."""
+    _require_agent(request)
+    return await _author_call(action, fields)
+
+
+@app.get("/api/studio/author/active")
+async def author_active(request: Request):
+    _require_agent(request)
+    return {"active": author_renders.active()}
+
+
+class PythonAuthoringSetting(BaseModel):
+    enabled: StrictBool
+
+
+@app.get("/api/author/activity")
+async def author_activity():
+    enabled = studio_mcp is not None and python_enabled(WORKSPACE_DIR)
+    return JSONResponse({"enabled": enabled, "items": author_renders.activity() if enabled else []},
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/author/ai-python")
+async def update_python_authoring(setting: PythonAuthoringSetting, request: Request):
+    # Source installs allow app requests without a session. An explicit agent
+    # credential must still never be able to grant itself this permission.
+    if bearer(request.headers) and matches(bearer(request.headers), agent_token(WORKSPACE_DIR)):
+        raise HTTPException(403, "Change this setting in Studio's AI apps settings.")
+    set_python_enabled(WORKSPACE_DIR, setting.enabled)
+    if not setting.enabled:
+        await author_renders.stop()
+    return {"enabled": setting.enabled}
 
 
 # Template studio (/api/studio): previews under media/studio, data under workspace/studio.
@@ -2416,7 +2529,10 @@ studio_service.configure(WORKSPACE_DIR, MEDIA_DIR, ASSETS_DIR, app_root=BASE_DIR
 
 def _studio_connection_record(base_url: str) -> dict:
     """The connection record the endpoint publishes and the setup routes read."""
-    return connection_record(base_url, WORKSPACE_DIR, BASE_DIR, available=studio_mcp is not None)
+    record = connection_record(base_url, WORKSPACE_DIR, BASE_DIR, available=studio_mcp is not None)
+    if studio_mcp is not None and python_available():
+        record["python_authoring"] = python_enabled(WORKSPACE_DIR)
+    return record
 
 
 studio_api.set_connection_provider(_studio_connection_record)
@@ -2427,7 +2543,7 @@ studio_mcp = None
 try:
     from studio.mcp_server import create_server
     from studio.mcp_transport import AgentAuth
-    studio_mcp = create_server(studio_service)
+    studio_mcp = create_server(studio_service, author=_author_call)
     mcp_app = studio_mcp.streamable_http_app(streamable_http_path="/", stateless_http=True)
     studio_mcp_gateway = AgentAuth(mcp_app, WORKSPACE_DIR)
     app.mount("/mcp", studio_mcp_gateway)

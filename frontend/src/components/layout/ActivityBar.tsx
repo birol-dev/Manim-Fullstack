@@ -1,12 +1,13 @@
-import { Cpu, Files, ImagePlus, LayoutTemplate, Settings, Shapes, Sigma, type LucideIcon } from "lucide-react";
+import { Cpu, Files, ImagePlus, LayoutTemplate, Settings, Shapes, Sigma, Sparkles, type LucideIcon } from "lucide-react";
 
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-export type SidebarView = "files" | "templates" | "shapes" | "latex" | "assets" | "system" | "settings";
+export type SidebarView = "files" | "design" | "templates" | "shapes" | "latex" | "assets" | "system" | "settings";
 
 const PRIMARY: Array<{ id: SidebarView; label: string; icon: LucideIcon }> = [
   { id: "files", label: "Files", icon: Files },
+  { id: "design", label: "Design Studio", icon: Sparkles },
   { id: "templates", label: "Templates", icon: LayoutTemplate },
   { id: "shapes", label: "Shape builder", icon: Shapes },
   { id: "latex", label: "LaTeX", icon: Sigma },
@@ -39,7 +40,7 @@ export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarPr
           aria-pressed={active}
           onClick={() => onSelect(id)}
           className={cn(
-            "relative flex size-10 items-center justify-center rounded-md transition-colors",
+            "author-rail-item relative flex size-10 items-center justify-center rounded-md transition-colors",
             active ? "text-fg" : selected ? "bg-accent-soft text-accent hover:bg-accent-soft" : "text-fg-subtle hover:bg-raised hover:text-fg-muted",
           )}
         >
@@ -64,7 +65,7 @@ export function ActivityBar({ view, open, badges = {}, onSelect }: ActivityBarPr
   return (
     <nav
       aria-label="Sidebar views"
-      className="flex w-12 shrink-0 flex-col items-center justify-between border-r border-line bg-surface py-1.5"
+      className="author-rail flex w-12 shrink-0 flex-col items-center justify-between border-r border-line bg-surface py-1.5"
     >
       <div className="flex flex-col items-center gap-0.5">{PRIMARY.map(item)}</div>
       <div className="flex flex-col items-center gap-0.5">{SECONDARY.map(item)}</div>

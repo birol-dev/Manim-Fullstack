@@ -13,7 +13,7 @@ export type Route =
   | { kind: "project"; id: string }
   | { kind: "many"; template: string; preset: string }
   | { kind: "many-project"; id: string }
-  | { kind: "author" };
+  | { kind: "author"; design?: boolean; file?: string; scene?: string };
 
 function decode(part: string | undefined): string {
   if (!part) return "";
@@ -37,7 +37,12 @@ export function parseRoute(hash: string): Route {
   if (head === "shaders") return { kind: "shaders" };
   if (head === "settings") return { kind: "settings", ...(rest[0] ? { section: decode(rest[0]) } : {}) };
   if (head === "welcome") return { kind: "welcome" };
-  if (head === "author") return { kind: "author" };
+  if (head === "author") {
+    const query = new URLSearchParams(search);
+    const file = query.get("file");
+    const scene = query.get("scene");
+    return { kind: "author", ...(rest[0] === "design" ? { design: true } : {}), ...(file ? { file } : {}), ...(scene ? { scene } : {}) };
+  }
   if (head === "new" && rest[0]) return { kind: "new", template: decode(rest[0]), preset: decode(rest[1]) };
   if (head === "project" && rest[0]) return { kind: "project", id: decode(rest[0]) };
   if (head === "many" && rest[0] === "project") {
@@ -63,8 +68,12 @@ export function routeHash(route: Route): string {
       return `#/settings${route.section ? `/${encodeURIComponent(route.section)}` : ""}`;
     case "welcome":
       return "#/welcome";
-    case "author":
-      return "#/author";
+    case "author": {
+      const query = new URLSearchParams();
+      if (route.file) query.set("file", route.file);
+      if (route.scene) query.set("scene", route.scene);
+      return `#/author${route.design ? "/design" : ""}${query.size ? `?${query}` : ""}`;
+    }
     case "new":
       return `#/new/${encodeURIComponent(route.template)}/${encodeURIComponent(route.preset)}`;
     case "project":

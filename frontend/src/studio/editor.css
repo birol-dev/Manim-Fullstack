@@ -43,7 +43,7 @@
    it keeps the rounded ends from cutting into the form. */
 :root[data-surface="studio"] .studio-editor-tabs { position: sticky; top: 0; z-index: 10; height: auto; min-height: 56px; flex-shrink: 0; margin: 12px 20px 4px; padding: 5px; border: 0; border-radius: 999px; background: var(--color-raised); }
 :root[data-surface="studio"] .studio-editor-tabs::before { content: ""; position: absolute; z-index: -1; inset: -12px -20px -4px; background: var(--color-surface); }
-:root[data-surface="studio"] .studio-editor-tabs [role="tab"] { min-height: 36px; gap: 6px; padding-inline: 10px; border-radius: 999px; color: var(--color-fg-muted); font-size: 13px; }
+:root[data-surface="studio"] .studio-editor-tabs [role="tab"] { min-height: 36px; gap: 5px; padding-inline: 6px; border-radius: 999px; color: var(--color-fg-muted); font-size: 13px; white-space: nowrap; }
 :root[data-surface="studio"] .studio-editor-tabs [role="tab"]:hover { color: var(--color-fg); }
 :root[data-surface="studio"] .studio-editor-tabs [data-state="active"] { background: var(--color-surface); color: var(--color-fg); box-shadow: none; }
 :root[data-surface="studio"] .studio-editor-panel { padding: 20px 22px 40px; }
@@ -240,4 +240,25 @@
   :root[data-surface="studio"] .studio-editor-tabs::before { inset: -10px -16px -2px; }
   :root[data-surface="studio"] .studio-editor-panel { padding: 16px 18px 32px; }
   :root[data-surface="studio"] .studio-editor-preview .studio-preview-panel { gap: 14px; }
+}
+@media (max-width: 400px) {
+  :root[data-surface="studio"] .studio-editor-tabs [role="tab"] svg { display: none; }
+}
+.studio-ai-design { display: grid; gap: 12px; padding-top: 10px; }
+.studio-ai-eyebrow { display: flex; align-items: center; gap: 6px; color: var(--color-fg-subtle); font: 500 10px/1.4 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.studio-ai-eyebrow svg { width: 13px; height: 13px; }
+.studio-ai-design h2 { font: 500 clamp(28px, 3vw, 38px)/.96 var(--font-display); letter-spacing: -.025em; }
+.studio-ai-intro { color: var(--color-fg-muted); font-size: 13px; line-height: 1.6; }
+.studio-ai-brief-card { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--color-line); border-radius: 16px; background: var(--color-canvas); }
+.studio-ai-brief-card label { font-size: 12px; font-weight: 600; }
+.studio-ai-brief-card textarea { width: 100%; min-height: 90px; padding: 8px 10px; resize: vertical; border: 1px solid var(--color-line-strong); border-radius: 9px; background: var(--color-surface); color: var(--color-fg); font-size: 13px; line-height: 1.55; }
+.studio-ai-small, .studio-ai-brief-card details { color: var(--color-fg-subtle); font-size: 11px; line-height: 1.5; }
+.studio-ai-brief-card summary { cursor: pointer; }
+.studio-ai-brief-card pre { max-height: 200px; overflow: auto; margin-top: 8px; padding: 8px; border-radius: 6px; background: var(--color-surface); color: var(--color-fg-muted); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.studio-theme-sample[data-theme-look="print_grid"] {
+  background-image: linear-gradient(rgb(255 255 255 / .08) 1px, transparent 1px), linear-gradient(90deg, rgb(255 255 255 / .08) 1px, transparent 1px);
+  background-size: 10px 10px;
+}
+.studio-theme-sample[data-theme-look="afterglow"] {
+  background-image: radial-gradient(ellipse at 80% 72%, rgb(248 135 197 / .32), transparent 51%), repeating-linear-gradient(0deg, transparent 0 5px, rgb(118 220 233 / .13) 5px 6px);
 }

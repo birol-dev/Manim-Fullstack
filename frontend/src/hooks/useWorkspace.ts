@@ -142,7 +142,7 @@ function fileKey(mode: StorageMode, file: string) {
  * Switching files never loses edits: an unsaved buffer is kept as an in-memory
  * draft and restored when its file is opened again, like an editor tab.
  */
-export function useWorkspace({ mode, online }: { mode: StorageMode; online: boolean }) {
+export function useWorkspace({ mode, online, initialFile, initialScene }: { mode: StorageMode; online: boolean; initialFile?: string; initialScene?: string }) {
   const [files, setFiles] = useState<WorkspaceFiles>(EMPTY_FILES);
   const [filesStatus, setFilesStatus] = useState<FilesStatus>("loading");
   const [activeFile, setActiveFile] = useState<string | null>(null);
@@ -160,6 +160,7 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
   // Latest values for async callbacks.
   const modeRef = useRef(mode);
   const activeFileRef = useRef<string | null>(null);
+  const initialShot = useRef<{ file?: string; scene?: string }>({ file: initialFile, scene: initialScene });
   const codeRef = useRef("");
   const savedCodeRef = useRef("");
   const draftsRef = useRef<Record<string, string>>({});
@@ -309,14 +310,19 @@ export function useWorkspace({ mode, online }: { mode: StorageMode; online: bool
     // Links out of the workspace are listed (so they can be deleted) but can't be opened.
     const names = next.scripts.filter((script) => !script.outside && !script.broken).map((script) => script.name);
     const remembered = readStored<string | null>(activeFileKey(modeRef.current), null);
-    const target = remembered && names.includes(remembered) ? remembered : names[0];
+    const requested = modeRef.current === "disk" ? initialShot.current.file : undefined;
+    const target = [requested, remembered].find((name) => name && names.includes(name)) ?? names[0];
     if (target) {
-      await openFile(target).catch(() => false);
+      const opened = await openFile(target).catch(() => false);
+      if (opened && requested && target === requested) {
+        if (initialShot.current.scene) setSelectedScene(initialShot.current.scene);
+        initialShot.current = {};
+      }
     } else {
       showBuffer(null, "");
       applyParse(EMPTY_PARSE, null, "");
     }
-  }, [applyParse, openFile, refreshFiles, showBuffer]);
+  }, [applyParse, openFile, refreshFiles, setSelectedScene, showBuffer]);
 
   // (Re)load everything when the storage mode changes.
   useEffect(() => {
