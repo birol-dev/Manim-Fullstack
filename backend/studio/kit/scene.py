@@ -27,6 +27,7 @@ from manim.utils.iterables import list_update
 from ..schema import RenderSettings
 from ..themes import theme_tokens
 from . import fonts, media, runtime, shapes
+from .backdrop import art_background
 from .layout import Layout
 from .motion import Motion
 from .fx import ClearanceCamera
@@ -118,7 +119,7 @@ class StudioScene(Scene):
             return shapes.full_frame(width, height, bg.color)
         if bg.kind == "gradient":
             return shapes.full_frame(width, height, bg.color or self.theme.bg, bg.color2 or self.theme.bg2)
-        return shapes.full_frame(width, height, self.theme.bg)
+        return art_background(width, height, self.theme)
 
     def _brand_logo(self):
         """The brand kit's logo in this template's corner, or None (missing uploads never fail a render)."""

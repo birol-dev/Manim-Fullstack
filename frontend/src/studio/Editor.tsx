@@ -12,6 +12,7 @@ import { createProject, estimateLength, friendlyError, getProject, updateProject
 import { saveProjectFile } from "./portableFile";
 import { ActionMenu } from "./ProjectMenu";
 import { Autosaver, type SaveStatus } from "./autosave";
+import { DesignWithAi } from "./DesignWithAi";
 import { FrameIcon, Segments, Spinner } from "./components";
 import { fieldErrorsOf, hasErrorsUnder, matchErrors } from "./errors";
 import { ExportDialog, ExportsPanel } from "./exports";
@@ -242,8 +243,10 @@ interface EditorBodyProps {
 function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }: EditorBodyProps) {
   const { snapshot: { title, params, settings }, change, travel, reset, history, canUndo, canRedo } = useEditorHistory({ title: initial.title, params: initial.params, settings: initial.settings });
   const [initialProjectId] = useState(initial.projectId);
-  const [hasProject, setHasProject] = useState(!!initial.projectId);
+  const [projectId, setProjectId] = useState(initial.projectId);
+  const hasProject = projectId !== null;
   const [tab, setTab] = useState("content");
+  const [designDirection, setDesignDirection] = useState("");
   const [view, setView] = useState<PreviewView>("poster");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
@@ -345,7 +348,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
         return true;
       },
       onCreated: (project) => {
-        setHasProject(true);
+        setProjectId(project.id);
         createdRef.current(project.id);
         if (manyAfterSave.current) {
           manyAfterSave.current = false;
@@ -427,6 +430,11 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     manyAfterSave.current = true;
     saver.current.change({ title: title.trim() || template.title, template: template.id, params, settings });
     saver.current.flush();
+  };
+
+  const saveForAi = () => {
+    saver.current?.change({ title: title.trim() || template.title, template: template.id, params, settings });
+    saver.current?.flush();
   };
 
   const saveFile = async () => {
@@ -594,7 +602,7 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
               </span>
             ) : remoteNote ? (
               <span className="flex items-center gap-1 text-xs text-accent" role="status">
-                <Sparkles className="size-3.5" /> Updated by your AI
+                <Sparkles className="size-3.5" /> Shared draft updated
               </span>
             ) : (
               <SaveIndicator status={saveStatus} hasProject={hasProject} onRetry={() => {
@@ -656,6 +664,9 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
                 <Volume2 className="size-3.5" /> Sound
                 {soundBroken && <span className="size-1.5 rounded-full bg-danger" aria-label="has problems" />}
               </TabsTrigger>
+              <TabsTrigger value="ai" className="text-[13px]">
+                <Sparkles className="size-3.5" /> With AI
+              </TabsTrigger>
             </TabsList>
             <FormContext.Provider value={formContext}>
               <TabsContent value="content" className="studio-editor-panel">
@@ -680,6 +691,10 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
               </TabsContent>
               <TabsContent value="sound" className="studio-editor-panel">
                 <SoundPanel key={formVersion} value={settings.sound} onChange={(sound) => patchSettings({ sound })} tracks={catalog.music_tracks} errors={matched.byPath} />
+              </TabsContent>
+              <TabsContent value="ai" className="studio-editor-panel">
+                <DesignWithAi projectId={projectId} templateId={template.id} direction={designDirection}
+                  onDirectionChange={setDesignDirection} saveStatus={saveStatus} conflict={conflict} onSave={saveForAi} />
               </TabsContent>
             </FormContext.Provider>
           </Tabs>

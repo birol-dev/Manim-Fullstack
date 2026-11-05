@@ -157,6 +157,7 @@ function Rail({ route, collapsed, onNavigate, onExpand, projects, exports, activ
     <div className="studio-rail-spacer" />
     {link({ kind: "settings", section: "ai" }, "Connect to AI", <Plug />, route.kind === "settings" && route.section === "ai")}
     {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai", undefined, false, update)}
+    {link({ kind: "author", design: true }, "Design Studio", <Sparkles />, false)}
     <a href="#/author" className="studio-rail-link" aria-label="Author mode" onClick={onNavigate}><span className="studio-rail-icon"><Code2 aria-hidden /></span><span className="studio-rail-label">Author mode</span></a>
   </nav>;
 }
@@ -183,6 +184,7 @@ function DrawerNav({ route, onNavigate, projects, exports, activity, update }: N
     <div className="studio-nav-divider" />
     {link({ kind: "settings", section: "ai" }, "Connect to AI", <Plug />, route.kind === "settings" && route.section === "ai")}
     {link({ kind: "settings" }, "Settings", <Settings />, route.kind === "settings" && route.section !== "ai", undefined, false, update)}
+    {link({ kind: "author", design: true }, "Design Studio", <Sparkles />, false)}
     {link({ kind: "author" }, "Author mode", <Code2 />, false)}
   </nav>;
 }

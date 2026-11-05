@@ -198,14 +198,14 @@ def test_original_gallery_bakes_remain_current_with_sound(tmp_path):
     service = StudioService(str(tmp_path), worker_factory=lambda: worker)
     assert not [name for name in check_baked(service) if name.split("/")[0] in original_templates]
     assert not [name for name in peeks.check_baked(service) if name.split("/")[0] in original_templates]
-    count = 0
+    tested_templates = set()
     for card, settings in preset_requests(service):
         if card["template"] not in original_templates:
             continue
         result = service.preview_sync(card["template"], card["params"], {**settings, "sound": {"music": {"track": "playful"}}})
         assert result["cached"], card["id"]
-        count += 1
-    assert count == 24 and not worker.calls
+        tested_templates.add(card["template"])
+    assert tested_templates == original_templates and not worker.calls
 
 
 def test_http_and_mcp_allow_the_same_bounded_base64_audio_request():

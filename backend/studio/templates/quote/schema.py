@@ -25,6 +25,9 @@ META = TemplateMeta(
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "editorial"] = choice("classic", title="Layout",
+        labels={"classic": "Classic", "editorial": "Editorial print"},
+        description="Classic stacks the quote and attribution. Editorial print gives the text a ruled margin.")
     kicker: str = text_field(
         "", title="Small heading", max_length=40,
         help="A short line above the text. Leave empty to hide it.",
@@ -65,11 +68,11 @@ class Params(TemplateParams):
 PRESETS = [
     Preset(
         id="inspirational-quote", title="Inspirational quote",
-        summary="A short quote with a big quote mark, revealed word by word.",
+        summary="A bold quote in a ruled editorial layout, revealed line by line.",
         params={"text": "It is not that we have a short time to live, but that we *waste a lot of it*.",
                 "author": "Seneca", "role": "On the Shortness of Life", "quote_marks": True,
-                "reveal": "words", "align": "center"},
-        settings={"theme": "midnight", "energy": "calm"}),
+                "layout": "editorial", "reveal": "lines", "align": "left"},
+        settings={"theme": "print_grid", "energy": "calm"}),
     Preset(
         id="customer-review", title="5-star customer review",
         summary="A testimonial with star rating, name and photo slot.",
@@ -92,7 +95,7 @@ PRESETS = [
         summary="A line from a book with the title as the source.",
         params={"text": "It is not down in any map; *true places* never are.",
                 "author": "Herman Melville", "role": "Moby-Dick, 1851", "quote_marks": True,
-                "reveal": "sweep", "align": "left"},
+                "layout": "editorial", "reveal": "sweep", "align": "left"},
         settings={"theme": "newsroom"}),
     Preset(
         id="team-value", title="Team value",

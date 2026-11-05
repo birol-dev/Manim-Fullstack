@@ -11,18 +11,28 @@ from tests.studio_motion_visuals import probe_motion
 
 pytestmark = pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg is needed to decode motion frames")
 
-CASES = [("announcement", "weekend-sale"), ("celebration", "happy-birthday"),
-         ("countdown", "classroom-timer"),
-         ("countdown", "break-timer"), ("countdown", "launch-countdown"),
-         ("quiz", "general-knowledge"), ("quote", "inspirational-quote"),
-         ("year_in_review", "small-business-year")]
+CASES = [
+    ("announcement", "weekend-sale", {}),
+    ("celebration", "happy-birthday", {}),
+    pytest.param("countdown", "classroom-timer", {}, id="countdown-dial"),
+    pytest.param("countdown", "classroom-timer", {"style": "ring"}, id="countdown-ring"),
+    pytest.param("countdown", "classroom-timer", {"seconds": 600, "style": "bar"}, id="countdown-bar"),
+    pytest.param("countdown", "classroom-timer", {"seconds": 10, "style": "big"}, id="countdown-big"),
+    pytest.param("interval_timer", "pomodoro-session", {
+        "phases": [{"label": "Focus", "seconds": 8}, {"label": "Break", "seconds": 3}],
+        "end_with_first": False,
+    }, id="focus-console"),
+    ("quiz", "general-knowledge", {}),
+    ("quote", "inspirational-quote", {}),
+    ("year_in_review", "small-business-year", {}),
+]
 
 
-@pytest.mark.parametrize("template,preset", CASES)
-def test_encoded_motion_matches_fresh_scene_stills(tmp_path, template, preset):
+@pytest.mark.parametrize("template,preset,overrides", CASES)
+def test_encoded_motion_matches_fresh_scene_stills(tmp_path, template, preset, overrides):
     spec = registry.get_template(template).public()
     card = next(p for p in spec["presets"] if p["id"] == preset)
-    _, metrics = probe_motion(tmp_path, template, card["params"],
+    _, metrics = probe_motion(tmp_path, template, {**card["params"], **overrides},
                               {"aspect": spec["default_aspect"], **card["settings"]}, long_side=720)
     assert len(metrics) == 5
     for frame, difference in metrics.items():

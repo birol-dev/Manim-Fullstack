@@ -8,7 +8,7 @@ import { ApiError } from "@/lib/api";
 import { friendlyError, STUDIO_OFFLINE } from "./api";
 import { Spinner } from "./components";
 import { ManualSetup } from "./ConnectionDialog";
-import { connectAIApp, disconnectAIApp, type AIApp, type SetupStatus } from "./setup";
+import { connectAIApp, disconnectAIApp, setPythonAuthoring, type AIApp, type SetupStatus } from "./setup";
 import "./settings.css";
 
 /** What useSetupStatus returns, so the onboarding page can pass it straight through. */
@@ -56,6 +56,8 @@ export function AiAppsList({ status, error, refresh }: AiAppsListProps) {
   const [problems, setProblems] = useState<Record<string, string>>({});
   const [hints, setHints] = useState<Record<string, string>>({});
   const [manual, setManual] = useState(false);
+  const [authoringBusy, setAuthoringBusy] = useState(false);
+  const [authoringError, setAuthoringError] = useState<string | null>(null);
   const manualRef = useRef<HTMLDetailsElement>(null);
   const manualSummary = useRef<HTMLElement>(null);
 
@@ -87,6 +89,18 @@ export function AiAppsList({ status, error, refresh }: AiAppsListProps) {
     if (manualRef.current) manualRef.current.open = true;
     manualSummary.current?.focus();
     manualRef.current?.scrollIntoView({ block: "nearest" });
+  };
+  const changeAuthoring = async (enabled: boolean) => {
+    setAuthoringBusy(true);
+    setAuthoringError(null);
+    try {
+      await setPythonAuthoring(enabled);
+      await refresh();
+    } catch (failure) {
+      setAuthoringError(friendlyError(failure, "Couldn't change Python authoring. Try again."));
+    } finally {
+      setAuthoringBusy(false);
+    }
   };
 
   const apps = status?.ai_apps ?? [];
@@ -155,6 +169,17 @@ export function AiAppsList({ status, error, refresh }: AiAppsListProps) {
       <h3 id="studio-settings-elsewhere">Not on this computer</h3>
       <ul className="studio-settings-apps">{elsewhere.map((app) => row(app, true))}</ul>
     </section>}
+    {typeof status?.python_authoring === "boolean" && <div className="studio-settings-app">
+      <div className="studio-settings-app-copy">
+        <label className="studio-settings-app-name flex items-center gap-2">
+          <input type="checkbox" checked={status.python_authoring} disabled={authoringBusy}
+            aria-describedby="studio-ai-python-detail" onChange={(event) => void changeAuthoring(event.currentTarget.checked)} />
+          Allow AI apps to write and run Python
+        </label>
+        <p id="studio-ai-python-detail" className="studio-settings-app-state">Connected AI apps can edit Author mode scripts and run them with your user permissions.</p>
+        {authoringError && <p role="alert" className="studio-settings-app-error">{authoringError}</p>}
+      </div>
+    </div>}
     <details
       ref={manualRef}
       className="studio-settings-manual"

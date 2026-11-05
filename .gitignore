@@ -88,3 +88,7 @@ workspace/.composer-initialized
 # Template studio: dev renders and per-user studio data
 workspace/.studio-dev/
 workspace/studio/
+
+# Local agent config/worktrees and promo renders
+.claude/
+promo/

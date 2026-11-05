@@ -1,5 +1,5 @@
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, FileCode2, FilePlus2, Loader2, Play, Save, Square, Zap } from "lucide-react";
+import { AlertTriangle, FileCode2, FilePlus2, LayoutTemplate, Loader2, Play, Save, Square, Zap } from "lucide-react";
 
 import type { SyntaxErrorInfo } from "@/lib/types";
 
@@ -56,9 +56,7 @@ function ScenePicker({
   }, [typing]);
   const typed = selectedScene && !scenes.includes(selectedScene) ? selectedScene : null;
   const valid = CLASS_NAME.test(draft.trim());
-  // Sized to the scene name (no "CircleToS…" at 1024 px); the typed-name input gets the same box.
-  // Narrowed only below 340 px: from 430 px down the toolbar wraps, so the controls have a full row.
-  // Below that it gives up width (down to 48 px, the name truncated) so Render never leaves the row.
+  // Give the render controls room at the minimum panel width.
   const className = "w-auto min-w-[6.5rem] max-w-44 @max-[340px]:max-w-32 @max-[340px]:min-w-12";
 
   if (typing) {
@@ -113,8 +111,7 @@ function ScenePicker({
       <Tooltip
         content={selectedScene ? `Scene: ${selectedScene}` : "Scene to render (or type another with Other scene…)"}
         wrap
-        // The wrap span is the toolbar's flex item: it has to be allowed to shrink too.
-        wrapClassName="min-w-0 @max-[430px]:shrink"
+        wrapClassName="min-w-0 shrink"
       >
         <SelectTrigger ref={triggerRef} aria-label="Scene" className={className}>
           <SelectValue placeholder={placeholder}>{selectedScene}</SelectValue>
@@ -163,6 +160,7 @@ interface EditorPaneProps {
   onRender: () => void;
   onCancel: () => void;
   onNewFile: () => void;
+  onBrowseStarters: () => void;
   onOpenSetup: () => void;
 }
 
@@ -252,21 +250,15 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
   const oversize = props.oversize ?? null;
 
   return (
-    <section aria-label="Editor" className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
-      {/* Below ~430 px (the 50/50 split at 1024) the file name gets its own row instead of being truncated. */}
-      <div className="flex h-10 min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto border-b border-line pl-1 pr-2 @max-[430px]:h-auto @max-[430px]:flex-wrap @max-[430px]:gap-y-0 @max-[430px]:pb-1.5">
-        {activeFile && (
-          <div className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden px-2 text-xs text-fg @max-[430px]:h-8 @max-[430px]:basis-full">
-            <FileCode2 className="size-3.5 shrink-0 text-accent @max-[460px]:hidden" />
-            <span className="min-w-[2.5rem] truncate font-medium" title={activeFile}>
-              {activeFile}
-            </span>
-            {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-fg-muted" aria-label="Unsaved changes" />}
-          </div>
-        )}
-
-        {/* Shrinks once the toolbar wraps: the scene picker narrows instead of pushing Render out of view. */}
-        <div className="ml-auto flex shrink-0 items-center gap-1.5 @max-[430px]:min-w-0 @max-[430px]:shrink @max-[300px]:gap-1">
+    <section aria-label="Editor" className="author-editor @container flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-surface">
+      <div className="author-filebar flex h-10 min-w-0 shrink-0 items-center justify-between border-b border-line px-2">
+        <div className="author-file-tab flex min-w-0 items-center gap-2 px-2">
+          <FileCode2 aria-hidden="true" className="size-3.5 shrink-0 text-accent" />
+          <span className="truncate font-mono text-xs" title={activeFile ?? undefined}>{activeFile ?? "Python editor"}</span>
+          {isDirty && <span className="size-1.5 shrink-0 rounded-full bg-warning" aria-label="Unsaved changes" />}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          {activeFile && <span className="author-save-state hidden text-2xs text-fg-subtle @min-[440px]:inline">{isDirty ? "Unsaved" : "Saved"}</span>}
           <Tooltip
             content={!activeFile ? "Save (no script open)" : isDirty ? "Save" : "Saved (no unsaved changes)"}
             shortcut={`${MOD_KEY}+S`}
@@ -295,40 +287,46 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
               <Zap />
             </Button>
           </Tooltip>
+        </div>
+      </div>
 
-          <ScenePicker
-            key={activeFile ?? ""}
-            scenes={scenes}
-            selectedScene={selectedScene}
-            disabled={!activeFile}
-            placeholder={props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"}
-            onSceneChange={props.onSceneChange}
-          />
+      <div className="author-renderbar flex min-w-0 shrink-0 items-center gap-1.5 border-b border-line px-2">
+        <span className="author-control-label hidden @min-[360px]:inline" aria-hidden="true">Scene</span>
+        <ScenePicker
+          key={activeFile ?? ""}
+          scenes={scenes}
+          selectedScene={selectedScene}
+          disabled={!activeFile}
+          placeholder={props.syntaxError ? `Syntax error, line ${props.syntaxError.line}` : activeFile ? "No scenes found" : "Scene"}
+          onSceneChange={props.onSceneChange}
+        />
 
-          {/* One quality for every file (a global preference since the first UI; see Settings > Rendering). */}
-          <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
-            {/* wrap: merged onto the trigger, the tooltip's data-state ("closed") would replace the Select's ("open"). */}
-            <Tooltip content={qualityTooltip(quality)} wrap>
-              {/* 78 px with tighter padding: "1080p" / "2160p" fit (they showed as "108…"). */}
-              <SelectTrigger aria-label="Quality" aria-description="Applies to all files" className="w-[78px] shrink-0 gap-1 px-2">
-                <SelectValue>{qualityShortLabel(quality)}</SelectValue>
-              </SelectTrigger>
-            </Tooltip>
-            <SelectContent align="end">
-              <SelectGroup>
-                <SelectLabel className="px-2 pb-1 pt-1 text-2xs font-normal text-fg-subtle">Quality for all files</SelectLabel>
-                {QUALITY_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    <span className="flex w-36 items-center justify-between gap-3">
-                      {option.label}
-                      <span className="text-2xs text-fg-subtle">{option.detail}</span>
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+        {/* One quality for every file (a global preference since the first UI; see Settings > Rendering). */}
+        <span className="author-control-label hidden @min-[475px]:inline" aria-hidden="true">Quality</span>
+        <Select value={quality} onValueChange={(value) => props.onQualityChange(value as Quality)}>
+          {/* wrap: merged onto the trigger, the tooltip's data-state ("closed") would replace the Select's ("open"). */}
+          <Tooltip content={qualityTooltip(quality)} wrap>
+            {/* 78 px with tighter padding: "1080p" / "2160p" fit (they showed as "108…"). */}
+            <SelectTrigger aria-label="Quality" aria-description="Applies to all files" className="w-[78px] shrink-0 gap-1 px-2">
+              <SelectValue>{qualityShortLabel(quality)}</SelectValue>
+            </SelectTrigger>
+          </Tooltip>
+          <SelectContent align="end">
+            <SelectGroup>
+              <SelectLabel className="px-2 pb-1 pt-1 text-2xs font-normal text-fg-subtle">Quality for all files</SelectLabel>
+              {QUALITY_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  <span className="flex w-36 items-center justify-between gap-3">
+                    {option.label}
+                    <span className="text-2xs text-fg-subtle">{option.detail}</span>
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
 
+        <div className="ml-auto flex shrink-0">
           {rendering ? (
             <Tooltip key="cancel" content={props.stopping ? "Stopping the render…" : "Cancel render"} wrap>
               <Button
@@ -336,11 +334,11 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
                 size="sm"
                 onClick={props.onCancel}
                 disabled={props.stopping}
-                className="w-[104px] @max-[520px]:w-auto"
+                className="w-auto"
                 aria-label={props.stopping ? "Stopping" : "Cancel"}
               >
                 <Square className="fill-current" />
-                <span className="@max-[520px]:hidden">{props.stopping ? "Stopping…" : "Cancel"}</span>
+                <span>{props.stopping ? "Stopping…" : "Cancel"}</span>
               </Button>
             </Tooltip>
           ) : (
@@ -362,21 +360,28 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
                 // Still focusable when blocked, so the reason is reachable by keyboard and read out.
                 aria-disabled={blocked ? true : undefined}
                 aria-describedby={blocked ? "render-blocked-reason" : undefined}
-                className={cn("w-[92px] @max-[520px]:w-auto", blocked && "cursor-not-allowed opacity-40 saturate-0 hover:brightness-100")}
+                className={cn("w-auto", blocked && "cursor-not-allowed opacity-40 saturate-0 hover:brightness-100")}
                 aria-label="Render"
               >
                 <Play className="fill-current" />
-                <span className="@max-[520px]:hidden">Render</span>
+                <span>Render</span>
               </Button>
             </Tooltip>
           )}
-          {blocked && (
-            <span id="render-blocked-reason" className="sr-only">
-              {blocked}
-            </span>
-          )}
         </div>
+        {blocked && (
+          <span id="render-blocked-reason" className="sr-only">
+            {blocked}
+          </span>
+        )}
       </div>
+
+      {activeFile && !selectedScene && !props.syntaxError && (
+        <div role="note" className="flex shrink-0 items-center justify-between gap-2 border-b border-line bg-accent-soft px-2.5 py-1.5 text-xs text-fg-muted">
+          <span>Add a <code className="text-fg">Scene</code> class to render this script.</span>
+          <Button variant="ghost" size="xs" onClick={props.onBrowseStarters}>Browse starters</Button>
+        </div>
+      )}
 
       {props.syntaxError && (
         <div className="flex shrink-0 items-center gap-2 border-b border-danger/20 bg-danger-soft px-3 py-1.5 text-xs text-fg-muted">
@@ -409,7 +414,7 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="author-editor-well relative min-h-0 flex-1">
         {activeFile ? (
           <Suspense
             fallback={
@@ -433,15 +438,15 @@ export const EditorPane = forwardRef<CodeEditorHandle, EditorPaneProps>(function
           </Suspense>
         ) : (
           <EmptyState
-            className="h-full"
+            className="author-editor-empty h-full"
             icon={<FileCode2 />}
             title="No script open"
-            description="Pick a script from the Files panel or start a new one."
+            description="Open a script from Files, start with a working example, or write a scene from scratch."
             action={
-              <Button size="sm" onClick={props.onNewFile}>
-                <FilePlus2 />
-                New script
-              </Button>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button size="sm" variant="primary" onClick={props.onBrowseStarters}><LayoutTemplate /> Browse starters</Button>
+                <Button size="sm" onClick={props.onNewFile}><FilePlus2 /> New script</Button>
+              </div>
             }
           />
         )}

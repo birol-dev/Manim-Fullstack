@@ -38,6 +38,9 @@ describe("routes", () => {
     expect(parseRoute("")).toEqual({ kind: "gallery" });
     expect(parseRoute("#/")).toEqual({ kind: "gallery" });
     expect(parseRoute("#/author")).toEqual({ kind: "author" });
+    const design = { kind: "author", design: true, file: "index lookup.py", scene: "Lookup" } as const;
+    expect(routeHash(design)).toBe("#/author/design?file=index+lookup.py&scene=Lookup");
+    expect(parseRoute(routeHash(design))).toEqual(design);
     expect(parseRoute("#/new/countdown/break-timer")).toEqual({ kind: "new", template: "countdown", preset: "break-timer" });
     expect(parseRoute("#/project/abc%20d")).toEqual({ kind: "project", id: "abc d" });
     expect(parseRoute("#/nonsense")).toEqual({ kind: "gallery" });
@@ -255,7 +258,7 @@ describe("gallery", () => {
     expect(document.documentElement).toHaveAttribute("data-surface", "studio");
     fireEvent.click(screen.getByRole("link", { name: /Author mode/ }));
     await screen.findByText("Author workspace");
-    expect(document.documentElement).not.toHaveAttribute("data-surface");
+    expect(document.documentElement).toHaveAttribute("data-surface", "author");
     act(() => { window.location.hash = "#/"; });
     await screen.findByRole("searchbox", { name: "Search designs" });
     expect(document.documentElement).toHaveAttribute("data-surface", "studio");
@@ -638,7 +641,7 @@ describe("editor", () => {
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Changed by AI"));
     expect(screen.getByRole("textbox", { name: "Timer length" })).toHaveValue("1:00");
     expect(screen.getByRole("textbox", { name: "Video title" })).toHaveValue("AI timer");
-    expect(screen.getByText("Updated by your AI")).toBeInTheDocument();
+    expect(screen.getByText("Shared draft updated")).toBeInTheDocument();
     expect(studio.calls.some((call) => call.method === "PUT")).toBe(false);
     fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "My own edits" } });
     Object.assign(studio.projects[0], { params: { title: "Second AI edit", seconds: 60 }, updated: 3 });

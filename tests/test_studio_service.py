@@ -45,9 +45,10 @@ def test_catalog_shape(svc):
     countdown = next(t for t in cat["templates"] if t["id"] == "countdown")
     assert countdown["schema"]["properties"]["seconds"]["x-widget"] == "duration"
     assert countdown["defaults"]["seconds"] == 300
-    assert {p["id"] for p in countdown["presets"]} >= {"launch-countdown"}
+    assert {p["id"] for p in countdown["presets"]} == {"classroom-timer"}
     timers = next(s for s in cat["sections"] if s["id"] == "timers")
-    card = next(c for c in timers["cards"] if c["id"] == "launch-countdown")
+    assert [c["id"] for c in timers["cards"]] == ["classroom-timer", "pomodoro-session"]
+    card = timers["cards"][0]
     assert set(card) == {"id", "template", "title", "summary", "category", "params", "settings", "tags", "peek_url", "posters"}
     assert card["peek_url"] is None or (card["peek_url"].startswith("/api/studio/peeks/")
                                        and card["peek_url"].endswith(".mp4"))

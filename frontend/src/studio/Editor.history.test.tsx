@@ -99,12 +99,12 @@ it("records an AI update as one undoable step without resaving it until undo", a
   expect(screen.getByRole("textbox", { name: "Video title" })).toHaveValue("Original project");
   await waitFor(() => expect(studio.projects[0].params.title).toBe("Original"));
   expect(studio.projects[0].settings.theme).toBe("clean");
-  expect(screen.queryByText("Updated by your AI")).not.toBeInTheDocument();
+  expect(screen.queryByText("Shared draft updated")).not.toBeInTheDocument();
 });
 
-it("offers Content, Look and Sound with the existing tab keyboard behaviour, retaining Sound during edits", async () => {
+it("keeps tab keyboard navigation and retains Sound during edits", async () => {
   const user = userEvent.setup(); open();
-  expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Content", "Look", "Sound"]);
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Content", "Look", "Sound", "With AI"]);
   screen.getByRole("tab", { name: "Content" }).focus();
   await user.keyboard("{ArrowRight}");
   expect(screen.getByRole("tab", { name: "Look" })).toHaveFocus();
@@ -117,4 +117,20 @@ it("offers Content, Look and Sound with the existing tab keyboard behaviour, ret
   expect(screen.getByRole("switch", { name: "Sound effects" })).not.toBeChecked();
   await user.click(screen.getByRole("button", { name: "Undo" }));
   expect(screen.getByRole("switch", { name: "Sound effects" })).toBeChecked();
+});
+
+it("saves the open design and copies a project-specific MCP brief", async () => {
+  const user = userEvent.setup(); open();
+  await user.click(screen.getByRole("tab", { name: "With AI" }));
+  await user.type(screen.getByRole("textbox", { name: "What should the agent change?" }), "Make it feel like a print poster.");
+  expect(studio.projects).toHaveLength(0);
+  await user.click(screen.getByRole("button", { name: "Save draft to share" }));
+  await user.click(await screen.findByRole("button", { name: "Copy design brief" }));
+  const brief = await navigator.clipboard.readText();
+  expect(brief).toContain(studio.projects[0].id);
+  expect(brief).toContain("base_revision");
+  expect(brief).toContain("Make it feel like a print poster.");
+  await user.click(screen.getByRole("tab", { name: "Content" }));
+  await user.click(screen.getByRole("tab", { name: "With AI" }));
+  expect(screen.getByRole("textbox", { name: "What should the agent change?" })).toHaveValue("Make it feel like a print poster.");
 });

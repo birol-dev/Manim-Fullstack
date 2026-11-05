@@ -10,10 +10,12 @@ import { SetupDialog } from "@/components/dialogs/SetupDialog";
 import { EditorPane } from "@/components/editor/EditorPane";
 import type { CodeEditorHandle, InsertMode } from "@/components/editor/types";
 import { ActivityBar, type SidebarView } from "@/components/layout/ActivityBar";
+import { AuthorGuide } from "@/components/layout/AuthorGuide";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TopBar } from "@/components/layout/TopBar";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { AssetsPanel } from "@/components/sidebar/AssetsPanel";
+import { DesignPanel } from "@/components/sidebar/DesignPanel";
 import { FilesPanel } from "@/components/sidebar/FilesPanel";
 import { SettingsPanel, type Settings } from "@/components/sidebar/SettingsPanel";
 import { ShapeBuilderPanel } from "@/components/sidebar/ShapeBuilderPanel";
@@ -21,6 +23,7 @@ import { SystemPanel } from "@/components/sidebar/SystemPanel";
 import { TemplatesPanel } from "@/components/sidebar/TemplatesPanel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { isInstalled, useDiagnostics } from "@/hooks/useDiagnostics";
+import { useAuthorActivity, type AuthorActivityItem } from "@/hooks/useAuthorActivity";
 import { useLogs } from "@/hooks/useLogs";
 import { useMinimumStopping } from "@/hooks/useMinimumStopping";
 import { usePersistentState } from "@/hooks/usePersistentState";
@@ -30,7 +33,7 @@ import { SaveConflictError, useWorkspace, type SaveOptions } from "@/hooks/useWo
 import { apiUrl, errorMessage } from "@/lib/api";
 import { MOD_KEY, QUALITY_FOR_PROFILE, getMaxCodeBytes, renderBlockReason, utf8ByteLength } from "@/lib/constants";
 import { RENAME_REQUIRED_PREFIX, classNameFromFile } from "@/lib/format";
-import { horizontalDefaults, toastTopPx, workPanelSizes } from "@/lib/layout";
+import { BOTTOM_COLLAPSED_PX, horizontalDefaults, toastTopPx, workPanelSizes } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 import { findErrorLocation } from "@/lib/logs";
 import { latestRenderFor, previewBelongsTo, previewFromMedia } from "@/lib/preview";
@@ -38,8 +41,9 @@ import { forgetRenderOrigin, recordRenderOrigin, renameRenderOrigins } from "@/l
 import { overallPercent, risingPercent } from "@/lib/progress";
 import { expandedStepCount, stepIndexForAnimation } from "@/lib/timeline";
 import { STORAGE_KEYS } from "@/lib/storage";
-import { newSceneCode, type SceneTemplate } from "@/lib/templates";
+import { INDEX_LOOKUP_STARTER, newSceneCode, type SceneTemplate } from "@/lib/templates";
 import type { AnimationStep, AssetFile, MediaFile, ParseResult, PreviewItem, Quality, StorageMode, WorkspaceFiles } from "@/lib/types";
+import "./author.css";
 
 // KaTeX is only needed by this panel.
 const LatexPanel = lazy(() => import("@/components/sidebar/LatexPanel").then((module) => ({ default: module.LatexPanel })));
@@ -103,7 +107,7 @@ function ResizeHandle({ direction, label }: { direction: "horizontal" | "vertica
 /** Toasts about the open file: its size, a refused save, render or Insert, a reload, a syntax error. */
 const FILE_TOASTS = ["code-size", "render-blocked", "save-error", "insert-refused", "external-change", "syntax-error"];
 
-export default function App() {
+export default function App({ initialDesign, initialFile, initialScene }: { initialDesign?: boolean; initialFile?: string; initialScene?: string } = {}) {
   // ---- Preferences -------------------------------------------------------
   const [storageMode, setStorageMode] = usePersistentState<StorageMode>(STORAGE_KEYS.storageMode, "disk");
   // Settings follow other tabs (storage mode too, below, unless that would close unsaved edits).
@@ -115,12 +119,15 @@ export default function App() {
   const [loopPreview, setLoopPreview] = usePersistentState(STORAGE_KEYS.loopPreview, true, sync);
   const [editorFontSize, setEditorFontSize] = usePersistentState(STORAGE_KEYS.editorFontSize, 13, sync);
   const [storedQuality, setQuality] = usePersistentState<Quality | null>(STORAGE_KEYS.quality, null, sync);
-  const [sidebarView, setSidebarView] = usePersistentState<SidebarView>(STORAGE_KEYS.sidebarView, "files");
+  const [storedSidebarView, setStoredSidebarView] = usePersistentState<SidebarView>(STORAGE_KEYS.sidebarView, "files");
+  const [designOpen, setDesignOpen] = useState(Boolean(initialDesign));
+  const sidebarView = designOpen ? "design" : storedSidebarView;
 
   // ---- Data --------------------------------------------------------------
   const diagnostics = useDiagnostics();
   const online = diagnostics.status === "online";
-  const workspace = useWorkspace({ mode: storageMode, online });
+  const workspace = useWorkspace({ mode: storageMode, online, initialFile, initialScene });
+  const { activity, unreachable } = useAuthorActivity(online && storageMode === "disk" && sidebarView === "design");
   const { logs, append: log, clear: clearLogs, snapshot: logSnapshot } = useLogs();
   const quality: Quality = storedQuality ?? QUALITY_FOR_PROFILE[diagnostics.data?.profile ?? ""] ?? "m";
   const latexAvailable = diagnostics.data?.dependencies.latex_available ?? true;
@@ -143,7 +150,7 @@ export default function App() {
   // The script whose render output the console is showing.
   const [logsFile, setLogsFile] = useState<{ storage: StorageMode; file: string } | null>(null);
   const [bottomTab, setBottomTab] = useState<BottomTab>("console");
-  const [bottomCollapsed, setBottomCollapsed] = useState(false);
+  const [bottomCollapsed, setBottomCollapsed] = useState(Boolean(initialDesign));
   const workSizes = workPanelSizes(useViewportHeight());
   // Read once: these are only the first-run defaults (react-resizable-panels keeps dragged sizes).
   const [horizontal] = useState(() => horizontalDefaults(typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -151,14 +158,17 @@ export default function App() {
   const [newFile, setNewFile] = useState<(NewFileRequest & { code?: string }) | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [renderSteps, setRenderSteps] = useState<{ id: string; steps: AnimationStep[] } | null>(null);
 
   const sidebarPanelRef = usePanelRef();
   const bottomPanelRef = usePanelRef();
   const mainLayout = useDefaultLayout({ id: "mc-layout-main", storage: localStorage });
-  const workLayout = useDefaultLayout({ id: "mc-layout-work", storage: localStorage });
-  const topLayout = useDefaultLayout({ id: "mc-layout-top", storage: localStorage });
+  const workLayoutId = initialDesign ? "mc-design-work" : "mc-layout-work";
+  const topLayoutId = initialDesign ? "mc-design-top" : "mc-layout-top";
+  const workLayout = useDefaultLayout({ id: workLayoutId, storage: localStorage });
+  const topLayout = useDefaultLayout({ id: topLayoutId, storage: localStorage });
 
   const previewRef = useRef<PreviewItem | null>(null);
   const showPreview = useCallback((item: PreviewItem | null) => {
@@ -506,6 +516,30 @@ export default function App() {
     if (noFileOpen && previewRef.current && !previewRef.current.pinned) showPreview(null);
   }, [noFileOpen, storageMode, showPreview]);
 
+  // Reload on a saved script or finished render. Workspace's version checks keep dirty buffers intact.
+  const activityStamp = activity?.items.filter((item) => item.kind === "script" || item.status === "done")
+    .map((item) => item.id).join(" ");
+  const { refresh } = workspace;
+  useEffect(() => {
+    if (activityStamp) void refresh();
+  }, [activityStamp, refresh]);
+
+  const { activeFile, selectedScene } = workspace;
+  const agentRender = activity?.items.find((item) => item.kind === "render" && item.filename === activeFile &&
+    (!selectedScene || item.scene === selectedScene) && item.status === "done" && item.output);
+  const agentOutputUrl = agentRender?.kind === "render" ? agentRender.output?.url : undefined;
+  const currentAgentJob = activity?.items.find((item) => item.kind === "render" && item.filename === activeFile &&
+    (!selectedScene || item.scene === selectedScene));
+  const agentStatus = currentAgentJob?.kind === "render" && (currentAgentJob.status === "queued" || currentAgentJob.status === "rendering")
+    ? `Agent ${currentAgentJob.status === "queued" ? "queued" : "is rendering"} ${currentAgentJob.scene}` : undefined;
+  useEffect(() => {
+    if (!activeFile || !agentOutputUrl || previewRef.current?.pinned) return;
+    const newest = latestRenderFor(workspace.files.media, activeFile, selectedScene, "disk");
+    if (newest?.url !== agentOutputUrl) return;
+    const updated = previewFromMedia(newest);
+    if (previewRef.current?.url !== updated.url) showPreview(updated);
+  }, [activeFile, selectedScene, agentOutputUrl, agentRender?.id, workspace.files.media, showPreview]);
+
   // ---- Auto-render -------------------------------------------------------
   const codeRef = useRef(workspace.code);
   useEffect(() => {
@@ -592,8 +626,25 @@ export default function App() {
       panel.collapse();
       return;
     }
-    setSidebarView(view);
+    setDesignOpen(view === "design");
+    if (view !== "design") setStoredSidebarView(view);
     if (panel?.isCollapsed()) panel.expand();
+  };
+  const browseStarters = () => {
+    if (sidebarView !== "templates" || !sidebarOpen) selectSidebarView("templates");
+  };
+
+  const openActivity = async (item: AuthorActivityItem) => {
+    try {
+      if (item.filename !== activeFile && !await workspace.openFile(item.filename)) return;
+      if (item.kind === "render") {
+        workspace.setSelectedScene(item.scene);
+        const last = latestRenderFor(workspace.files.media, item.filename, item.scene, "disk");
+        showPreview(last ? previewFromMedia(last) : null);
+      }
+    } catch (err) {
+      toast.error(errorMessage(err, `Couldn't open ${item.filename}.`));
+    }
   };
 
   const changeSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -821,6 +872,15 @@ export default function App() {
   // ---- Layout ------------------------------------------------------------
   const sidebarContent = (() => {
     switch (sidebarView) {
+      case "design":
+        return <DesignPanel activity={activity} unreachable={!online || unreachable} workspaceStorage={storageMode === "disk"}
+          activeFile={workspace.activeFile} onWorkspaceStorage={() => requestStorageMode("disk")}
+          code={workspace.code} onCodeChange={workspace.setCode} canRender={canRender && !renderBlocked}
+          dirty={workspace.isDirty} onSave={() => void save()} onRender={() => void startRender()}
+          onOpen={(item) => void openActivity(item)} onUseStarter={() => setNewFile({
+            suggestedName: uniqueName(INDEX_LOOKUP_STARTER.filename, scriptNames),
+            templateTitle: INDEX_LOOKUP_STARTER.title, code: INDEX_LOOKUP_STARTER.code,
+          })} />;
       case "files":
         return (
           <FilesPanel
@@ -919,7 +979,7 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
-      <div className="flex h-dvh min-h-0 flex-col bg-canvas text-fg">
+      <div className="author-app flex h-dvh min-h-0 flex-col bg-canvas text-fg">
         <button
           type="button"
           onClick={() => editorRef.current?.focus()}
@@ -927,7 +987,7 @@ export default function App() {
         >
           Skip to editor
         </button>
-        <TopBar needsSetup={manimMissing} onOpenSetup={() => setSetupOpen(true)} />
+        <TopBar design={sidebarView === "design"} needsSetup={manimMissing} onOpenSetup={() => setSetupOpen(true)} onOpenGuide={() => setGuideOpen(true)} />
 
         <div className="flex min-h-0 flex-1">
           <ActivityBar
@@ -951,9 +1011,9 @@ export default function App() {
             <ResizeHandle direction="horizontal" label="Resize the sidebar" />
             {/* Must cover the editor + preview minimums below, or the group fights itself at 1024 px. */}
             <Panel id="work" minSize="568px">
-              <Group orientation="vertical" id="mc-layout-work" {...workLayout}>
+              <Group orientation="vertical" id={workLayoutId} {...workLayout}>
                 <Panel id="top" minSize={`${workSizes.topMinPx}px`}>
-                  <Group orientation="horizontal" id="mc-layout-top" {...topLayout}>
+                  <Group orientation="horizontal" id={topLayoutId} {...topLayout}>
                     <Panel id="editor" minSize="300px">
                       <EditorPane
                         ref={editorRef}
@@ -982,13 +1042,15 @@ export default function App() {
                         onRender={() => void startRender()}
                         onCancel={cancelRender}
                         onNewFile={() => setNewFile({ suggestedName: uniqueName("scene.py", scriptNames) })}
+                        onBrowseStarters={browseStarters}
                         onOpenSetup={() => setSetupOpen(true)}
                       />
                     </Panel>
                     <ResizeHandle direction="horizontal" label="Resize the editor and preview" />
-                    <Panel id="preview" defaultSize={`${horizontal.previewPercent}%`} minSize="260px">
+                    <Panel id="preview" defaultSize={`${initialDesign ? 58 : horizontal.previewPercent}%`} minSize="260px">
                       <PreviewPane
                         preview={preview}
+                        agentStatus={agentStatus}
                         active={ownRender}
                         otherRender={otherRender}
                         // A job from the other storage mode can't be opened by name from here.
@@ -1004,6 +1066,7 @@ export default function App() {
                         onRender={() => void startRender()}
                         onCancel={cancelRender}
                         onCompare={() => setCompareOpen(true)}
+                        onOpenGuide={() => setGuideOpen(true)}
                         onShowConsole={() => {
                           setBottomTab("console");
                           expandBottom();
@@ -1016,7 +1079,7 @@ export default function App() {
                 <Panel
                   id="bottom"
                   panelRef={bottomPanelRef}
-                  defaultSize={`${workSizes.bottomDefaultPx}px`}
+                  defaultSize={`${initialDesign ? BOTTOM_COLLAPSED_PX : workSizes.bottomDefaultPx}px`}
                   minSize={`${workSizes.bottomMinPx}px`}
                   maxSize="60%"
                   collapsible
@@ -1076,6 +1139,15 @@ export default function App() {
         />
       </div>
 
+      <AuthorGuide
+        open={guideOpen}
+        onOpenChange={setGuideOpen}
+        onBrowseStarters={browseStarters}
+        onShowTimeline={() => {
+          setBottomTab("timeline");
+          expandBottom();
+        }}
+      />
       <NewFileDialog
         request={newFile}
         existing={scriptNames}

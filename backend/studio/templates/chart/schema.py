@@ -94,7 +94,7 @@ PRESETS = [
             {"label": "January", "value": 820}, {"label": "February", "value": 1040},
             {"label": "March", "value": 980}, {"label": "April", "value": 1320},
             {"label": "May", "value": 1510}, {"label": "June", "value": 1840}], "chart_type": "line"},
-        settings={"theme": "midnight", "aspect": "9:16"}, tags=["visitors", "website", "example data"]),
+        settings={"theme": "afterglow", "aspect": "9:16"}, tags=["visitors", "website", "example data"]),
     Preset(id="budget-breakdown", title="Where the budget goes", summary="Show how a monthly budget is split.",
         params={"title": "Where the *budget* goes", "chart_type": "pie", "values": [
             {"label": "Rent", "value": 1200}, {"label": "Food", "value": 450},

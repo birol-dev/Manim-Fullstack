@@ -3,7 +3,7 @@
     python backend/studio/dev.py countdown                      # every preset x 16:9, 9:16, 1:1
     python backend/studio/dev.py countdown --aspects 9:16 --preset classroom-timer
     python backend/studio/dev.py countdown --params '{"title": "A much longer title than usual"}'
-    python backend/studio/dev.py countdown --video --quality 720p --preset launch-countdown
+    python backend/studio/dev.py countdown --video --quality 720p --params '{"seconds": 10, "style": "big"}'
 
 Posters and storyboards render in this process with Manim loaded once, the same way the
 app's preview worker does; ``--video`` exports through runner.py in a subprocess.
