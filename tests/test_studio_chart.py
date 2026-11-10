@@ -129,14 +129,18 @@ def test_chart_cards_use_direct_labels_or_pie_swatches(make_scene, aspect, prese
     assert "Example" not in scene.p.title
     if scene.p.chart_type == "pie":
         assert scene.legend_side == (aspect == "16:9")
-        assert len(scene.percent_labels) == len(scene.p.values)
-        for entry in scene.entries:
+        assert len(scene.entries) == len(scene.p.values)
+        for row, entry in zip(scene.p.values, scene.entries):
+            assert "".join(line.text.replace(" ", "") for line in entry.words.lines) == row.label.replace(" ", "")
+            assert entry.number.value == row.value
             assert not entry.marker.submobjects  # Solid color swatch, no index glyphs.
             inside(entry, scene.legend_region)
         if scene.legend_side:
             assert scene.pie_center[1] == pytest.approx(scene.legend_region.center[1])
             assert scene.pie_radius > 2
         for percent in scene.percent_labels:
+            row = scene.p.values[percent.slice_index]
+            assert row.value / sum(v.value for v in scene.p.values) >= .08
             color = scene.colors[percent.slice_index]
             for glyph in percent.family_members_with_points():
                 assert contrast(str(glyph.get_fill_color()), color) >= 4.5
@@ -144,14 +148,18 @@ def test_chart_cards_use_direct_labels_or_pie_swatches(make_scene, aspect, prese
         assert not scene.uses_legend
         assert len(scene.pages) == 1
         assert scene.plot_region.height > scene.layout.safe.height * .50
-        for words, number, mark, point in zip(scene.axis_labels, scene.counters, scene.marks, scene.points):
+        for row, words, number, mark, point in zip(scene.p.values, scene.axis_labels, scene.counters, scene.marks, scene.points):
             assert words.get_center()[0] == pytest.approx(point[0], abs=.2)
             assert number.get_center()[0] == pytest.approx(point[0])
             assert words.get_top()[1] < scene.plot_region.bottom
-            assert number.get_bottom()[1] > point[1]
+            if row.value < 0 and scene.p.chart_type == "bars":
+                assert number.get_top()[1] < point[1]
+            else:
+                assert number.get_bottom()[1] > point[1]
             inside(number, scene.plot_region)
         if scene.p.chart_type == "line":
-            assert scene.y_range[0] > 0
+            assert 0 <= scene.y_range[0] <= min(row.value for row in scene.p.values)
+            assert scene.y_range[1] >= max(row.value for row in scene.p.values)
             assert all(segment.get_stroke_width() >= 4 for segment in scene.line_segments)
             assert scene.marks[0][-1].width >= .14
             # Months fit intact at the kit's minimum; no "Janu / ary" split.
@@ -164,9 +172,11 @@ def test_chart_cards_use_direct_labels_or_pie_swatches(make_scene, aspect, prese
                                    and number.get_bottom()[1] < y < number.get_top()[1]
                                    for x, y, _ in samples)
         else:
-            assert scene.y_range[0] == 0
+            assert scene.y_range[0] <= min(0, min(row.value for row in scene.p.values))
             assert len(set(scene.colors)) <= 2
-            assert scene.colors[-1] == scene.accent
+            peak = max(row.value for row in scene.p.values)
+            assert all((color == scene.accent) == (row.value == peak)
+                       for row, color in zip(scene.p.values, scene.colors))
 
 
 @pytest.mark.parametrize("aspect", ASPECTS)

@@ -46,6 +46,10 @@ OCCASIONS = {
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "poster"] = choice("classic", title="Layout",
+        labels={"classic": "Classic", "poster": "Celebration poster"},
+        option_help={"classic": "A round hero with centered text in tall video.",
+                     "poster": "A geometric hero with a left-aligned greeting and name."})
     occasion: Literal["birthday", "anniversary", "milestone", "thanks", "welcome"] = choice(
         "birthday", title="Occasion",
         labels={"birthday": "Birthday", "anniversary": "Anniversary", "milestone": "Milestone",
@@ -92,7 +96,7 @@ class Params(TemplateParams):
 PRESETS = [
     Preset(id="happy-birthday", title="Happy birthday",
            summary="Birthday wishes for one person, with confetti cannons.",
-           params={"occasion": "birthday", "headline": "Happy birthday", "name": "Elif",
+           params={"layout": "poster", "occasion": "birthday", "headline": "Happy birthday", "name": "Elif",
                    "message": "Wishing you a day full of cake, laughter and everyone you love.",
                    "from_line": "With love, your friends", "confetti": True},
            settings={"theme": "pastel", "aspect": "9:16"}, tags=["birthday"]),

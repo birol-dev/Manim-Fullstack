@@ -186,6 +186,7 @@ class StepRow(VGroup):
         self.box = self.filled = self.tick = None
         self.tick_anim = None
         self.segment = None
+        self.rule = None
         self.cut = False
         self.dot_center = None
 
@@ -243,7 +244,7 @@ def _icon(name, *, size: float, color: str):
 def build_row(style: str, step, index: int, pal: Palette, *, width: float, time_width: float,
               highlighted: bool, text_size: float, detail_size: float, text_lines: int,
               detail_lines: int, stacked_time: bool = False, show_icon: bool = True,
-              compact_detail: bool = False) -> StepRow:
+              compact_detail: bool = False, editorial: bool = False) -> StepRow:
     row = StepRow()
     marker_size = {"numbered": 0.42, "checklist": 0.42, "timeline": 0.22}[style]
     gap, icon_size, time_size, right_gap = 0.2, 0.4, 24, 0.16
@@ -309,7 +310,8 @@ def build_row(style: str, step, index: int, pal: Palette, *, width: float, time_
         row.add(card)
 
     if style == "numbered":
-        disc = Circle(radius=marker_size / 2).set_fill(pal.accent, 1).set_stroke(width=0)
+        disc = (Rectangle(width=marker_size, height=marker_size) if editorial else Circle(radius=marker_size / 2))
+        disc.set_fill(pal.accent, 1).set_stroke(width=0)
         num = label(str(index + 1), size=24, font=pal.font, weight="BOLD", color=pal.on_accent)
         num.move_to(disc.get_center())
         marker = VGroup(disc, num)

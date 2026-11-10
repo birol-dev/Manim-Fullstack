@@ -143,3 +143,21 @@ def test_slideshow_real_poster_and_lowest_quality_movie(tmp_path):
     video = next(stream for stream in streams if stream["codec_type"] == "video")
     assert (video["width"], video["height"], video["avg_frame_rate"]) == (854, 480, "15/1")
     assert float(video["duration"]) >= 4
+
+
+@pytest.mark.parametrize("aspect", ASPECTS)
+@pytest.mark.parametrize("position", ["top", "bottom"])
+def test_gallery_captions_stay_outside_the_picture_at_maximum_text(make_scene, aspect, position):
+    scene = make_scene({"layout": "gallery", "title": "W" * 60,
+                        "slides": [{"caption": "W" * 80}] * 2,
+                        "caption_position": position}, aspect, "print_grid", safe_zone=True)
+    for slide in scene._compose():
+        inside(slide, scene.layout.safe)
+        assert slide.picture.height > 0
+        words = "".join(line.original_text for line in slide.caption.lines)
+        assert words == "W" * 80
+        assert slide.caption.font_size >= 24
+        if position == "top":
+            assert slide.caption.get_bottom()[1] > slide.picture.get_top()[1]
+        else:
+            assert slide.caption.get_top()[1] < slide.picture.get_bottom()[1]

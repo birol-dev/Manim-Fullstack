@@ -105,13 +105,14 @@ def test_before_after_full_text_clear_in_every_shape_direction_and_theme(make_sc
 
 
 @pytest.mark.parametrize("direction", ["left", "right", "top", "bottom"])
-def test_before_after_photo_mask_reveals_progressively_and_preserves_alpha(make_scene, tmp_path, direction):
+@pytest.mark.parametrize("layout", ["classic", "proof"])
+def test_before_after_photo_mask_reveals_progressively_and_preserves_alpha(make_scene, tmp_path, direction, layout):
     import numpy as np
     from PIL import Image
     from studio.templates.before_after.parts import reveal
     Image.new("RGBA", (120, 80), (25, 160, 90, 128)).save(tmp_path / "after.png")
     Image.new("RGB", (80, 120), (200, 100, 40)).save(tmp_path / "before.png")
-    scene = make_scene({"before": "before.png", "after": "after.png", "direction": direction})
+    scene = make_scene({"layout": layout, "before": "before.png", "after": "after.png", "direction": direction})
     plan = scene._compose()
     assert plan.pictures == 2
     counts = []
@@ -125,9 +126,12 @@ def test_before_after_photo_mask_reveals_progressively_and_preserves_alpha(make_
                 assert alpha[alpha.shape[0] // 2, -1] == 128 and alpha[alpha.shape[0] // 2, 0] == 0
             else:
                 assert alpha[-1, alpha.shape[1] // 2] == 128 and alpha[0, alpha.shape[1] // 2] == 0
+        if layout == "proof":
+            assert plan.before_label[0].get_fill_opacity() == 1
+            assert plan.after_label[0].get_fill_opacity() == 1
     assert counts[0] == 0 and counts[-1] == alpha.size
     assert all(a < b for a, b in zip(counts, counts[1:]))
-    assert plan.before_label[0].get_fill_opacity() == 0
+    assert plan.before_label[0].get_fill_opacity() == (1 if layout == "proof" else 0)
     assert plan.after_label[0].get_fill_opacity() == 1
     assert plan.before_visual.width == pytest.approx(scene.picture_region.width)
     assert plan.before_visual.height == pytest.approx(scene.picture_region.height)
@@ -242,3 +246,26 @@ def test_before_after_old_direction_values_still_work():
     for old, new in (("left", "horizontal"), ("right", "horizontal"),
                      ("top", "vertical"), ("bottom", "vertical")):
         assert Params(direction=old).direction == new
+
+
+@pytest.mark.parametrize("aspect", ASPECTS)
+@pytest.mark.parametrize("direction", ["horizontal", "vertical"])
+def test_proof_labels_remain_outside_uploaded_pictures(make_scene, tmp_path, aspect, direction):
+    from PIL import Image
+    from studio.templates.before_after.parts import reveal
+    Image.new("RGBA", (120, 80), (25, 160, 90, 128)).save(tmp_path / "after.png")
+    Image.new("RGB", (80, 120), (200, 100, 40)).save(tmp_path / "before.png")
+    scene = make_scene({"layout": "proof", "before": "before.png", "after": "after.png",
+                        "headline": "W" * 60, "before_label": "W" * 16, "after_label": "W" * 16,
+                        "direction": direction}, aspect, "print_grid", safe_zone=True)
+    plan = scene._compose()
+    _inside(scene.proof_frame, scene.layout.safe)
+    _inside(plan.headline, scene.layout.safe)
+    for item in (plan.before_label, plan.after_label):
+        _inside(item, scene.layout.safe)
+        assert (item.get_bottom()[1] > scene.picture_region.top or
+                item.get_top()[1] < scene.picture_region.bottom)
+    assert plan.headline.get_bottom()[1] > plan.before_label.get_top()[1]
+    for fraction in (0, .25, .5, .75, 1):
+        reveal(plan, fraction)
+        assert all(item[0].get_fill_opacity() == 1 for item in (plan.before_label, plan.after_label))

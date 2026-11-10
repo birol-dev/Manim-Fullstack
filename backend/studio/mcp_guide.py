@@ -328,6 +328,16 @@ aligns two options in ruled columns, with matching measures and shared-scale bar
 Keep units, dates, and sources visible. Use the storyboard to check that every
 label and number is readable in the intended aspect ratio.
 
+For a photo story, `slideshow` with `layout="gallery"` keeps captions outside the
+framed pictures. `before_after` with `layout="proof"` keeps labels outside the
+moving reveal. Use `steps` with `layout="editorial"` for a ruled agenda, `quiz`
+with `layout="broadcast"` for a left-aligned question and square answer markers,
+and `celebration` with `layout="poster"` for an asymmetric geometric greeting.
+`chart` with `layout="report"` frames the plotting area below a ruled masthead;
+`year_in_review` with `layout="annual"` uses open stat cells and colored rules.
+These are layout choices, independent of the theme. Keep data scales honest,
+preserve the user's units, and inspect both the reveal and the final held frame.
+
 ## Background
 
 `settings.background.kind` is one of {", ".join(f"`{kind}`" for kind in background)}:

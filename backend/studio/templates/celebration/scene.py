@@ -20,6 +20,7 @@ from manim import (
     LaggedStart,
     Rectangle,
     Star,
+    Square,
     Succession,
     ValueTracker,
     VGroup,
@@ -199,14 +200,18 @@ class Template(StudioScene):
         lay = self.layout
         region = lay.safe
         land = lay.is_landscape
-        align = "left" if land else "center"
+        poster = self.p.layout == "poster"
+        align = "left" if land or poster else "center"
         has_photo = bool(self.asset(self.p.photo))
         d_min = 1.5 if has_photo else 1.35
         chosen = None
         for index, k in enumerate(SCALES):
             last = index == len(SCALES) - 1
             if land:
-                hero_box, text_box = region.split_cols([0.4, 0.6], gap=lay.unit * 4)
+                if poster:
+                    text_box, hero_box = region.split_cols([.6, .4], gap=lay.unit * 4)
+                else:
+                    hero_box, text_box = region.split_cols([0.4, 0.6], gap=lay.unit * 4)
                 texts = self._texts(k, text_box.width, align)
                 rows = self._rows(texts, k)
                 stack_h = self._stack_height(rows)
@@ -238,6 +243,8 @@ class Template(StudioScene):
             total = HERO_BLOCK * diameter + hero_gap + stack_h
             top = region.center[1] + total / 2
             hero_center = np.array([region.center[0], top - HERO_BLOCK / 2 * diameter, 0.0])
+            if poster:
+                hero_center[0] = region.right - HERO_BLOCK * diameter / 2
             y = top - HERO_BLOCK * diameter - hero_gap
             x_left = None
         for i, row in enumerate(rows):
@@ -245,8 +252,8 @@ class Template(StudioScene):
                 y -= row.gap
             mob = row.mob
             center_y = y - mob.height / 2
-            if land:
-                mob.move_to([x_left + mob.width / 2, center_y, 0])
+            if land or poster:
+                mob.move_to([(x_left if land else region.left) + mob.width / 2, center_y, 0])
             else:
                 mob.move_to([region.center[0], center_y, 0])
             y -= mob.height
@@ -275,6 +282,9 @@ class Template(StudioScene):
         h.halo = fx.glow(center, D * 0.56, accent, steps=10, total=0.2)
         h.halo.set_z_index(-4)
         h.ring = Circle(radius=D / 2).set_stroke(accent, width=max(D * 1.7, 4)).set_fill(opacity=0).move_to(center)
+        if self.p.layout == "poster":
+            h.ring = Square(side_length=D * .82).rotate(math.pi / 4)
+            h.ring.set_fill(opacity=0).set_stroke(accent, width=max(D * 1.4, 3)).move_to(center)
         h.ring.set_z_index(-3)
         photo_path = self.asset(self.p.photo)
         if photo_path:

@@ -41,6 +41,10 @@ STYLES = {"moments": "One by one", "grid": "Grid build"}
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "annual"] = choice("classic", title="Layout",
+        labels={"classic": "Cards", "annual": "Annual report"},
+        option_help={"classic": "Numbers appear in filled cards.",
+                     "annual": "An editorial recap with open cells and colored rules."})
     year: str = text("2026", title="Year", max_length=9, description="Shown big at the start, e.g. 2026 or 2025/26.")
     title: str = text("My year in numbers", title="Title", max_length=40,
                       description="A short title under the year. Wrap a word in *asterisks* to color it.")
@@ -69,7 +73,7 @@ PRESETS = [
     Preset(
         id="small-business-year", title="Our year at the shop", summary="Thank your customers with the numbers "
                                                                         "behind your year.",
-        params={
+        params={"layout": "annual",
             "year": "2026",
             "title": "Our year at Bean & Bloom",
             "name": "Bean & Bloom Café",

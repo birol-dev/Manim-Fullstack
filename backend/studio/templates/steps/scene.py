@@ -100,7 +100,8 @@ class Template(StudioScene):
                                 highlighted=(i + 1 == self.highlight), text_size=text_size,
                                 detail_size=detail_size, text_lines=text_lines,
                                 detail_lines=detail_lines, stacked_time=tall and not compact,
-                                show_icon=lay.is_landscape and not compact, compact_detail=compact)
+                                show_icon=lay.is_landscape and not compact, compact_detail=compact,
+                                editorial=p.layout == "editorial")
                     for i, step in enumerate(self.steps)]
 
         def fits(candidate):
@@ -141,7 +142,7 @@ class Template(StudioScene):
         gap = min(0.90 if tall else 0.56,
                   (available - sum(r.height for r in rows)) / (len(rows) - 1))
         total = header.height + header_gap + sum(r.height for r in rows) + gap * (len(rows) - 1)
-        top = S.center[1] + total / 2
+        top = S.top - inset if p.layout == "editorial" else S.center[1] + total / 2
         header.shift([S.left, top, 0])
         y = top - header.height - header_gap
         for row in rows:
@@ -159,6 +160,12 @@ class Template(StudioScene):
                 start[1] -= rows[i - 1].marker.height / 2 + 0.025
                 end[1] += rows[i].marker.height / 2 + 0.025
                 rows[i].segment = Line(start, end).set_stroke(pal.muted, width=2.0, opacity=0.4)
+        for row in rows:
+            row.rule = None
+        if p.layout == "editorial":
+            for row in rows[:-1]:
+                y = row.get_bottom()[1] - gap / 2
+                row.rule = Line([S.left, y, 0], [S.right, y, 0]).set_stroke(pal.muted, width=1, opacity=.35)
         return header, rows
 
     # -- motion ----------------------------------------------------------------
@@ -175,6 +182,8 @@ class Template(StudioScene):
 
     def _row_in(self, row):
         anims = []
+        if row.rule is not None:
+            anims.append(Create(row.rule, rate_func=ease_out))
         if row.card is not None:
             anims.append(FadeIn(row.card, scale=0.97, rate_func=ease_out))
         if row.marker is not None:

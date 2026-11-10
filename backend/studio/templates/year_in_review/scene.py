@@ -24,6 +24,7 @@ from manim import (
     FadeOut,
     Group,
     LaggedStart,
+    Line,
     ReplacementTransform,
     ValueTracker,
     VGroup,
@@ -614,6 +615,10 @@ class Template(StudioScene):
             bg = shapes.card(cw, ch, color=theme.surface, radius=min(theme.radius * 1.2, ch * 0.2),
                              stroke=theme.line, stroke_width=2.5).move_to(cell_c)
             parts = [bg]
+            if self.p.layout == "annual":
+                bg.set_fill(opacity=0).set_stroke(width=0)
+                parts += [Line([x0, y0, 0], [x0 + cw, y0, 0]).set_stroke(theme.line, width=1.5),
+                          Line([x0, y0, 0], [x0 + cw * .20, y0, 0]).set_stroke(color, width=4)]
             num = StatNumber(spec, size=size, font=self.font, weight=self.dw, color=theme.text, unit_color=color,
                              align="left", start=start)
             if num.width > g["text_w"]:

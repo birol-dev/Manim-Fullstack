@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from manim import UP, FadeIn, FadeOut, LaggedStart, ValueTracker, VGroup, linear
+from manim import UP, FadeIn, FadeOut, LaggedStart, Rectangle, ValueTracker, VGroup, linear
 
 from studio.kit import StudioScene, ease_out
 from studio.kit.layout import Region
@@ -76,16 +76,34 @@ class Template(StudioScene):
         p, lay, pal, u = self.p, self.layout, self.pal, self.layout.unit
         S = lay.safe
         landscape = lay.is_landscape
+        proof = p.layout == "proof"
         pictures = 0
 
         headline = P.headline_block(p.headline, pal, width=0.96 * S.width,
-                                    size=64 if landscape else 54, unit=u, locale=self.s.locale)
+                                    size=64 if landscape else 54, unit=u, locale=self.s.locale,
+                                    align="left" if proof else "center")
         picture_top = S.top
         if headline is not None:
             headline.move_to([S.center[0], S.top - headline.height / 2, 0])
+            if proof:
+                headline.set_x(S.left + headline.width / 2)
             headline.set_z_index(5)
             picture_top = headline.get_bottom()[1] - 3 * u
         self.picture_region = R = Region(S.left, S.right, picture_top, S.bottom)
+        self.proof_frame = None
+        if proof:
+            # Measure the labels before allocating the picture; two wrapped lines
+            # need more space than the short labels used in the gallery.
+            label_heights = []
+            for source, picture in ((p.before_label, p.before), (p.after_label, p.after)):
+                probe = P.label_pill(source, pal, unit=u, size=26 if landscape else 24,
+                    fill=pal.surface, ink=pal.text, max_width=.42 * S.width, locale=self.s.locale) if picture else None
+                label_heights.append(probe.height if probe is not None else 0)
+            top_band = max(9 * u, max(label_heights if p.direction == "horizontal" else label_heights[:1]) + 4 * u)
+            bottom_band = max(9 * u, label_heights[1] + 4 * u) if p.direction == "vertical" else 9 * u
+            self.picture_region = R = Region(S.left + u, S.right - u, picture_top - top_band, S.bottom + bottom_band)
+            self.proof_frame = Rectangle(width=R.width + 2 * u, height=R.height + 2 * u)
+            self.proof_frame.set_fill(opacity=0).set_stroke(pal.line, width=1.5).move_to(R.center).set_z_index(4)
         fw, fh = R.width, R.height
 
         before_path = self._asset(p.before)
@@ -170,6 +188,13 @@ class Template(StudioScene):
                 after_label.set_z_index(5)
                 labels.append(after_label)
         label_group = VGroup(*labels) if labels else None
+        if proof:
+            if before_label is not None:
+                before_label.move_to([R.left + before_label.width / 2, R.top + 2 * u + before_label.height / 2, 0])
+            if after_label is not None:
+                y = (R.top + 2 * u + after_label.height / 2 if p.direction == "horizontal"
+                     else R.bottom - 2 * u - after_label.height / 2)
+                after_label.move_to([R.right - after_label.width / 2, y, 0])
 
         # Two placeholder words sit together: give them one type size, so the shorter
         # word does not look louder than the longer one.
@@ -189,7 +214,7 @@ class Template(StudioScene):
                       headline=headline, line_group=line_group, line_casing=casing, line_core=core,
                       handle=handle, frame_width=fw, frame_height=fh, direction=p.direction,
                       center=R.center, before_label=before_label, after_label=after_label,
-                      progress=progress, pictures=pictures, before_word=before_word)
+                      progress=progress, pictures=pictures, before_word=before_word, persistent_labels=proof)
         P.reveal(plan, 0)
         return plan
 
@@ -211,6 +236,8 @@ class Template(StudioScene):
         hold_time = max(0.0, target_end - intro - sweep - line_fade)
 
         self.add(plan.before_visual, plan.after_visual)
+        if self.proof_frame is not None:
+            self.add(self.proof_frame)
         if plan.after_group is not None:
             self.add(plan.after_group)
         if plan.labels is not None:

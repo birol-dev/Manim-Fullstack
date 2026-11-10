@@ -29,6 +29,10 @@ class Slide(Item):
 
 
 class Params(TemplateParams):
+    layout: Literal["overlay", "gallery"] = choice("overlay", title="Layout",
+        labels={"overlay": "Overlay captions", "gallery": "Gallery frame"},
+        option_help={"overlay": "The caption sits over the picture.",
+                     "gallery": "A framed picture with a separate caption and index rail."})
     title: str = text_field("A few *good moments*", title="Title", max_length=60,
         help="Optional. Put *asterisks* around words to color them.",
         description="Optional title above the pictures. Put *asterisks* around a word to color it.")
@@ -41,7 +45,7 @@ class Params(TemplateParams):
         description="2 to 10 seconds per picture. More pictures make a longer video.")
     caption_position: Literal["bottom", "top"] = choice("bottom", title="Caption position",
         labels={"bottom": "Bottom", "top": "Top"},
-        description="Where the caption sits inside each picture.")
+        description="Above or below the picture in Gallery layout, or inside it in Overlay layout.")
     accent: HexColor = color(None, title="Accent color")
 
     @field_validator("title")
@@ -66,19 +70,19 @@ class Params(TemplateParams):
 
 PRESETS = [
     Preset(id="holiday-recap", title="Holiday recap", summary="Three moments from a weekend by the coast.",
-        params={"title": "A weekend to *remember*", "slides": [
+        params={"title": "A weekend to *remember*", "layout": "gallery", "slides": [
             {"caption": "First stop: a walk along the harbour"},
             {"caption": "An afternoon with nowhere to hurry"},
             {"caption": "One last sunset before the trip home"}], "seconds_per_slide": 4},
         settings={"theme": "pastel", "energy": "calm"}, tags=["holiday", "travel", "memories"]),
     Preset(id="product-showcase", title="Product showcase", summary="A simple three-piece ceramics collection.",
-        params={"title": "Meet the *morning collection*", "slides": [
+        params={"title": "Meet the *morning collection*", "layout": "gallery", "slides": [
             {"caption": "Everyday mug · made for slow mornings"},
             {"caption": "Breakfast bowl · a little room for more"},
             {"caption": "Serving plate · bring everyone together"}], "caption_position": "top"},
         settings={"theme": "clean", "aspect": "1:1"}, tags=["product", "collection", "shop"]),
     Preset(id="school-event", title="School event", summary="Highlights from a school garden day.",
-        params={"title": "Our *garden day*", "slides": [
+        params={"title": "Our *garden day*", "layout": "gallery", "slides": [
             {"caption": "Year 4 planted the first seeds"},
             {"caption": "Families helped build the raised beds"},
             {"caption": "Thank you to everyone who joined us"}], "seconds_per_slide": 3},

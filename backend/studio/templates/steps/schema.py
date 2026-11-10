@@ -51,6 +51,10 @@ class Step(Item):
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "editorial"] = choice("classic", title="Layout",
+        labels={"classic": "Classic", "editorial": "Ruled agenda"},
+        option_help={"classic": "A centered composition of steps.",
+                     "editorial": "A top-aligned masthead with ruled rows and square number cues."})
     kicker: str = text_field("", title="Top line", max_length=26, placeholder="Monday stand-up",
                              description="A small line above the title. Leave empty for none.",
                              help="A small line above the title.")
@@ -90,7 +94,7 @@ PRESETS = [
     Preset(
         id="meeting-agenda", title="Meeting agenda",
         summary="A five-item agenda with times on a timeline, the current item marked.",
-        params={
+        params={"layout": "editorial",
             "kicker": "Monday stand-up",
             "title": "Today's *agenda*",
             "steps": [
@@ -114,7 +118,7 @@ PRESETS = [
     Preset(
         id="classroom-instructions", title="Classroom instructions",
         summary="Five numbered instructions for a lesson, with what to do next in each.",
-        params={
+        params={"layout": "editorial",
             "kicker": "Year 4 · Science",
             "title": "Your *task* for today",
             "steps": [
@@ -137,7 +141,7 @@ PRESETS = [
     Preset(
         id="recipe-steps", title="Recipe steps",
         summary="Six cooking steps that tick off one by one: great for a recipe reel.",
-        params={
+        params={"layout": "editorial",
             "kicker": "Weeknight pasta · serves 4",
             "title": "How to make *pasta*",
             "steps": [
@@ -162,7 +166,7 @@ PRESETS = [
     Preset(
         id="event-schedule", title="Event schedule",
         summary="A vertical line-up for stories: five moments with times, one marked now.",
-        params={
+        params={"layout": "editorial",
             "kicker": "Friday · Main stage",
             "title": "Tonight's *line-up*",
             "steps": [

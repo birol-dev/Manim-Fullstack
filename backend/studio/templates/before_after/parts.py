@@ -154,14 +154,15 @@ def label_pill(text: str, pal: Palette, *, unit: float, size: float, fill: str, 
     return VGroup(pill, words)
 
 
-def headline_block(text: str, pal: Palette, *, width: float, size: float, unit: float, locale: str):
+def headline_block(text: str, pal: Palette, *, width: float, size: float, unit: float, locale: str,
+                   align: str = "center"):
     """Plain display text above the pictures, with the kit's highlighted words."""
     if not text.strip():
         return None
     shown = pal.theme.display(text) if pal.theme.case != "upper" else shout(text, locale)
     words = full_text(shown, width=width, size=size,
                      max_lines=3, font=pal.font, weight=pal.display_weight, color=pal.text,
-                     emphasis_color=pal.accent, align="center", line_spacing=1.08)
+                     emphasis_color=pal.accent, align=align, line_spacing=1.08)
     return VGroup(words)
 
 
@@ -205,6 +206,7 @@ class Plan:
     progress: object
     pictures: int
     before_word: object | None = None
+    persistent_labels: bool = False
 
 
 def reveal(plan: Plan, value: float) -> None:
@@ -256,7 +258,7 @@ def reveal(plan: Plan, value: float) -> None:
     # covered/uncovered. A solid pill remains legible against any photograph.
     for label, after in ((plan.before_label, False), (plan.after_label, True)):
         if label is not None:
-            label.set_opacity(_label_opacity(plan, label, p, after=after))
+            label.set_opacity(1 if plan.persistent_labels else _label_opacity(plan, label, p, after=after))
     if horizontal:
         start, end = [edge, cy - fh / 2, 0], [edge, cy + fh / 2, 0]
         plan.handle.move_to([edge, cy, 0])

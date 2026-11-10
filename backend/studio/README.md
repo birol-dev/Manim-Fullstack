@@ -87,6 +87,12 @@ and a pointer on a graduated scale. Comparison's **Comparison ledger** layout
 aligns the two options in ruled columns. These choices are available in the
 editor and through the same template parameters in MCP.
 
+The remaining gallery families use **Gallery** photo stories with separate captions,
+**Proof frame** before/after frames, **Ruled agenda** steps, **Broadcast** quizzes,
+**Poster** celebrations, **Report** charts, and **Annual report** recaps. Their
+`layout` choices are independent of the theme; existing saved projects keep their
+original layout unless changed. MCP's template schemas expose the same choices.
+
 Open **With AI** beside the preview to save a shareable draft and copy an MCP
 brief for its project. Agents should read the current project, apply changes with
 `base_revision`, and inspect a storyboard. The open editor picks up saved changes

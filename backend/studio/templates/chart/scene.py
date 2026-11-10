@@ -67,6 +67,17 @@ class Template(StudioScene):
                 words.move_to([x, content.bottom + label_h - words.height / 2
                                - getattr(words, "chart_row", 0) * (line_h + .14), 0])
         self.axes, self.marks = self._drawing(self.plot_region)
+        if p.layout == "report":
+            y = self.heading.get_bottom()[1] - 2 * u
+            R = self.plot_region
+            rules = VGroup(
+                Line([S.left, y, 0], [S.right, y, 0]).set_stroke(theme.line, width=1.5),
+                Line([S.left, y, 0], [S.left + S.width * .16, y, 0]).set_stroke(self.accent, width=4),
+                Line([R.left, R.top, 0], [R.right, R.top, 0]),
+                Line([R.right, R.top, 0], [R.right, R.bottom, 0]),
+            )
+            rules[2:].set_stroke(theme.line, width=1, opacity=.55)
+            self.axes.add(rules)
         return self.heading, self.entries, self.axes, self.marks
 
     def _direct_labels(self, R):

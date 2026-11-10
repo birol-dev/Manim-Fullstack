@@ -1,8 +1,10 @@
 """Quiz: one question, or a whole quiz of up to 12, each with answers and a thinking timer."""
 
+from typing import Literal
+
 from pydantic import field_validator
 
-from studio.schema import Item, Preset, TemplateMeta, TemplateParams, integer, items, toggle
+from studio.schema import Item, Preset, TemplateMeta, TemplateParams, choice, integer, items, toggle
 from studio.schema import text as text_field
 
 META = TemplateMeta(
@@ -87,6 +89,10 @@ def label_for(index: int, total: int, typed: str) -> str:
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "broadcast"] = choice("classic", title="Layout",
+        labels={"classic": "Classic", "broadcast": "Broadcast"},
+        option_help={"classic": "Centered question with rounded answer cards.",
+                     "broadcast": "Left-aligned question, a ruled masthead and square answer markers."})
     label: str = text_field("Question 1", title="Label", max_length=32,
                             description="A small line above the question, e.g. 'Question 3 of 10'. "
                                         "With more than one question the count fills in by itself; "
@@ -150,7 +156,7 @@ class Params(TemplateParams):
 PRESETS = [
     Preset(
         id="general-knowledge", title="General knowledge", summary="A four-answer trivia question with a short explanation.",
-        params={
+        params={"layout": "broadcast",
             "label": "Question 3 of 10",
             "question": "Which planet is known as the Red Planet?",
             "options": [{"text": "Venus"}, {"text": "Mars"}, {"text": "Jupiter"}, {"text": "Mercury"}],
@@ -162,7 +168,7 @@ PRESETS = [
     ),
     Preset(
         id="vocabulary", title="Vocabulary", summary="What does this word mean? Great for language classes.",
-        params={
+        params={"layout": "broadcast",
             "label": "Word of the day",
             "question": "What does 'ephemeral' mean?",
             "options": [{"text": "Lasting a very short time"}, {"text": "Extremely large"},
@@ -175,7 +181,7 @@ PRESETS = [
     ),
     Preset(
         id="classroom-math", title="Classroom math", summary="Mental math for the projector, in plain text.",
-        params={
+        params={"layout": "broadcast",
             "label": "Mental math",
             "question": "7 × 8 = ?",
             "options": [{"text": "54"}, {"text": "56"}, {"text": "58"}, {"text": "64"}],
@@ -187,7 +193,7 @@ PRESETS = [
     ),
     Preset(
         id="true-or-false", title="True or false", summary="Two big answers: a fast myth-buster.",
-        params={
+        params={"layout": "broadcast",
             "label": "True or false?",
             "question": "Lightning never strikes the same place twice.",
             "options": [{"text": "True"}, {"text": "False"}],
@@ -199,7 +205,7 @@ PRESETS = [
     ),
     Preset(
         id="kids-quiz", title="Kids' quiz", summary="A cheerful animal question with a quick timer.",
-        params={
+        params={"layout": "broadcast",
             "label": "Animal quiz",
             "question": "How many legs does a spider have?",
             "options": [{"text": "Six"}, {"text": "Eight"}, {"text": "Ten"}, {"text": "Four"}],
@@ -212,7 +218,7 @@ PRESETS = [
     Preset(
         id="five-question-quiz", title="Five-question class quiz",
         summary="Five general knowledge questions with answers and short explanations, in one video.",
-        params={
+        params={"layout": "broadcast",
             "label": "",
             "question": "Which planet is known as the Red Planet?",
             "options": [{"text": "Venus"}, {"text": "Mars"}, {"text": "Jupiter"}, {"text": "Mercury"}],

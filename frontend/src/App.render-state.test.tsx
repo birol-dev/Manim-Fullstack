@@ -425,7 +425,8 @@ describe("typed scene names and browser storage", () => {
 
     fireEvent.change(screen.getByLabelText("Code editor"), { target: { value: "# keep\n" } });
     writeFromOtherTab({ "b.py": "# b\n" });
-    expect(await screen.findByText("a.py was renamed or deleted in another tab")).toBeInTheDocument();
+    // Both storage events can replace the toast; assert against the current DOM.
+    await waitFor(() => expect(screen.getByText("a.py was renamed or deleted in another tab")).toBeInTheDocument());
     fireEvent.keyDown(window, { key: "s", ctrlKey: true });
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("a.py no longer exists")).toBeInTheDocument();

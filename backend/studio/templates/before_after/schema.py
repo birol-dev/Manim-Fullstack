@@ -30,6 +30,10 @@ SPEEDS = {"slow": "Slow", "normal": "Normal", "fast": "Fast"}
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "proof"] = choice("classic", title="Layout",
+        labels={"classic": "Full picture", "proof": "Proof frame"},
+        option_help={"classic": "Labels sit inside the picture.",
+                     "proof": "A ruled picture frame with labels outside the reveal."})
     before: Optional[str] = image_field(
         title="Before picture", crop="free",
         help="Optional. Empty draws a color panel with the word.",
@@ -100,7 +104,7 @@ PRESETS = [
     Preset(
         id="room-makeover", title="Room makeover",
         summary="The same room, before and after a weekend of work.",
-        params={"before_label": "Before", "after_label": "After",
+        params={"layout": "proof", "before_label": "Before", "after_label": "After",
                 "headline": "Same room, *new life*.", "direction": "left", "speed": "normal"},
         settings={"theme": "pastel"},
         tags=["makeover", "room", "home", "renovation", "interior"],
@@ -108,7 +112,7 @@ PRESETS = [
     Preset(
         id="design-redo", title="Design redo",
         summary="An old look and its fresh new version, side by side.",
-        params={"before_label": "Old logo", "after_label": "New logo",
+        params={"layout": "proof", "before_label": "Old logo", "after_label": "New logo",
                 "headline": "A *fresh* look", "direction": "right", "speed": "fast"},
         settings={"theme": "clean"},
         tags=["design", "logo", "brand", "rebrand", "graphic"],
@@ -116,7 +120,7 @@ PRESETS = [
     Preset(
         id="fitness-progress", title="Progress check",
         summary="Week one and week twelve, for a fitness or training update.",
-        params={"before_label": "Week 1", "after_label": "Week 12",
+        params={"layout": "proof", "before_label": "Week 1", "after_label": "Week 12",
                 "headline": "Twelve weeks *stronger*", "direction": "top", "speed": "normal"},
         settings={"theme": "pop", "energy": "punchy"},
         tags=["fitness", "progress", "training", "gym", "transformation"],

@@ -11,6 +11,8 @@ from manim import (
     Arc,
     CapStyleType,
     Circle,
+    Line,
+    Square,
     FadeIn,
     FadeOut,
     ValueTracker,
@@ -107,8 +109,13 @@ class Template(StudioScene):
 
         question = fit_text(question_text, width=plan.q_width, size=plan.q_size, min_size=plan.q_size,
                             max_lines=max(8, plan.q_lines),
-                            font=theme.font, weight=theme.display_weight, color=theme.text, line_spacing=1.0)
+                            font=theme.font, weight=theme.display_weight, color=theme.text, line_spacing=1.0,
+                            align="left" if p.layout == "broadcast" else "center")
         question.move_to([cx, plan.q_center_y, 0])
+        if p.layout == "broadcast":
+            question.shift([R.left - question.get_left()[0], 0, 0])
+            if pill is not None:
+                pill.shift([R.left - pill.get_left()[0], 0, 0])
 
         cards = self._cards(options, plan, pal, R)
         panel = None
@@ -232,6 +239,13 @@ class Template(StudioScene):
         if self.s.background.kind == "transparent":
             return ()
         lay, theme = self.layout, self.theme
+        if self.p.layout == "broadcast":
+            R, u = lay.safe, lay.unit
+            y = R.top + 2 * u
+            rule = Line([R.left, y, 0], [R.right, y, 0]).set_stroke(pal.line, width=1.5)
+            cue = Line([R.left, y, 0], [R.left + R.width * .16, y, 0]).set_stroke(pal.primary, width=4)
+            self.add(rule, cue)
+            return (rule, cue)
         w, h, short = lay.frame_width, lay.frame_height, lay.short
         alpha = 0.10 if theme.dark else 0.09
         big = Circle(radius=short * 0.46).set_fill(pal.primary, alpha).set_stroke(width=0)
@@ -243,6 +257,9 @@ class Template(StudioScene):
 
     def _pill(self, text, pal, R):
         unit = self.layout.unit
+        if self.p.layout == "broadcast":
+            return label(text, size=28, font=self.theme.font, weight="BOLD",
+                         color=pal.text, max_width=R.width)
         pad = unit * 3.6
         txt = label(text, size=28, weight="BOLD", color=pal.on_primary, max_width=R.width - 2 * pad)
         pill = shapes.pill(txt.width + 2 * pad, unit * 6.6, color=pal.primary)
@@ -305,12 +322,18 @@ class Template(StudioScene):
         w, h = plan.card_w, plan.card_h
         punchy = theme.display_weight == "HEAVY"  # the pop theme: hard edges, black outlines
         radius = min(theme.radius * 1.15, h / 2)
+        broadcast = self.p.layout == "broadcast"
+        if broadcast:
+            radius = 0
         depth = unit * (1.8 if punchy else 1.1)
         shadow = shapes.card(w, h, color=pal.line, radius=radius).shift(DOWN * depth)
+        if broadcast:
+            shadow.set_opacity(0)
         face = shapes.card(w, h, color=pal.surface, radius=radius, stroke=pal.line,
                            stroke_width=6 if punchy else 2.5)
         sx = -w / 2 + plan.pad_l + plan.slot_d / 2
-        slot = Circle(radius=plan.slot_d / 2).move_to([sx, 0, 0])
+        slot = (Square(side_length=plan.slot_d) if broadcast and self.p.show_letters
+                else Circle(radius=plan.slot_d / 2)).move_to([sx, 0, 0])
         letter = None
         if self.p.show_letters:
             slot.set_fill(pal.primary, 1).set_stroke(width=0)

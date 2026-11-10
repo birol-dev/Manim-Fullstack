@@ -34,6 +34,20 @@ Make each clip answer one visual question from the brief. The viewer should be a
 
 The reusable pattern is **show the problem → reveal the structure → trace one real example → hold the consequence**. Match that progression to the user's narration. Use the reference's restraint and timing with an original layout, labels, and data.
 
+## Reuse a layout for simpler shots
+
+Read `get_template` before building a shot from an installed template. Layout and theme
+are separate choices. Use `chart` with `layout="report"` for measured quantities,
+`comparison` with `layout="ledger"` for two aligned options, or `number_card` with
+`layout="editorial"` for a single claim. Preserve units, dates, and sources; use a shared
+scale when comparing quantities. Label illustrative data as an example.
+
+Use `slideshow` with `layout="gallery"` when captions should sit outside the images,
+`before_after` with `layout="proof"` for a framed picture reveal, or `steps` with
+`layout="editorial"` for an ordered agenda. Review the intended aspect ratio before
+exporting. Use complete Python scenes for a custom tree, table, moving data path, or
+several linked states; the template list is a starting point for simpler shots.
+
 ## Render, look, revise
 
 1. Use `write_script` with a `.py` filename and complete Manim Community source. For an existing file, call `read_script` and supply its `version` as `base_version`. Custom scenes require **Allow AI apps to write and run Python** in Studio's **AI apps** settings.

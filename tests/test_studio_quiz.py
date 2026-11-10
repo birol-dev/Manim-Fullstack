@@ -128,7 +128,7 @@ def test_the_layout_test_strings_use_the_schema_limits():
 @pytest.mark.parametrize("dimensions", [(SIXTEEN_NINE, 8), (8, SIXTEEN_NINE), (8, 8), (8, 10)],
                          ids=["16:9", "9:16", "1:1", "4:5"])
 @pytest.mark.parametrize("answer_count", [4, 2])
-def test_maximum_length_questions_and_answers_fit_around_the_logo(dimensions, answer_count):
+def test_maximum_length_questions_and_answers_fit_around_the_logo(tmp_path, dimensions, answer_count):
     pytest.importorskip("manim")
     from manim import tempconfig
 
@@ -140,7 +140,7 @@ def test_maximum_length_questions_and_answers_fit_around_the_logo(dimensions, an
     from studio.templates.quiz.planner import plan_layout
     from studio.themes import theme_tokens
 
-    with tempconfig({"media_dir": str(Path(tempfile.gettempdir()) / "quiz-layout-media")}):
+    with tempconfig({"media_dir": str(tmp_path / "media")}):
         fonts.register_bundled()
         layout = Layout(*dimensions)
         layout.bottom += 13 * layout.unit  # reserve_logo_band for the bottom-left logo

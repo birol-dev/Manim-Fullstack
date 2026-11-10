@@ -38,6 +38,10 @@ class Datum(Item):
 
 
 class Params(TemplateParams):
+    layout: Literal["classic", "report"] = choice("classic", title="Layout",
+        labels={"classic": "Classic", "report": "Report"},
+        option_help={"classic": "Open chart with a simple heading.",
+                     "report": "Ruled report masthead and a framed plotting area."})
     title: str = text_field("A *strong* quarter", title="Title", max_length=48,
         help="Put *asterisks* around words to color them.",
         description="What the chart shows, up to 48 characters. Put *asterisks* around a word to color it.")
@@ -80,39 +84,39 @@ class Params(TemplateParams):
 
 PRESETS = [
     Preset(id="sales-by-quarter", title="Sales by quarter", summary="Example quarterly sales for a small shop.",
-        params={"title": "Sales by *quarter*", "values": [
+        params={"layout": "report", "title": "Sales by *quarter*", "values": [
             {"label": "Q1", "value": 12000}, {"label": "Q2", "value": 18000},
             {"label": "Q3", "value": 15500}, {"label": "Q4", "value": 24000}], "chart_type": "bars"},
         settings={"theme": "clean"}, tags=["sales", "quarter", "business", "example data"]),
     Preset(id="survey-results", title="Survey results", summary="Example answers to a community survey.",
-        params={"title": "Which event should we *run next*?", "values": [
+        params={"layout": "report", "title": "Which event should we *run next*?", "values": [
             {"label": "Outdoor cinema", "value": 45}, {"label": "Food market", "value": 30},
             {"label": "Live music", "value": 25}], "chart_type": "pie"},
         settings={"theme": "pastel", "aspect": "1:1"}, tags=["survey", "community", "example data"]),
     Preset(id="monthly-visitors", title="Monthly visitors", summary="Example website visits across six months.",
-        params={"title": "Monthly *visitors*", "values": [
+        params={"layout": "report", "title": "Monthly *visitors*", "values": [
             {"label": "January", "value": 820}, {"label": "February", "value": 1040},
             {"label": "March", "value": 980}, {"label": "April", "value": 1320},
             {"label": "May", "value": 1510}, {"label": "June", "value": 1840}], "chart_type": "line"},
         settings={"theme": "afterglow", "aspect": "9:16"}, tags=["visitors", "website", "example data"]),
     Preset(id="budget-breakdown", title="Where the budget goes", summary="Show how a monthly budget is split.",
-        params={"title": "Where the *budget* goes", "chart_type": "pie", "values": [
+        params={"layout": "report", "title": "Where the *budget* goes", "chart_type": "pie", "values": [
             {"label": "Rent", "value": 1200}, {"label": "Food", "value": 450},
             {"label": "Transport", "value": 180}, {"label": "Savings", "value": 600}]},
         settings={"theme": "clean"}, tags=["budget", "spending", "breakdown", "example data"]),
     Preset(id="weekly-habits", title="A week of progress", summary="Seven bars for minutes spent on a daily habit.",
-        params={"title": "A little *every day*", "chart_type": "bars", "values": [
+        params={"layout": "report", "title": "A little *every day*", "chart_type": "bars", "values": [
             {"label": "Mon", "value": 20}, {"label": "Tue", "value": 35}, {"label": "Wed", "value": 30},
             {"label": "Thu", "value": 45}, {"label": "Fri", "value": 25}, {"label": "Sat", "value": 60},
             {"label": "Sun", "value": 40}]},
         settings={"theme": "chalk"}, tags=["habit", "weekly", "study", "example data"]),
     Preset(id="quarterly-profit", title="From loss to profit", summary="A chart with negative and positive results.",
-        params={"title": "Turning the *corner*", "chart_type": "bars", "values": [
+        params={"layout": "report", "title": "Turning the *corner*", "chart_type": "bars", "values": [
             {"label": "Q1", "value": -12000}, {"label": "Q2", "value": -4000},
             {"label": "Q3", "value": 6000}, {"label": "Q4", "value": 18000}]},
         settings={"theme": "newsroom"}, tags=["profit", "loss", "finance", "example data"]),
     Preset(id="audience-growth", title="Audience over time", summary="A line chart showing a growing audience across six months.",
-        params={"title": "Building an *audience*", "chart_type": "line", "values": [
+        params={"layout": "report", "title": "Building an *audience*", "chart_type": "line", "values": [
             {"label": "Jan", "value": 1200}, {"label": "Feb", "value": 1800},
             {"label": "Mar", "value": 2600}, {"label": "Apr", "value": 4100},
             {"label": "May", "value": 5800}, {"label": "Jun", "value": 8200}]},
