@@ -24,16 +24,18 @@ class Params(TemplateParams):
     prefix: str = text("$", title="Before the number", max_length=4)
     suffix: str = text("", title="Unit", max_length=8)
     decimals: int = integer(0, title="Decimal places", ge=0, le=2)
-    style: Literal["ring", "bar", "segments"] = choice("ring", title="Progress style",
-        labels={"ring": "Ring", "bar": "Progress bar", "segments": "Milestone blocks"})
+    style: Literal["ring", "bar", "segments", "ruler"] = choice("ring", title="Progress style",
+        labels={"ring": "Ring", "bar": "Progress bar", "segments": "Milestone blocks", "ruler": "Measured ruler"},
+        option_help={"ring": "A circle fills toward the target.", "bar": "A bar fills toward the target.",
+                     "segments": "Milestone blocks fill in order.", "ruler": "A large percentage above a graduated scale and moving pointer."})
     note: str = text("Every contribution brings us closer", title="Note", max_length=80)
 
 
 PRESETS = [
     Preset(id="fundraising-goal", title="Fundraising goal", summary="Money raised, the full target and the percentage reached.",
-        params={"title": "Help build the next chapter", "current": 12400, "target": 20000, "prefix": "$",
+        params={"title": "Help build the next chapter", "style": "ruler", "current": 12400, "target": 20000, "prefix": "$",
             "note": "Example campaign · Every contribution counts"},
-        settings={"theme": "clean"}, tags=["fundraising", "charity", "goal", "example data"]),
+        settings={"theme": "print_grid"}, tags=["fundraising", "charity", "goal", "example data"]),
     Preset(id="savings-goal", title="Savings goal", summary="A growing bar showing progress toward a savings target.",
         params={"title": "A little closer to the trip", "current": 3250, "target": 5000, "prefix": "$",
             "style": "bar", "note": "Example savings plan"},
@@ -48,6 +50,6 @@ PRESETS = [
         settings={"theme": "chalk", "aspect": "9:16"}, tags=["reading", "books", "challenge", "example data"]),
     Preset(id="sales-target", title="Sales target", summary="Show a target exceeded, with the true percentage still visible.",
         params={"title": "Beyond the target", "current": 54000, "target": 50000, "prefix": "$",
-            "style": "bar", "note": "Example quarterly result"},
+            "style": "ruler", "note": "Example quarterly result"},
         settings={"theme": "newsroom"}, tags=["sales", "target", "business", "example data"]),
 ]

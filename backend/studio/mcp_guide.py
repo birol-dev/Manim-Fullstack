@@ -320,6 +320,14 @@ with `style="signal"` opens with a diamond and a rule, then brings in the text.
 `interval_timer`, `style="console"` gives the current phase a large readout and
 shows a separate session meter when several phases play.
 
+For numerical graphics, `number_card` with `layout="editorial"` gives each figure
+a ruled label and a large readout. `goal_progress` with `style="ruler"` places the
+true percentage above a graduated scale. Its pointer stops at 100% while a result
+above the target keeps its full percentage. `comparison` with `layout="ledger"`
+aligns two options in ruled columns, with matching measures and shared-scale bars.
+Keep units, dates, and sources visible. Use the storyboard to check that every
+label and number is readable in the intended aspect ratio.
+
 ## Background
 
 `settings.background.kind` is one of {", ".join(f"`{kind}`" for kind in background)}:

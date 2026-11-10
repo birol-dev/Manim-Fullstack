@@ -31,6 +31,10 @@ class Metric(Item):
 
 class Params(TemplateParams):
     title: str = text("A clearer comparison", title="Title", max_length=48)
+    layout: Literal["cards", "ledger"] = choice("cards", title="Layout",
+        labels={"cards": "Cards", "ledger": "Comparison ledger"},
+        option_help={"cards": "A card for each matching measure.",
+                     "ledger": "Two ruled columns with aligned values and shared-scale bars."})
     left_label: str = text("Before", title="First option", max_length=24)
     right_label: str = text("After", title="Second option", max_length=24)
     metrics: list[Metric] = items([Metric(label="Monthly cost", left=49, right=29, prefix="$", better="lower")],
@@ -44,38 +48,38 @@ class Params(TemplateParams):
 
 PRESETS = [
     Preset(id="before-after-results", title="Before vs after", summary="Show the effect of a change with three matching measures.",
-        params={"title": "A faster website", "left_label": "Before", "right_label": "After", "metrics": [
+        params={"title": "A faster website", "layout": "ledger", "left_label": "Before", "right_label": "After", "metrics": [
             {"label": "Load time", "left": 4.8, "right": 1.6, "suffix": " s", "decimals": 1, "better": "lower"},
             {"label": "Page size", "left": 3.2, "right": 1.1, "suffix": " MB", "decimals": 1, "better": "lower"},
             {"label": "Performance score", "left": 48, "right": 96, "better": "higher"}],
             "source": "Example results. Replace with your measurements."},
         settings={"theme": "clean"}, tags=["before after", "performance", "example data"]),
     Preset(id="plan-comparison", title="Compare two plans", summary="Price, storage and seats in a clear two-column comparison.",
-        params={"title": "Which plan fits?", "left_label": "Starter", "right_label": "Team", "metrics": [
+        params={"title": "Which plan fits?", "layout": "ledger", "left_label": "Starter", "right_label": "Team", "metrics": [
             {"label": "Monthly price", "left": 12, "right": 29, "prefix": "$"},
             {"label": "Storage", "left": 10, "right": 100, "suffix": " GB", "better": "higher"},
             {"label": "Seats included", "left": 1, "right": 5, "better": "higher"}],
             "takeaway": "Choose the capacity your team needs", "source": "Example plans"},
         settings={"theme": "midnight"}, tags=["plans", "pricing", "product", "example data"]),
     Preset(id="month-over-month", title="This month vs last", summary="Put two periods side by side, with three business measures.",
-        params={"title": "A month of progress", "left_label": "Last month", "right_label": "This month", "metrics": [
+        params={"title": "A month of progress", "layout": "ledger", "left_label": "Last month", "right_label": "This month", "metrics": [
             {"label": "Revenue", "left": 18000, "right": 24000, "prefix": "$", "better": "higher"},
             {"label": "Orders", "left": 320, "right": 410, "better": "higher"},
             {"label": "Repeat customers", "left": 28, "right": 36, "suffix": "%", "better": "higher"}],
             "source": "Example monthly figures"},
         settings={"theme": "newsroom"}, tags=["monthly", "business", "growth", "example data"]),
     Preset(id="ab-results", title="A/B test results", summary="Two variants, one conversion measure, with the uplift calculated.",
-        params={"title": "One change. Measurable results.", "left_label": "Version A", "right_label": "Version B",
+        params={"title": "One change. Measurable results.", "layout": "ledger", "left_label": "Version A", "right_label": "Version B",
             "metrics": [{"label": "Conversion rate", "left": 2.4, "right": 3.1, "suffix": "%", "decimals": 1,
                          "better": "higher"}], "source": "Example A/B results"},
         settings={"theme": "pastel", "aspect": "1:1"}, tags=["A/B", "experiment", "conversion", "example data"]),
     Preset(id="cost-comparison", title="Compare running costs", summary="Show the cost of two alternatives over the same period.",
-        params={"title": "What does it cost to run?", "left_label": "Option A", "right_label": "Option B",
+        params={"title": "What does it cost to run?", "layout": "ledger", "left_label": "Option A", "right_label": "Option B",
             "metrics": [{"label": "Annual running cost", "left": 1240, "right": 680, "prefix": "$", "better": "lower"}],
             "source": "Example estimate. Same usage and period for both."},
         settings={"theme": "chalk"}, tags=["cost", "savings", "comparison", "example data"]),
     Preset(id="product-head-to-head", title="Product head-to-head", summary="Compare battery life, weight and price without declaring one winner.",
-        params={"title": "Pick what matters to you", "left_label": "Model A", "right_label": "Model B", "metrics": [
+        params={"title": "Pick what matters to you", "layout": "ledger", "left_label": "Model A", "right_label": "Model B", "metrics": [
             {"label": "Battery life", "left": 12, "right": 18, "suffix": " h", "better": "higher"},
             {"label": "Weight", "left": 1.2, "right": 1.6, "suffix": " kg", "decimals": 1, "better": "lower"},
             {"label": "Price", "left": 899, "right": 1099, "prefix": "$", "better": "lower"}],

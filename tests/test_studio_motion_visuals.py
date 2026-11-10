@@ -25,6 +25,9 @@ CASES = [
     ("quiz", "general-knowledge", {}),
     ("quote", "inspirational-quote", {}),
     ("year_in_review", "small-business-year", {}),
+    pytest.param("number_card", "big-statistic", {}, id="editorial-number"),
+    pytest.param("goal_progress", "fundraising-goal", {}, id="goal-ruler"),
+    pytest.param("comparison", "before-after-results", {}, id="comparison-ledger"),
 ]
 
 

@@ -1,7 +1,7 @@
 """Measured number cards; only cached glyphs change during the count-up."""
 from math import ceil
 
-from manim import Line, VGroup
+from manim import LEFT, ORIGIN, LaggedStart, Line, VGroup
 
 from studio.kit import Counter, Region, StudioScene, ease_out, fit_text, shapes
 
@@ -13,35 +13,48 @@ class Template(StudioScene):
     META = META
     logo_region = "bottom-right"
 
-    def words(self, source, box, *, size=34, color=None):
+    def words(self, source, box, *, size=34, color=None, align="center", max_lines=2):
         words = fit_text(source, width=box.width, height=box.height, size=size, min_size=24,
-            max_lines=2, font=self.theme.font, color=color or self.theme.text,
-            emphasis_color=self.theme.accent(0))
-        return box.fit(words)
+            max_lines=max_lines, font=self.theme.font, color=color or self.theme.text,
+            emphasis_color=self.theme.accent(0), align=align)
+        return box.fit(words, align=align)
 
     def build(self):
         self.reserve_logo_band()
         p, lay, theme, motion = self.p, self.layout, self.theme, self.motion
-        heading, content, footer = lay.safe.split_rows([.16, .76, .08], gap=lay.unit * 2.5)
+        editorial = p.layout == "editorial"
+        align = "left" if editorial else "center"
+        weights = [.16, .70, .14] if editorial and p.source else [.16, .76, .08]
+        heading, content, footer = lay.safe.split_rows(weights, gap=lay.unit * 2.5)
         fixed = VGroup()
         if p.title:
-            fixed.add(self.words(theme.display(p.title), heading, size=50))
+            fixed.add(self.words(theme.display(p.title), heading, size=50, align=align))
         if p.source:
-            fixed.add(self.words(p.source, footer, size=25, color=theme.muted))
+            fixed.add(self.words(p.source, footer, size=25, color=theme.muted, align=align,
+                                 max_lines=4 if editorial else 2))
         count = len(p.figures)
         columns = (count if count <= 3 else 2) if lay.is_landscape else (2 if count == 4 else 1)
         rows = content.split_rows([1] * ceil(count / columns), gap=lay.unit * 3)
         boxes = [box for row in rows for box in row.split_cols([1] * columns, gap=lay.unit * 3)]
-        counters, anchors = [], []
+        counters, anchors, figure_groups = [], [], []
         for index, (figure, box) in enumerate(zip(p.figures, boxes)):
             accent = theme.accent(index)
-            fixed.add(shapes.card(box.width, box.height, color=theme.surface, radius=.24).move_to(box.center))
-            fixed.add(Line(box.point(.08, .04), box.point(.24, .04)).set_stroke(accent, width=5))
-            fixed.add(self.words(figure.label or "Number", box_region(box, .08, .08, .92, .24),
-                                 size=40 if count == 1 else 30, color=theme.muted))
+            details = VGroup()
+            if editorial:
+                details.add(Line(box.point(0, .02), box.point(1, .02)).set_stroke(theme.line, width=1.5),
+                            Line(box.point(0, .02), box.point(.12, .02)).set_stroke(accent, width=5))
+            else:
+                details.add(shapes.card(box.width, box.height, color=theme.surface, radius=.24).move_to(box.center))
+                details.add(Line(box.point(.08, .04), box.point(.24, .04)).set_stroke(accent, width=5))
+            inset = 0 if editorial else .08
+            details.add(self.words(figure.label or "Number", box_region(box, inset, .08, 1 - inset, .24),
+                                  size=40 if count == 1 else 30, color=theme.muted, align=align))
             value_box = box_region(box, .07, .31, .93, .71 if figure.note else .84)
+            if editorial:
+                value_box = box_region(box, 0, .30, .90 if count > 1 else 1, .67 if figure.note else .90)
             counter = Counter(figure.value, size=210 if count == 1 else 104,
-                font=theme.font, weight=theme.display_weight, color=accent,
+                font=theme.font, weight=theme.display_weight, color=theme.text if editorial else accent,
+                anchor="left" if editorial else "center",
                 fmt={"locale": self.s.locale, "prefix": figure.prefix, "suffix": figure.suffix,
                      "decimals": figure.decimals, "compact": figure.compact}, sample_values=(figure.start,))
             if figure.suffix and figure.suffix[0].isalnum():
@@ -56,14 +69,25 @@ class Template(StudioScene):
             counter.set_value(figure.start)
             counter.scale(min(1, value_box.width / max(width, .01),
                               value_box.height / max(height, .01))).move_to(value_box.center)
+            if editorial:
+                counter.align_to(value_box.point(0, .5), LEFT)
             if figure.note:
-                fixed.add(self.words(figure.note, box_region(box, .08, .79, .92, .95), size=28, color=theme.muted))
+                note_box = box_region(box, inset, .73 if editorial else .79, 1 - inset, .95)
+                details.add(self.words(figure.note, note_box, size=28, color=theme.muted, align=align,
+                                       max_lines=4 if editorial else 2))
+            figure_groups.append(details)
             counters.append(counter)
-            anchors.append(float(value_box.center[0]))
-        self.play(motion.appear(fixed, "rise"), *[motion.appear(counter, "fade") for counter in counters])
+            anchors.append(float(value_box.left if editorial else value_box.center[0]))
+        if editorial:
+            self.play(motion.appear(fixed, "fade"), LaggedStart(*[
+                motion.appear(details, "rise") for details in figure_groups
+            ], lag_ratio=.18), *[motion.appear(counter, "fade") for counter in counters])
+        else:
+            fixed.add(*figure_groups)
+            self.play(motion.appear(fixed, "rise"), *[motion.appear(counter, "fade") for counter in counters])
         animations = [counter.counting(figure.start, figure.value)[1] for counter, figure in zip(counters, p.figures)]
         for counter, anchor in zip(counters, anchors):
-            counter.add_updater(lambda mob, x=anchor: mob.set_x(x))
+            counter.add_updater(lambda mob, x=anchor: mob.set_x(x, direction=LEFT if editorial else ORIGIN))
         self.play(*animations, run_time=min(2.6, max(.8, self.remaining() * .5)), rate_func=ease_out)
         for counter in counters:
             counter.clear_updaters()

@@ -1,7 +1,9 @@
 """One striking number or a small, animated KPI dashboard."""
+from typing import Literal
+
 from pydantic import ConfigDict
 
-from studio.schema import Item, Preset, TemplateMeta, TemplateParams, integer, items, number, text, toggle
+from studio.schema import Item, Preset, TemplateMeta, TemplateParams, choice, integer, items, number, text, toggle
 
 META = TemplateMeta(
     id="number_card", title="Number spotlight", category="numbers",
@@ -28,37 +30,41 @@ class Figure(Item):
 
 class Params(TemplateParams):
     title: str = text("The number that matters", title="Title", max_length=48)
+    layout: Literal["cards", "editorial"] = choice("cards", title="Layout",
+        labels={"cards": "Cards", "editorial": "Editorial figures"},
+        option_help={"cards": "Rounded cards with a centered number.",
+                     "editorial": "Large figures with ruled labels and a staggered reveal."})
     figures: list[Figure] = items([Figure()], title="Numbers", min_items=1, max_items=4, item_title="Number")
     source: str = text("", title="Source or period", max_length=96)
 
 
 PRESETS = [
     Preset(id="big-statistic", title="One big statistic", summary="Lead with one clear number and the context that makes it useful.",
-        params={"title": "Small actions. Real reach.", "figures": [{"label": "People reached", "value": 12480,
+        params={"title": "Small actions. Real reach.", "layout": "editorial", "figures": [{"label": "People reached", "value": 12480,
             "note": "Across our community projects"}], "source": "Example statistic. Add your source."},
-        settings={"theme": "clean"}, tags=["statistic", "reach", "example data"]),
+        settings={"theme": "print_grid"}, tags=["statistic", "reach", "example data"]),
     Preset(id="revenue-counter", title="Revenue counter", summary="A currency counter with a label, period and short context.",
-        params={"title": "A strong month", "figures": [{"label": "Revenue", "value": 48650, "prefix": "$",
+        params={"title": "A strong month", "layout": "editorial", "figures": [{"label": "Revenue", "value": 48650, "prefix": "$",
             "note": "From 620 completed orders"}], "source": "Example figures · October"},
         settings={"theme": "midnight"}, tags=["revenue", "money", "business", "example data"]),
     Preset(id="kpi-snapshot", title="KPI snapshot", summary="Three business numbers, shown together as a compact dashboard.",
-        params={"title": "The month at a glance", "figures": [
+        params={"title": "The month at a glance", "layout": "editorial", "figures": [
             {"label": "Revenue", "value": 48650, "prefix": "$", "note": "+18% vs last month"},
             {"label": "Orders", "value": 620, "note": "+64 vs last month"},
             {"label": "Repeat customers", "value": 36.5, "suffix": "%", "decimals": 1,
              "note": "Share of all customers"}], "source": "Example monthly figures"},
         settings={"theme": "newsroom"}, tags=["KPI", "dashboard", "business", "example data"]),
     Preset(id="audience-counter", title="Audience counter", summary="Count from an earlier audience size to the latest total.",
-        params={"title": "Growing together", "figures": [{"label": "Subscribers", "value": 25000,
+        params={"title": "Growing together", "layout": "editorial", "figures": [{"label": "Subscribers", "value": 25000,
             "start": 18000, "compact": True, "note": "From 18K to 25K this quarter"}], "source": "Example audience figures"},
         settings={"theme": "pastel", "aspect": "9:16"}, tags=["audience", "subscribers", "counter", "example data"]),
     Preset(id="percentage-spotlight", title="Percentage spotlight", summary="Make a survey percentage the focus, with room for its source.",
-        params={"title": "What people told us", "figures": [{"label": "Would recommend us", "value": 92.4,
+        params={"title": "What people told us", "layout": "editorial", "figures": [{"label": "Would recommend us", "value": 92.4,
             "suffix": "%", "decimals": 1, "note": "Of customers who answered the survey"}],
             "source": "Example survey · Add sample size and dates"},
         settings={"theme": "chalk", "aspect": "1:1"}, tags=["percentage", "survey", "statistic", "example data"]),
     Preset(id="impact-in-numbers", title="Impact in numbers", summary="Four measures of a project's impact, each with its own unit.",
-        params={"title": "What we made possible", "figures": [
+        params={"title": "What we made possible", "layout": "editorial", "figures": [
             {"label": "Meals shared", "value": 8500}, {"label": "Volunteer hours", "value": 1240},
             {"label": "Waste avoided", "value": 320, "suffix": " kg"},
             {"label": "Neighbourhoods", "value": 12}], "source": "Example community project"},

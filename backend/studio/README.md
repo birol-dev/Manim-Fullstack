@@ -81,6 +81,12 @@ Open **Design Studio** for an original Manim shot. Connected agents can write an
 **Look** and in MCP render settings. Announcement's **Device showcase** layout
 fits a product image or screenshot into a frame beside or above the text.
 
+Number spotlight's **Editorial figures** layout places large readouts beneath
+ruled labels. Goal progress's **Measured ruler** style shows the true percentage
+and a pointer on a graduated scale. Comparison's **Comparison ledger** layout
+aligns the two options in ruled columns. These choices are available in the
+editor and through the same template parameters in MCP.
+
 Open **With AI** beside the preview to save a shareable draft and copy an MCP
 brief for its project. Agents should read the current project, apply changes with
 `base_revision`, and inspect a storyboard. The open editor picks up saved changes
