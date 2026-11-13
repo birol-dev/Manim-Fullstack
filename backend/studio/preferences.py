@@ -167,6 +167,21 @@ def _favourites(value):
     return keys
 
 
+_EXPORT_CHOICE = re.compile(r"^[a-z0-9]{1,16}$")
+
+
+def _export_choice(field: str):
+    """The last export's file type or quality ("mp4", "1080p60"), or null."""
+    def check(value):
+        if value is None:
+            return None
+        if not isinstance(value, str) or not _EXPORT_CHOICE.match(value):
+            raise _error(field, "Use a file type or quality id, or null.")
+        return value
+
+    return check
+
+
 # Known keys and how to check them. New preferences are one entry here (and one
 # in the frontend's Preferences type); old files keep working.
 SCHEMA = {
@@ -184,6 +199,8 @@ SCHEMA = {
     "default_format": _optional_text("default_format", 32),
     "default_theme": _optional_text("default_theme", 64),
     "update_check": _boolean("update_check"),
+    "export_format": _export_choice("export_format"),
+    "export_quality": _export_choice("export_quality"),
 }
 PREFERENCE_KEYS = tuple(SCHEMA)
 
@@ -240,7 +257,11 @@ class PreferenceStore:
 
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with file_ops.locked(self.path):
-            merged = {**self.read(), **values}
+            current = self.read()
+            merged = {**current, **values}
+            if isinstance(values.get("brand_kit"), dict) and isinstance(current.get("brand_kit"), dict):
+                # A kit names only the fields it changes (null clears one); the rest stay.
+                merged["brand_kit"] = {**current["brand_kit"], **values["brand_kit"]}
             data = json.dumps(merged, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
             if len(data) > MAX_BYTES:
                 raise _error("body", f"Preferences are too large ({len(data)} bytes; "

@@ -13,7 +13,9 @@ import { cancelBatch, cancelExport, copyExportFile, friendlyError, getExport, ge
 import { Spinner } from "./components";
 import { ActionMenu } from "./ProjectMenu";
 import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
-import { useCatalog, useExports } from "./hooks";
+import { useCatalog, useExports, useNearViewport } from "./hooks";
+import { announceExport, markAnnounced, watchExport } from "./exportNotices";
+import { setExportChoice } from "./preferences";
 import {
   ACTIVE_EXPORT,
   EXPORT_FORMATS,
@@ -24,6 +26,7 @@ import {
   friendlyExportMessage,
   qualityLabel,
   QUALITIES,
+  rememberedExport,
   timeAgo,
   toDate,
 } from "./options";
@@ -187,8 +190,8 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
   const templateId = request().template;
   // Long timers set META.export_fps: every quality is rendered at that rate, so the dialog must not promise 60.
   const exportFps = catalog?.templates.find((item) => item.id === templateId)?.export_fps ?? null;
-  const [format, setFormat] = useState<ExportFormat>("mp4");
-  const [quality, setQuality] = useState<ExportQuality>("1080p");
+  const [format, setFormat] = useState<ExportFormat>(() => rememberedExport().format);
+  const [quality, setQuality] = useState<ExportQuality>(() => rememberedExport().quality);
   const [job, setJob] = useState<ExportJob | null>(null);
   const [jobPoster, setJobPoster] = useState<string | undefined>(undefined);
   const [starting, setStarting] = useState(false);
@@ -215,6 +218,7 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
   useEffect(() => {
     if (open && jobId && jobStatus === "done") seenRef.current?.(jobId);
   }, [open, jobId, jobStatus]);
+  useEffect(() => (jobId && active ? watchExport(jobId) : undefined), [jobId, active]);
   useEffect(() => {
     if (!jobId || !active || cancelling) return;
     let live = true;
@@ -229,13 +233,9 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
         setJob(next);
         if (!ACTIVE_EXPORT.has(next.status)) {
           activityRef.current?.();
-          if (!openRef.current && next.status === "done") {
-            toast.success(`${next.title || "Your video"} is ready`, {
-              action: next.url ? { label: "Download", onClick: () => window.open(apiUrl(next.url!), "_blank") } : undefined,
-            });
-          } else if (!openRef.current && next.status === "failed") {
-            toast.error("An export didn't work", { description: "Open Exports for details." });
-          }
+          // Closed dialog: say so the usual way. Open dialog: the result is right here.
+          if (openRef.current) markAnnounced(next.id);
+          else announceExport(next);
           return;
         }
       } catch {
@@ -259,6 +259,7 @@ export function ExportDialog({ open, onOpenChange, request, transparentBackgroun
       setJobPoster(posterUrl);
       onStart?.();
       const created = await startExport({ ...request(), format, quality: chosenQuality });
+      setExportChoice(format, quality);
       setJob(created);
       onActivity?.();
     } catch (error) {
@@ -470,6 +471,9 @@ function thumbTime(duration?: number | null): number {
 /** A small still of a finished file; anything the browser cannot show keeps the file icon. */
 function ExportThumb({ job, onOpen }: { job: ExportJob; onOpen?: (job: ExportJob) => void }) {
   const [failed, setFailed] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  // A long history must not load every file at once: a thumbnail loads as it scrolls near.
+  const near = useNearViewport(button);
   const title = job.title || "Untitled video";
   const preview = job.status === "done" && !!job.url && !failed;
   const video = preview && VIDEO_THUMB_FORMATS.has(job.format);
@@ -477,8 +481,8 @@ function ExportThumb({ job, onOpen }: { job: ExportJob; onOpen?: (job: ExportJob
   if (!video && !image) return <JobIcon job={job} />;
   const seek = thumbTime(job.duration);
   return (
-    <button type="button" className="studio-export-thumb" aria-label={`Open ${title}`} onClick={() => onOpen?.(job)} disabled={!onOpen}>
-      {video
+    <button ref={button} type="button" className="studio-export-thumb" aria-label={`Open ${title}`} onClick={() => onOpen?.(job)} disabled={!onOpen}>
+      {!near ? null : video
         ? <video
             src={`${apiUrl(job.url!)}#t=${seek}`}
             preload="metadata"
@@ -574,7 +578,9 @@ export function ExportRow({ job, onCancel, onView, onDeleted, onRefresh, compact
     if (!request || retrying) return;
     setRetrying(true);
     try {
-      await startExport(request);
+      // A failed row of a list is made again inside that list, not as a separate video.
+      if (job.batch_id && job.status === "failed") await retryBatch(job.batch_id, job.id);
+      else await startExport(request);
       onRefresh?.();
     } catch (error) {
       toast.error(friendlyError(error, "Couldn't start that export again."));
@@ -757,8 +763,12 @@ function groupExportsByDay(jobs: ExportJob[], now = new Date()): ExportDayGroup[
   return groups.filter((group) => group.jobs.length > 0);
 }
 
+/** How many finished files a list shows before "Show more". */
+export const EXPORTS_PAGE_SIZE = 60;
+
 function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = false }: { jobs: ExportJob[]; onCancel?: (job: ExportJob) => void; onRefresh?: () => void; grouped?: boolean; compact?: boolean }) {
   const [viewing, setViewing] = useState<ExportJob | null>(null);
+  const [limit, setLimit] = useState(EXPORTS_PAGE_SIZE);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
   const visible = jobs.filter((job) => !hidden.has(job.id));
   // A list is one row; single exports keep the "Making now" and day groups they always had.
@@ -766,7 +776,15 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
   const single = grouped ? visible.filter((job) => !job.batch_id) : visible;
   // Active jobs sit above the day groups: they are the only thing that needs an answer now.
   const active = grouped ? single.filter((job) => ACTIVE_EXPORT.has(job.status)) : [];
-  const finished = grouped ? single.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
+  const allFinished = grouped ? single.filter((job) => !ACTIVE_EXPORT.has(job.status)) : visible;
+  const finished = allFinished.slice(0, limit);
+  const more = allFinished.length - finished.length;
+  const showMore = more > 0 && <div className="studio-exports-more">
+    <Button variant="secondary" size="sm" onClick={() => setLimit((value) => value + EXPORTS_PAGE_SIZE)}>
+      Show {Math.min(more, EXPORTS_PAGE_SIZE)} more
+    </Button>
+    <span className="studio-exports-hint">{more} older {more === 1 ? "file" : "files"}</span>
+  </div>;
   const forget = (job: ExportJob) => {
     setHidden((current) => new Set(current).add(job.id));
     onRefresh?.();
@@ -789,8 +807,9 @@ function ExportsList({ jobs, onCancel, onRefresh, grouped = false, compact = fal
           <h2 id={`studio-export-day-${group.key}`} className="studio-export-day-label">{group.label}</h2>
           <ul className="studio-exports-list">{group.jobs.map(row)}</ul>
         </section>)}
+        {showMore}
       </>
-      : <ul className="studio-exports-list studio-exports-panel-list">{visible.map(row)}</ul>}
+      : <><ul className="studio-exports-list studio-exports-panel-list">{finished.map(row)}</ul>{showMore}</>}
     <ExportViewer job={viewing} onClose={() => setViewing(null)} />
   </>;
 }

@@ -189,8 +189,9 @@ export const startBatch = (body: StartBatchRequest) => postJson<BatchCreated>("/
 export const getBatch = (id: string) => requestJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}`);
 export const cancelBatch = (id: string) =>
   postJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}/cancel`);
-export const retryBatch = (id: string) =>
-  postJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}/retry`);
+/** Make a list's failed rows again, or only the row `exportId`, inside the same list. */
+export const retryBatch = (id: string, exportId?: string) =>
+  postJson<BatchSummary>(`/api/studio/batches/${encodeURIComponent(id)}/retry`, exportId ? { export_id: exportId } : undefined);
 
 export interface HostCapabilities {
   reveal: boolean;

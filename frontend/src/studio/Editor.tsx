@@ -439,22 +439,28 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
 
   const saveFile = async () => {
     try {
+      const snapshot = { title: title.trim() || template.title, template: template.id, params, settings };
       let id = saver.current?.id ?? initialProjectId;
-      if (!id && saver.current) {
-        saver.current.change({ title: title.trim() || template.title, template: template.id, params, settings });
-        saver.current.flush();
-        for (let attempt = 0; attempt < 50 && !id; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          id = saver.current?.id;
+      if (saver.current) {
+        // Through the autosaver, so this save never races one already on its way.
+        saver.current.change(snapshot);
+        const saved = await saver.current.settle();
+        id = saver.current.id;
+        if (!saved) {
+          toast.error(saver.current.halted
+            ? "This video was changed somewhere else. Load the newest version, then save the file."
+            : "Couldn't save this video right now. Try again in a moment.");
+          return;
         }
+      } else if (id) {
+        const saved = await updateProject(id, { title: snapshot.title, params, settings, base_revision: revisionRef.current });
+        knownUpdate.current = saved.updated;
+        revisionRef.current = saved.revision ?? revisionRef.current;
       }
       if (!id) {
         toast.error("This video is still being saved. Try again in a moment.");
         return;
       }
-      const saved = await updateProject(id, { title: title.trim() || template.title, params, settings, base_revision: revisionRef.current });
-      knownUpdate.current = saved.updated;
-      revisionRef.current = saved.revision ?? revisionRef.current;
       await saveProjectFile(id);
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -468,6 +474,13 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     }
   };
 
+  /** Ctrl+S: save straight away and say so (autosave would get there on its own). */
+  const saveNow = async () => {
+    if (!saver.current) return;
+    saver.current.change({ title: title.trim() || template.title, template: template.id, params, settings });
+    if (await saver.current.settle()) toast.success("Saved", { id: "studio-saved", duration: 1500 });
+  };
+
   const restore = (direction: "undo" | "redo") => {
     if (!travel(direction)) return;
     markTouched();
@@ -475,14 +488,15 @@ function EditorBody({ catalog, template, initial, newPreset, onProjectCreated }:
     setExportErrors(null);
     setFormVersion((value) => value + 1);
   };
-  const shortcutRef = useRef({ restore });
-  useEffect(() => { shortcutRef.current = { restore }; });
+  const shortcutRef = useRef({ restore, saveNow });
+  useEffect(() => { shortcutRef.current = { restore, saveNow }; });
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
       if (event.target instanceof Element && event.target.closest('[role="dialog"], [role="alertdialog"]')) return;
       if (key === "e") { event.preventDefault(); setExportOpen(true); return; }
+      if (key === "s") { event.preventDefault(); void shortcutRef.current.saveNow(); return; }
       if (key !== "z" && key !== "y") return;
       // Native undo stacks aren't exposed. After typing, keep shortcuts local
       // until blur; the header buttons always use editor history.

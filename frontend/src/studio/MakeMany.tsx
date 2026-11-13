@@ -10,8 +10,8 @@ import { friendlyError, getProject, listExports, parseBatch, previewProblem, sta
 import { Spinner } from "./components";
 import { fieldErrorsOf, friendlyFieldMessage } from "./errors";
 import { usePoster } from "./hooks";
-import { EXPORT_FORMATS, formatSeconds, initialSettings, QUALITIES, toDate } from "./options";
-import { readBrandKit } from "./preferences";
+import { EXPORT_FORMATS, formatSeconds, initialSettings, QUALITIES, rememberedExport, toDate } from "./options";
+import { readBrandKit, setExportChoice } from "./preferences";
 import { navigate, type Route } from "./router";
 import { initialParams } from "./schemaForm";
 import type {
@@ -207,8 +207,8 @@ export function MakeManyPage({ catalog, route }: { catalog: Catalog; route: Many
   const [rowProblems, setRowProblems] = useState<BatchRowProblem[]>([]);
   const [validRows, setValidRows] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
-  const [format, setFormat] = useState<ExportFormat>("mp4");
-  const [quality, setQuality] = useState<ExportQuality>("1080p");
+  const [format, setFormat] = useState<ExportFormat>(() => rememberedExport().format);
+  const [quality, setQuality] = useState<ExportQuality>(() => rememberedExport().quality);
   const [estimate, setEstimate] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [lastPoster, setLastPoster] = useState<string | null>(null);
@@ -377,6 +377,7 @@ export function MakeManyPage({ catalog, route }: { catalog: Catalog; route: Many
         format,
         quality,
       });
+      setExportChoice(format, quality);
       if (result.row_errors.length) setRowProblems(result.row_errors);
       if (!result.export_ids.length) {
         setProblem("None of these rows can be made yet. Fix the rows above, then try again.");

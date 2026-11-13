@@ -208,7 +208,8 @@ class StudioService:
 
     def shutdown_sync(self) -> None:
         """Stop the running export and the preview worker (both restart on next use)."""
-        motion = getattr(self, "_motion", None)
+        with self._state_lock:
+            motion, self._motion = getattr(self, "_motion", None), None  # a closed one can't restart
         if motion is not None:
             motion.close()
         exports, worker = getattr(self, "_exports", None), getattr(self, "_worker", None)
@@ -267,13 +268,17 @@ class StudioService:
             raise StudioError(f"Template {template_id!r} failed to load: {type(exc).__name__}: {exc}") from exc
 
     def _catalog_sync(self) -> dict:
+        return copy.deepcopy(self._catalog_shared())
+
+    def _catalog_shared(self) -> dict:
+        """The cached catalog itself: read it, never change it (``_catalog_sync`` hands out copies)."""
         ids = registry.template_ids()
         key = (tuple((tid, self._refresh_template(tid)) for tid in ids),
                self._kit_fingerprint(), self._icons_fingerprint(),
                posters.manifest_stamp(posters.POSTERS_DIR), posters.manifest_stamp(peeks.PEEKS_DIR))
         with self._state_lock:
             if self._catalog_cache is not None and self._catalog_cache[0] == key:
-                return copy.deepcopy(self._catalog_cache[1])
+                return self._catalog_cache[1]
         sections = {name: [] for name in CATEGORY_TITLES}
         templates = []
         for tid in ids:
@@ -299,7 +304,7 @@ class StudioService:
         result = self._with_peeks(result, dict(key[0]))
         with self._state_lock:
             self._catalog_cache = (key, result)
-        return copy.deepcopy(result)
+        return result
 
     def _with_peeks(self, catalog, fingerprints=None):
         manifest = peeks.read_manifest()
@@ -324,7 +329,7 @@ class StudioService:
     def peek_path(self, key):
         if isinstance(key, str) and re.fullmatch(r"[a-f0-9]{32}", key):
             url = f"/api/studio/peeks/{key}.mp4"
-            if any(card.get("peek_url") == url for template in self._catalog_sync()["templates"]
+            if any(card.get("peek_url") == url for template in self._catalog_shared()["templates"]
                    for card in template["presets"]):
                 return peeks.PEEKS_DIR / f"{key}.mp4"
         raise NotFoundError("That gallery peek is no longer available.")
@@ -693,6 +698,13 @@ class StudioService:
     async def retry_export(self, export_id: str) -> dict:
         """Queue a new export from the request saved on a finished record."""
         record = await asyncio.to_thread(self._export_manager().get, export_id)
+        batch_id = record.get("batch_id")
+        if isinstance(batch_id, str) and batch_id and record.get("status") == "failed":
+            # A failed row of a list is made again inside its list, replacing the failed row.
+            result = await self.retry_batch(batch_id, export_id)
+            if result.get("retried"):
+                return await asyncio.to_thread(self._export_manager().get, result["retried"][0])
+            raise ConflictError("This video can't be made again as it is. Open the list and fix the row.")
         request = record.get("request")
         if not isinstance(request, dict) or not isinstance(request.get("template"), str) or not request["template"]:
             raise ConflictError("This export has no stored request to make again. Start a new export instead.")
@@ -845,6 +857,7 @@ class StudioService:
         folder = batches.folder_name(name, batch_id)
         record = batches.new_record(batch_id, name, spec.id, spec.meta.title, count, folder, format, quality,
                                     row_errors)
+        self._batch_store.add(record)
         export_ids = []
         manager = self._export_manager()
         for entry in valid:
@@ -855,8 +868,8 @@ class StudioService:
             export.update(batch_id=batch_id, batch_title=name, batch_total=count, folder=folder,
                           file_stem=batches.safe_file_stem(title, fallback=f"{spec.id}-{entry['row']}"))
             export["_slug"] = export["file_stem"]
-            export_ids.append(manager.start(export, job, check_limit=False)["id"])
-        self._batch_store.add(record)
+            export_ids.append(manager.start(export, job, check_limit=False, save=False)["id"])
+        manager.save()  # one index write for the whole list
         return {"batch_id": batch_id, "export_ids": export_ids, "row_errors": row_errors,
                 "batch": self.get_batch_sync(batch_id)}
 
@@ -894,12 +907,19 @@ class StudioService:
     async def cancel_batch(self, batch_id: str) -> dict:
         return await asyncio.to_thread(self.cancel_batch_sync, batch_id)
 
-    def retry_batch_sync(self, batch_id: str) -> dict:
+    def retry_batch_sync(self, batch_id: str, export_id: Optional[str] = None) -> dict:
+        """Queue the list's failed rows again (or only *export_id*), keeping them in the list."""
         batch = self.get_batch_sync(batch_id)
+        if export_id is not None:
+            if not any(item.get("id") == export_id and item.get("batch_id") == batch_id
+                       for item in self._export_manager().list()):
+                raise NotFoundError("That video isn't in this list anymore.")
         manager = self._export_manager()
         retried, skipped = [], []
         for record in manager.list():
             if record.get("batch_id") != batch_id or record.get("status") != "failed":
+                continue
+            if export_id is not None and record.get("id") != export_id:
                 continue
             request = record.get("request")
             if not isinstance(request, dict) or not isinstance(request.get("template"), str):
@@ -924,8 +944,8 @@ class StudioService:
             manager.remove(record["id"])  # the failed row is replaced, not repeated in the group
         return {**self.get_batch_sync(batch_id), "retried": retried, "skipped": skipped}
 
-    async def retry_batch(self, batch_id: str) -> dict:
-        return await asyncio.to_thread(self.retry_batch_sync, batch_id)
+    async def retry_batch(self, batch_id: str, export_id: Optional[str] = None) -> dict:
+        return await asyncio.to_thread(self.retry_batch_sync, batch_id, export_id)
 
     # -- the finished file on this computer ------------------------------------------------
     def host_capabilities(self) -> dict:

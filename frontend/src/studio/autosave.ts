@@ -47,6 +47,11 @@ export class Autosaver {
     return this.projectId;
   }
 
+  /** Saving stopped because the project changed elsewhere. */
+  get halted() {
+    return this.stopped;
+  }
+
   get dirty() {
     return this.changed > this.saved;
   }
@@ -67,6 +72,28 @@ export class Autosaver {
     if (!this.dirty || !this.latest) return;
     this.keepalive ||= keepalive;
     void this.save();
+  }
+
+  /**
+   * Save everything now and wait for it: true once the latest edit is on disk, false when
+   * saving stopped (a conflict) or failed. Never runs a second save beside one in flight.
+   */
+  async settle(): Promise<boolean> {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (this.disposed || this.stopped) return false;
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      if (this.saving) {
+        await this.saving;
+        continue;
+      }
+      if (!this.dirty) return true;
+      if (!this.latest) return false;
+      const before = this.saved;
+      await this.save();
+      if (this.saved === before) return false; // that save failed
+    }
+    return !this.dirty && !this.stopped;
   }
 
   /** Stop saving for good: a save was refused because the project changed elsewhere. */

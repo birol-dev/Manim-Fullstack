@@ -422,7 +422,7 @@ class ExportManager:
             logger.warning("studio: could not write the export index (%s)", exc)
 
     # -- public API ----------------------------------------------------------------
-    def start(self, record: dict, job: dict, check_limit: bool = True) -> dict:
+    def start(self, record: dict, job: dict, check_limit: bool = True, save: bool = True) -> dict:
         """Queue an export. *record* holds the public fields (template, title, format, quality,
         width, height, fps, ...); *job* the render job (template, params, settings, assets_dir).
 
@@ -430,6 +430,7 @@ class ExportManager:
         video at a time, so the limit that protects single exports must not split a list. A
         running list's rows do not count against that limit either: one person's export must
         never be refused because a list they started is still working through its rows.
+        A list passes ``save=False`` for each row and calls ``save()`` once at the end.
         """
         self._ensure_loaded()
         with self._lock:
@@ -453,10 +454,17 @@ class ExportManager:
                 "title": entry.get("title"),
             })
             self._records[export_id] = entry
-            self._save_locked()
+            if save:
+                self._save_locked()
             self._ensure_thread()
             self._wake.notify_all()
             return public(entry)
+
+    def save(self) -> None:
+        """Write the index now (after rows queued with ``start(..., save=False)``)."""
+        self._ensure_loaded()
+        with self._lock:
+            self._save_locked()
 
     def get(self, export_id: str) -> dict:
         self._ensure_loaded()
@@ -620,8 +628,9 @@ class ExportManager:
                     record = self._records.get(export_id)
                     if record is not None and record.get("status") in ACTIVE and not self._stopping:
                         record.update(status="failed", progress=None, message="Export failed", time_left=None,
-                                      error="Internal error in the export queue.")
+                                      error="Internal error in the export queue.", finished=utc_now())
                         record.pop("_job", None)
+                        self._save_locked()
 
     def _update(self, record: dict, save: bool = False, **fields) -> None:
         with self._lock:
@@ -742,7 +751,11 @@ class ExportManager:
                 self._update(record, message=FINISHING, phase="finishing", time_left=None)
                 final = self._publish(record, path, os.path.splitext(path)[1] or f".{record['format']}")
             with self._lock:
-                self._check_cancel(record)
+                # The file is complete: a person's cancel still wins, but an app that is
+                # closing keeps the finished video instead of rendering it again next launch.
+                if record.get("_cancel") or record.get("status") == "cancelled":
+                    raise ExportCancelled()
+                record.pop("resume", None)
                 rel = os.path.relpath(final, self.media_root).replace("\\", "/")
                 self._update(record, save=True, status="done", progress=100, message="Ready", phase="done",
                              url="/media/" + rel, filename=os.path.basename(final), size=os.path.getsize(final),

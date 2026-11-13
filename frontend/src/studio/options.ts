@@ -1,4 +1,5 @@
 /** Plain-language labels for the studio's choices, and default settings. */
+import { readExportChoice } from "./preferences";
 import type {
   Aspect,
   BackgroundKind,
@@ -66,6 +67,15 @@ export const QUALITIES: Array<{ value: ExportQuality; label: string; hint: strin
   { value: "1080p60", label: "1080p, 60 fps", hint: "Extra smooth motion. Takes about twice as long." },
   { value: "4k", label: "4K", hint: "Very sharp for big screens. Slow to make, large file." },
 ];
+
+/** The file type and quality the last export used, else MP4 at 1080p. */
+export function rememberedExport(): { format: ExportFormat; quality: ExportQuality } {
+  const { format, quality } = readExportChoice();
+  return {
+    format: EXPORT_FORMATS.find((item) => item.value === format)?.value ?? "mp4",
+    quality: QUALITIES.find((item) => item.value === quality)?.value ?? "1080p",
+  };
+}
 
 /** The qualities the server lists (ids or {id} objects), or all of ours. */
 export function availableQualities(catalog: Catalog | null) {

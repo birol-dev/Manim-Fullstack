@@ -207,6 +207,7 @@
 :root[data-surface="studio"] .studio-exports-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
 :root[data-surface="studio"] .studio-exports-answer { color: var(--color-fg); font-family: var(--font-display); font-size: clamp(1.6rem, 1.1rem + 1.5vw, 2.3rem); font-weight: 250; letter-spacing: -0.025em; line-height: 1.1; }
 :root[data-surface="studio"] .studio-exports-hint { color: var(--color-fg-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+:root[data-surface="studio"] .studio-exports-more { display: flex; align-items: center; gap: 12px; padding: 16px 0 8px; }
 :root[data-surface="studio"] .studio-exports-loading { display: flex; align-items: center; gap: 8px; padding: 24px 0; color: var(--color-fg-muted); font-size: 13.5px; }
 :root[data-surface="studio"] .studio-exports-page .studio-export-day { position: relative; display: flex; flex-direction: column; gap: 10px; padding-left: 22px; }
 :root[data-surface="studio"] .studio-exports-page .studio-export-day::before { content: ""; position: absolute; left: 3px; top: 8px; bottom: 8px; width: 1px; background: var(--color-line); }

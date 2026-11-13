@@ -1,3 +1,5 @@
+import { ApiError } from "@/lib/api";
+
 import { getPreferences, updatePreferences } from "./api";
 import type { Appearance } from "./appearance";
 import type { Brand } from "./types";
@@ -20,6 +22,9 @@ export interface Preferences {
   brand_kit?: Brand | null;
   default_format?: string | null;
   default_theme?: string | null;
+  /** The file type and quality of the last export, offered first next time. */
+  export_format?: string | null;
+  export_quality?: string | null;
 }
 
 /** The fonts the app renders with. Names match backend/studio/themes.py. */
@@ -43,6 +48,8 @@ export const BRAND_COLOR_KEY = "studio:brand-color";
 export const BRAND_KIT_KEY = "studio:brand-kit";
 export const DEFAULT_FORMAT_KEY = "studio:default-format";
 export const DEFAULT_THEME_KEY = "studio:default-theme";
+export const EXPORT_FORMAT_KEY = "studio:export-format";
+export const EXPORT_QUALITY_KEY = "studio:export-quality";
 
 export const PREFERENCE_KEYS: PreferenceKey[] = [
   "appearance",
@@ -58,6 +65,8 @@ export const PREFERENCE_KEYS: PreferenceKey[] = [
   "brand_kit",
   "default_format",
   "default_theme",
+  "export_format",
+  "export_quality",
 ];
 
 /** The far end of a brand name, as the settings form enforces. */
@@ -163,6 +172,10 @@ function readCache(key: PreferenceKey): unknown {
         return normalizeChoice(localStorage.getItem(DEFAULT_FORMAT_KEY)) ?? undefined;
       case "default_theme":
         return normalizeChoice(localStorage.getItem(DEFAULT_THEME_KEY)) ?? undefined;
+      case "export_format":
+        return normalizeChoice(localStorage.getItem(EXPORT_FORMAT_KEY)) ?? undefined;
+      case "export_quality":
+        return normalizeChoice(localStorage.getItem(EXPORT_QUALITY_KEY)) ?? undefined;
     }
   } catch {
     return undefined; // Local preferences are optional when storage is unavailable.
@@ -224,6 +237,14 @@ function writeCache(key: PreferenceKey, value: unknown) {
         else localStorage.removeItem(DEFAULT_THEME_KEY);
         break;
       }
+      case "export_format":
+      case "export_quality": {
+        const storageKey = key === "export_format" ? EXPORT_FORMAT_KEY : EXPORT_QUALITY_KEY;
+        const choice = normalizeChoice(value);
+        if (choice) localStorage.setItem(storageKey, choice);
+        else localStorage.removeItem(storageKey);
+        break;
+      }
     }
   } catch {
     /* Keep the in-memory choice. */
@@ -263,6 +284,10 @@ function sanitize(raw: unknown): Preferences {
   if (defaultFormat !== undefined) values.default_format = defaultFormat;
   const defaultTheme = normalizeChoice(data.default_theme);
   if (defaultTheme !== undefined) values.default_theme = defaultTheme;
+  const exportFormat = normalizeChoice(data.export_format);
+  if (exportFormat !== undefined) values.export_format = exportFormat;
+  const exportQuality = normalizeChoice(data.export_quality);
+  if (exportQuality !== undefined) values.export_quality = exportQuality;
   return values;
 }
 
@@ -334,8 +359,16 @@ export function flushPreferences(): Promise<void> {
   sending = sending.then(async () => {
     try {
       await updatePreferences(patch);
-    } catch {
-      /* Offline: the localStorage cache still has this choice. */
+    } catch (error) {
+      // One value the workspace refuses must not cost the others: save them one by one.
+      if (!(error instanceof ApiError) || error.status !== 422 || Object.keys(patch).length < 2) return;
+      for (const [key, value] of Object.entries(patch)) {
+        try {
+          await updatePreferences({ [key]: value } as Partial<Preferences>);
+        } catch {
+          /* That one stays in the local cache only. */
+        }
+      }
     }
   });
   return sending;
@@ -437,6 +470,18 @@ export function readDefaultTheme(): string | null {
 
 export function setDefaultTheme(value: string | null) {
   writePreference("default_theme", normalizeChoice(value) ?? null);
+}
+
+/** The last export's file type and quality, when one was made (the caller checks they still exist). */
+export function readExportChoice(): { format: string | null; quality: string | null } {
+  return { format: readPreference("export_format") ?? null, quality: readPreference("export_quality") ?? null };
+}
+
+/** Remember an export's file type and quality for the next one (only writes what changed). */
+export function setExportChoice(format: string, quality: string) {
+  const current = readExportChoice();
+  if (current.format !== format) writePreference("export_format", format);
+  if (current.quality !== quality) writePreference("export_quality", quality);
 }
 
 /** Forget everything this module knows (tests). */

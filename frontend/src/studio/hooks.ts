@@ -137,7 +137,10 @@ export function useSmoothImage(url: string | null): string | null {
   return shown ?? url;
 }
 
-/** Recent exports, refreshed while any is still being made. */
+/** How often the export list is checked while nothing is being made. */
+export const EXPORTS_IDLE_MS = 10_000;
+
+/** Recent exports, refreshed quickly while any is still being made and slowly otherwise. */
 export function useExports(enabled: boolean, refreshKey = 0, onLoaded?: (jobs: ExportJob[]) => void) {
   const [state, setState] = useState<{ jobs: ExportJob[] | null; error: unknown }>({ jobs: null, error: null });
   const [tick, setTick] = useState(0);
@@ -150,7 +153,10 @@ export function useExports(enabled: boolean, refreshKey = 0, onLoaded?: (jobs: E
         if (!live) return;
         onLoaded?.(jobs);
         setState({ jobs, error: null });
-        if (jobs.some((job) => ACTIVE_EXPORT.has(job.status))) timer = setTimeout(() => setTick((value) => value + 1), 1500);
+        // Fast while something is being made; slowly otherwise, so exports an AI assistant
+        // starts still show up without a refresh.
+        const busy = jobs.some((job) => ACTIVE_EXPORT.has(job.status));
+        timer = setTimeout(() => setTick((value) => value + 1), busy ? 1500 : EXPORTS_IDLE_MS);
       },
       (error) => {
         if (!live) return;
@@ -184,8 +190,17 @@ function storedSeenExports(): Set<string> | null {
   return Array.isArray(value) && value.every((id) => typeof id === "string") ? new Set(value) : null;
 }
 
-function storeSeenExports(seen: Set<string>) {
-  writePreference("seen_exports", [...seen].slice(-MAX_SEEN_EXPORTS));
+/** The newest finished exports (the list arrives newest first); only these can be "new". */
+function recentDone(jobs: ExportJob[] | null | undefined): ExportJob[] {
+  return (jobs ?? []).filter((job) => job.status === "done").slice(0, MAX_SEEN_EXPORTS);
+}
+
+/** Keep the ids of the newest exports, so a long history never brings old ones back as new. */
+function storeSeenExports(seen: Set<string>, jobs: ExportJob[] | null | undefined) {
+  const listed = recentDone(jobs).map((job) => job.id).filter((id) => seen.has(id));
+  const known = new Set(listed);
+  const rest = [...seen].filter((id) => !known.has(id)).reverse();
+  writePreference("seen_exports", [...listed, ...rest].slice(0, MAX_SEEN_EXPORTS));
 }
 
 /** Seed the first successful listing, so pre-existing files never become new notifications. */
@@ -194,22 +209,23 @@ export function useExportActivity(open: boolean, refreshKey = 0) {
   const seenRef = useRef(seen);
   const onLoaded = useCallback((jobs: ExportJob[]) => {
     if (seenRef.current !== null) return;
-    const initial = new Set(jobs.filter((job) => job.status === "done").map((job) => job.id));
+    const initial = new Set(recentDone(jobs).map((job) => job.id));
     seenRef.current = initial;
-    storeSeenExports(initial);
+    storeSeenExports(initial, jobs);
     setSeen(initial);
   }, []);
   const { jobs } = useExports(true, refreshKey, onLoaded);
   const markSeen = (id?: string) => {
     // Wait for the first successful listing before establishing the baseline.
     if (seenRef.current === null) return;
-    const ids = id ? [id] : (jobs ?? []).filter((job) => job.status === "done").map((job) => job.id);
+    const ids = id ? [id] : recentDone(jobs).map((job) => job.id);
     if (ids.every((id) => seenRef.current!.has(id))) return;
     const next = new Set([...seenRef.current, ...ids]);
     seenRef.current = next;
-    storeSeenExports(next);
+    storeSeenExports(next, jobs);
     setSeen(next);
   };
-  const activity = jobs?.some((job) => ACTIVE_EXPORT.has(job.status) || (!open && seen !== null && job.status === "done" && !seen.has(job.id))) ?? false;
+  const activity = (jobs?.some((job) => ACTIVE_EXPORT.has(job.status)) ?? false)
+    || (!open && seen !== null && recentDone(jobs).some((job) => !seen.has(job.id)));
   return { activity, markSeen };
 }

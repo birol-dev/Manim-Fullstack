@@ -12,6 +12,7 @@ import { friendlyError } from "./api";
 import { readAppearance, setAppearance as storeAppearance, type Appearance } from "./appearance";
 import { Spinner } from "./components";
 import { EditorPage } from "./Editor";
+import { ExportNotices } from "./exportNotices";
 import { Gallery, GalleryLoading } from "./Gallery";
 import { useCatalog } from "./hooks";
 import { needsOnboarding } from "./preferences";
@@ -118,6 +119,7 @@ export default function StudioApp() {
   return (
     <TooltipProvider delayDuration={400} skipDelayDuration={200}>
       <Studio {...hashRoute} appearance={appearance} onAppearance={changeAppearance} />
+      {route.kind !== "welcome" && <ExportNotices />}
       {createPortal(<Toaster theme={appearance} position="bottom-right" richColors closeButton />, document.body)}
     </TooltipProvider>
   );

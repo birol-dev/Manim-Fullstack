@@ -316,22 +316,30 @@ async def post_batch_cancel(batch_id: str):
 
 @router.post("/batches/{batch_id}/retry")
 @_errors
-async def post_batch_retry(batch_id: str):
-    """Queue the batch's failed rows again, keeping them in the same batch."""
-    return await get_service().retry_batch(batch_id)
+async def post_batch_retry(batch_id: str, request: Request):
+    """Queue the batch's failed rows again (or only ``export_id``), keeping them in the same batch."""
+    export_id = None
+    if await request.body():
+        export_id = (await _body(request, ("export_id",))).get("export_id")
+        if export_id is not None and not isinstance(export_id, str):
+            raise TemplateError("Invalid retry.", [{"field": "export_id", "message": "Use an export id."}])
+    return await get_service().retry_batch(batch_id, export_id)
 
 
 @router.get("/posters/{key}.png")
 @_errors
 async def get_poster(key: str):
-    return FileResponse(get_service().poster_path(key), media_type="image/png",
+    path = await asyncio.to_thread(get_service().poster_path, key)
+    return FileResponse(path, media_type="image/png",
                         headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=31536000, immutable"})
 
 
 @router.get("/peeks/{key}.mp4")
 @_errors
 async def get_peek(key: str):
-    return FileResponse(get_service().peek_path(key), media_type="video/mp4",
+    # Checking the key reads the catalog; keep that off the event loop.
+    path = await asyncio.to_thread(get_service().peek_path, key)
+    return FileResponse(path, media_type="video/mp4",
                         headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=31536000, immutable"})
 
 

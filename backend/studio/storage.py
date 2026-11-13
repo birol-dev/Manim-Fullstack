@@ -250,20 +250,15 @@ def _stat_into(digest, path: str, visual_only=False) -> None:
     digest.update(b";")
 
 
-def tree_fingerprint(*roots: str, visual_only=False) -> str:
-    """Hash of every file's relative path and contents under *roots* (files or folders).
-
-    ``__pycache__`` folders, dot files and ``.pyc`` files are ignored, so importing a
-    module doesn't change its fingerprint.
-    """
-    digest = hashlib.sha256()
-    for root in roots:
-        digest.update(os.path.basename(root).encode() + b"|")
+def _tree_files(roots) -> list:
+    """(root index, "rel/name" or None for a file root, full path or None if missing), in hash order."""
+    entries = []
+    for index, root in enumerate(roots):
         if os.path.isfile(root):
-            _stat_into(digest, root, visual_only)
+            entries.append((index, None, root))
             continue
         if not os.path.isdir(root):
-            digest.update(b"-missing-")
+            entries.append((index, None, None))
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = sorted(d for d in dirnames if d != "__pycache__" and not d.startswith("."))
@@ -271,9 +266,72 @@ def tree_fingerprint(*roots: str, visual_only=False) -> str:
             for name in sorted(filenames):
                 if name.startswith(".") or name.endswith((".pyc", ".pyo")):
                     continue
-                digest.update(f"{rel}/{name}=".encode())
-                _stat_into(digest, os.path.join(dirpath, name), visual_only)
-    return digest.hexdigest()[:16]
+                entries.append((index, f"{rel}/{name}", os.path.join(dirpath, name)))
+    return entries
+
+
+# A file changed less than this long ago may change again within the same timestamp
+# tick, so a tree holding one is always hashed in full (git's "racily clean" rule).
+_RACY_SECONDS = 2.0
+_FINGERPRINTS: dict = {}
+_FINGERPRINTS_MAX = 256
+
+
+def _signature(entries) -> Optional[tuple]:
+    """Names, sizes and modification times of *entries*; None when any is too fresh to trust."""
+    now = time.time_ns()
+    racy = int(_RACY_SECONDS * 1e9)
+    signature = []
+    for index, name, path in entries:
+        if path is None:
+            signature.append((index, name, None))
+            continue
+        try:
+            info = os.stat(path)
+        except OSError:
+            return None
+        if now - info.st_mtime_ns < racy:
+            return None
+        signature.append((index, name, info.st_size, info.st_mtime_ns))
+    return tuple(signature)
+
+
+def tree_fingerprint(*roots: str, visual_only=False) -> str:
+    """Hash of every file's relative path and contents under *roots* (files or folders).
+
+    ``__pycache__`` folders, dot files and ``.pyc`` files are ignored, so importing a
+    module doesn't change its fingerprint. Contents are read again only when a file's
+    name, size or modification time changed (or it changed in the last two seconds).
+    """
+    entries = _tree_files(roots)
+    key = (tuple(os.path.abspath(root) for root in roots), bool(visual_only))
+    signature = _signature(entries)
+    cached = _FINGERPRINTS.get(key)
+    if signature is not None and cached is not None and cached[0] == signature:
+        return cached[1]
+    digest = hashlib.sha256()
+    by_root: dict = {}
+    for entry in entries:
+        by_root.setdefault(entry[0], []).append(entry)
+    for index, root in enumerate(roots):
+        digest.update(os.path.basename(root).encode() + b"|")
+        for _, name, path in by_root.get(index, ()):
+            _hash_entry(digest, name, path, visual_only)
+    value = digest.hexdigest()[:16]
+    if signature is not None:
+        if len(_FINGERPRINTS) >= _FINGERPRINTS_MAX:
+            _FINGERPRINTS.clear()
+        _FINGERPRINTS[key] = (signature, value)
+    return value
+
+
+def _hash_entry(digest, name, path, visual_only) -> None:
+    if path is None:
+        digest.update(b"-missing-")
+        return
+    if name is not None:
+        digest.update(f"{name}=".encode())
+    _stat_into(digest, path, visual_only)
 
 
 def template_dir(template_id: str) -> str:
