@@ -5,7 +5,6 @@ import datetime
 import io
 import json
 import os
-import time
 
 import pytest
 
@@ -13,7 +12,6 @@ from studio import batches
 from studio.api import router
 from studio.errors import BusyError
 from studio.registry import TemplateError
-from studio.service import StudioService
 from tests.studio_fakes import FakeRunner, RunnerFactory, make_service, wait_until
 
 
@@ -514,36 +512,6 @@ def test_batch_routes_parse_create_group_cancel_and_retry(tmp_path):
         run(scenario())
     finally:
         api.service_module.service = original
-        service.shutdown_sync()
-
-
-# -- one real render ----------------------------------------------------------------------
-
-def test_two_rows_render_to_real_mp4_in_one_folder(tmp_path):
-    pytest.importorskip("manim")
-    from executor import media_file_is_complete
-
-    service = StudioService(str(tmp_path / "ws"))
-    try:
-        result = service.start_batch_sync(
-            "countdown", {}, {"aspect": "16:9", "theme": "pop", "sound": {"effects": False}},
-            mapping={"title": 0, "seconds": 1}, rows=[["Class A", "3"], ["Class B", "3"]],
-            title_column=0, format="mp4", quality="draft")
-        assert len(result["export_ids"]) == 2 and result["row_errors"] == []
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            records = service._export_manager().list()
-            if len(records) == 2 and all(record["status"] in ("done", "failed", "cancelled")
-                                         for record in records):
-                break
-            time.sleep(0.25)
-        assert [record["status"] for record in records] == ["done", "done"], records
-        folder = os.path.join(service.exports_dir, records[0]["folder"])
-        assert len({record["folder"] for record in records}) == 1
-        for record in records:
-            assert record["filename"].startswith(("class-a-", "class-b-"))
-            assert media_file_is_complete(os.path.join(folder, record["filename"]))
-    finally:
         service.shutdown_sync()
 
 

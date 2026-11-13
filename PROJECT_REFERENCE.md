@@ -264,7 +264,8 @@ taken, and a script changed on both sides is kept as `<name> (older tab).py` nex
 
 ## Tests
 
-- `tests/` — pytest suite for the API, executor, parser, origin policy, paths, and diagnostics.
-  `test_e2e_real_render.py` drives real renders through the WebSocket and is skipped when Manim isn't installed.
+- `tests/` — pytest suite for the important behavior only: the Studio service, API and MCP tools, exports and
+  lists, preferences, portable files, saves and conflicts, paths and origin policy. Nothing renders video;
+  `desktop/scripts/render_check.py` checks real renders after a rendering change.
 - `frontend/src/**/*.test.ts(x)` — Vitest + Testing Library. `src/test/` provides a fake backend (`fakeServer.ts`), a
   scriptable WebSocket (`fakeSocket.ts`), and a textarea stand-in for Monaco (`fakeEditor.tsx`).

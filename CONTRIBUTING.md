@@ -29,7 +29,9 @@ npm test          # pytest + Vitest (with coverage thresholds)
 npm run check     # ESLint, TypeScript, production build, backend import check
 ```
 
-`tests/test_e2e_real_render.py` runs real renders when Manim is installed locally; CI skips it.
+The test suites keep only the important checks: saves and conflicts, exports and lists, preferences, the API
+and MCP contracts, security, and the desktop shell. Nothing in them renders video. After a change to rendering,
+run `python desktop/scripts/render_check.py` instead.
 
 ## Conventions
 

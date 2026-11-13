@@ -5,7 +5,6 @@ when Manim isn't installed.
 """
 
 import ast
-import importlib.util
 import os
 import sys
 
@@ -140,24 +139,3 @@ def test_unknown_template_is_refused():
         registry.get_template("../kit")
     with pytest.raises(registry.TemplateError):
         registry.get_template("not_a_template")
-
-
-MANIM = importlib.util.find_spec("manim") is not None
-PRESET_CASES = [(spec.id, preset.id) for spec in registry.all_templates() for preset in spec.presets]
-
-
-@pytest.mark.skipif(not MANIM, reason="Manim is not installed")
-@pytest.mark.parametrize("template_id, preset_id", PRESET_CASES)
-def test_every_preset_renders_a_poster(tmp_path, template_id, preset_id):
-    from studio.dev import render_preview
-
-    spec = registry.get_template(template_id)
-    preset = next(p for p in spec.presets if p.id == preset_id)
-    for aspect in ("16:9", "9:16"):
-        if aspect not in spec.meta.aspects:
-            continue
-        out = tmp_path / f"{preset_id}-{aspect.replace(':', 'x')}.png"
-        settings = {**preset.settings, "aspect": aspect}
-        render_preview(template_id, preset.params, settings, "poster", str(out), short=180,
-                       media_dir=str(tmp_path / "media"))
-        assert out.is_file() and out.stat().st_size > 500

@@ -29,7 +29,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      # Manim itself is not installed here; tests/test_e2e_real_render.py skips without it.
+      # Manim itself is not installed here; the suite does not render video.
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip

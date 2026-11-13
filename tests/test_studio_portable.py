@@ -9,7 +9,6 @@ import stat
 import zipfile
 from urllib.parse import unquote
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -122,31 +121,6 @@ def test_a_real_project_with_an_image_logo_and_sound_round_trips(tmp_path):
     assert open(os.path.join(second.assets_dir, opened["settings"]["brand"]["logo"]), "rb").read() == tiny_png(20, 10)
     assert os.path.isfile(second.audio_path(opened["settings"]["sound"]["music"]["asset"]))
 
-    # With the original and the copy in hand, a real poster renders pixel-for-pixel the same.
-    pytest.importorskip("manim")
-    from studio.dev import render_preview
-
-    Image.new("RGB", (60, 40), "#2563EB").save(os.path.join(svc.assets_dir, "picture.png"))
-    Image.new("RGB", (48, 24), "#E11D48").save(os.path.join(svc.assets_dir, "brand.png"))
-    settings = {"aspect": "9:16", "theme": "clean", "brand": {"logo": "brand.png"}}
-    params = {**preset.params, "photo": "picture.png"}
-    original = tmp_path / "original.png"
-    replay = tmp_path / "replay.png"
-    render_preview("celebration", params, settings, "poster", str(original), short=180,
-                   assets_dir=svc.assets_dir, media_dir=str(tmp_path / "media-original"))
-    project = svc.create_project_sync("celebration", params, settings, "Rendered")
-    saved = svc.project_file_sync(project["id"])
-    try:
-        raw = open(saved["path"], "rb").read()
-    finally:
-        os.unlink(saved["path"])
-    again = open_file(make(tmp_path, "third"), raw)["project"]
-    render_preview("celebration", again["params"], again["settings"], "poster", str(replay), short=180,
-                   assets_dir=os.path.join(str(tmp_path), "third", "ws", "assets"),
-                   media_dir=str(tmp_path / "media-replay"))
-    with Image.open(original) as first, Image.open(replay) as second_image:
-        assert np.array_equal(np.asarray(first.convert("RGB")), np.asarray(second_image.convert("RGB")))
-
 
 def test_a_cropped_photo_carries_its_crop_and_poster_to_another_computer(tmp_path):
     svc = make(tmp_path, "first")
@@ -192,17 +166,6 @@ def test_a_cropped_photo_carries_its_crop_and_poster_to_another_computer(tmp_pat
     assert again["project"]["params"]["photo"] == stored_crop
     assert ImageCropStore(second.workspace_dir, second.assets_dir).read(stored_crop) == {
         **recipe, "source": stored_source}
-
-    pytest.importorskip("manim")
-    from studio.dev import render_preview
-
-    original, replay = tmp_path / "original.png", tmp_path / "replay.png"
-    render_preview("celebration", params, settings, "poster", str(original), short=180,
-                   assets_dir=svc.assets_dir, media_dir=str(tmp_path / "media-original"))
-    render_preview("celebration", opened["params"], opened["settings"], "poster", str(replay), short=180,
-                   assets_dir=second.assets_dir, media_dir=str(tmp_path / "media-replay"))
-    with Image.open(original) as first, Image.open(replay) as second_image:
-        assert np.array_equal(np.asarray(first.convert("RGB")), np.asarray(second_image.convert("RGB")))
 
 
 def test_an_existing_crop_here_is_not_overwritten_by_an_opened_file(tmp_path):

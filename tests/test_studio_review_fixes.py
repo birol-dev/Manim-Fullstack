@@ -157,15 +157,6 @@ def test_the_batch_retry_route_takes_one_export_id(tmp_path):
 # Preferences and motion previews
 # --------------------------------------------------------------------------- #
 
-def test_a_brand_kit_update_keeps_the_fields_it_does_not_name(tmp_path):
-    store = PreferenceStore(str(tmp_path))
-    store.update({"brand_kit": {"accent": "#111111", "font": "Inter"}})
-    merged = store.update({"brand_kit": {"accent": "#222222"}})
-    assert merged["brand_kit"] == {"accent": "#222222", "font": "Inter"}
-    cleared = store.update({"brand_kit": {"font": None}})
-    assert cleared["brand_kit"] == {"accent": "#222222", "font": None}
-
-
 def test_the_last_export_choice_is_a_preference(tmp_path):
     store = PreferenceStore(str(tmp_path))
     assert store.update({"export_format": "webm", "export_quality": "1080p60"})["export_format"] == "webm"

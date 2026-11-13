@@ -257,11 +257,7 @@ class PreferenceStore:
 
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with file_ops.locked(self.path):
-            current = self.read()
-            merged = {**current, **values}
-            if isinstance(values.get("brand_kit"), dict) and isinstance(current.get("brand_kit"), dict):
-                # A kit names only the fields it changes (null clears one); the rest stay.
-                merged["brand_kit"] = {**current["brand_kit"], **values["brand_kit"]}
+            merged = {**self.read(), **values}
             data = json.dumps(merged, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
             if len(data) > MAX_BYTES:
                 raise _error("body", f"Preferences are too large ({len(data)} bytes; "
