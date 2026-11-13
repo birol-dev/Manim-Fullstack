@@ -93,7 +93,9 @@ def test_closing_the_app_as_an_export_finishes_keeps_the_file(tmp_path):
     manager._publish = publish_then_close
     try:
         started = manager.start(_record(), {"template": "announcement", "params": {}, "settings": {}})
-        done = wait_until(lambda: (r := manager.get(started["id"]))["status"] in ("done", "queued", "failed") and r)
+        # A fresh export is "queued" too, so only a queued record marked for resume counts as settled.
+        done = wait_until(lambda: (r := manager.get(started["id"]))
+                          and (r["status"] in ("done", "failed") or r.get("resume")) and r)
         assert done["status"] == "done"
         assert "resume" not in done
         assert os.path.isfile(os.path.join(manager.exports_dir, done["filename"]))

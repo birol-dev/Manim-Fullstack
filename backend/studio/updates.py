@@ -356,7 +356,9 @@ class UpdateManager:
             self._thread = threading.Thread(target=self._check_worker, name="studio-update-check",
                                             daemon=True)
             self._thread.start()
-        return self.status()
+            # Read the status before releasing the lock, so a check that finishes
+            # instantly still reports that it started.
+            return self.status()
 
     def wait(self, timeout: float = 10.0) -> dict:
         """Wait for the background work to finish (tests, and the manual route's thread)."""
