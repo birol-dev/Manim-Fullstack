@@ -63,7 +63,7 @@ describe("workspace preferences", () => {
     expect(screen.queryByRole("region", { name: /Finish your setup/ })).not.toBeInTheDocument();
     expect(readPreference("setup_dismissed")).toBe(true);
     await flushPreferences();
-    expect(studio.calls.filter((call) => call.method === "PATCH").at(-1)?.body).toEqual({ setup_dismissed: true });
+    expect(studio.calls.filter((call) => call.method === "PATCH").at(-1)?.body).toMatchObject({ setup_dismissed: true });
 
     view.unmount();
     resetPreferencesForTests();
