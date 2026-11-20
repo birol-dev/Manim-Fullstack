@@ -66,17 +66,29 @@ def _safe_unparse(expr: ast.AST, fallback: str) -> str:
 
 
 # --- Run-time estimates -----------------------------------------------------------
+def _arg(call: ast.Call, name: str, index: Optional[int]) -> Optional[ast.AST]:
+    """Get a keyword or a positional argument before any unpacking."""
+    keyword = _keyword(call, name)
+    if keyword is not None or index is None:
+        return keyword
+    for position, arg in enumerate(call.args):
+        if isinstance(arg, ast.Starred):
+            break
+        if position == index:
+            return arg
+    return None
+
+
 # Classes whose own (or inherited through **kwargs) fixed ``run_time`` default differs
 # from Animation's 1s in Manim 0.18-0.22. Animations whose run time depends on their
-# arguments are computed in _animation_seconds instead: Write/Unwrite, the per-character
-# ones, AddTextWordByWord, Blink and the groups. Anything else uses the 1s default.
+# arguments are computed in _animation_seconds. These are Write/Unwrite, per-character
+# animations, AddTextWordByWord, Blink, groups, and ChangeSpeed. Anything else uses 1s.
 _FIXED_RUN_TIMES = {
     "Add": 0.0,  # Manim 0.22+ only
     "ApplyMatrix": 3.0,  # inherits ApplyPointwiseFunction
     "ApplyPointwiseFunction": 3.0,
     "ApplyWave": 2.0,
     "Broadcast": 3.0,
-    "Circumscribe": 1.0,
     "ComplexHomotopy": 3.0,
     "DrawBorderThenFill": 2.0,
     "FocusOn": 2.0,
@@ -88,14 +100,14 @@ _FIXED_RUN_TIMES = {
 }
 # Write/Unwrite: ``run_time = 1 if len(family_members_with_points()) < 15 else 2``.
 _LENGTH_BASED = {"Write", "Unwrite"}
-# AddTextLetterByLetter: ``run_time = time_per_char * len(text)`` (time_per_char=0.1).
+# Positional indexes of time_per_char. Each character takes at least one frame.
 _PER_CHAR = {
-    "AddTextLetterByLetter",
-    "RemoveTextLetterByLetter",
-    "TypeWithCursor",  # Manim 0.22+ only, subclasses AddTextLetterByLetter
-    "UntypeWithCursor",  # Manim 0.22+ only, subclasses AddTextLetterByLetter
+    "AddTextLetterByLetter": 4,
+    "RemoveTextLetterByLetter": 4,
+    "TypeWithCursor": 5,  # Manim 0.22+ only
+    "UntypeWithCursor": 2,  # Manim 0.22+ only
 }
-_GROUPS = {"AnimationGroup", "LaggedStart", "Succession"}
+_GROUPS = {"AnimationGroup": 0.0, "LaggedStart": 0.05, "Succession": 1.0}
 _TEXT_CLASSES = {"Text", "MarkupText", "Paragraph", "Tex", "MathTex", "SingleStringMathTex", "Title", "BulletedList"}
 _TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 
@@ -153,14 +165,15 @@ def _collect_texts(construct: ast.AST) -> dict:
     return texts
 
 
-def _animation_seconds(expr: ast.AST, texts: dict) -> float:
+def _animation_seconds(expr: Optional[ast.AST], texts: dict) -> float:
     """Best static guess of one animation's run time, following Manim's defaults."""
     if not isinstance(expr, ast.Call):
         return 1.0  # mobject.animate..., variables holding animations
-    explicit = _numeric_constant(_keyword(expr, "run_time"))
-    if explicit is not None:
-        return explicit
     name = _call_name(expr)
+    if name != "AddTextWordByWord":
+        explicit = _numeric_constant(_arg(expr, "run_time", None))
+        if explicit is not None:
+            return explicit
     if name is None:
         return 1.0  # x.animate.shift(...), helper calls
     if name in _LENGTH_BASED:
@@ -168,38 +181,66 @@ def _animation_seconds(expr: ast.AST, texts: dict) -> float:
         return 2.0 if count is not None and count >= 15 else 1.0
     if name in _PER_CHAR:
         count = _glyph_count(expr.args[0], texts) if expr.args else None
-        per_char = _numeric_constant(_keyword(expr, "time_per_char")) or 0.1
-        return round(max(per_char * count, 1 / 15), 2) if count else 1.0
+        if count is None:
+            return 1.0
+        per_char = _numeric_constant(_arg(expr, "time_per_char", _PER_CHAR[name]))
+        per_char = 0.1 if per_char is None else per_char
+        return round(count * max(per_char, 1 / 15), 2)
     if name == "AddTextWordByWord":
-        # Despite the name Manim animates every glyph: time_per_char * n + 0.005 * n**1.5.
+        # Manim discards the constructor's run_time and adds 0.005s per glyph.
         count = _glyph_count(expr.args[0], texts) if expr.args else None
         if not count:
             return 1.0
-        per_char = _numeric_constant(_keyword(expr, "time_per_char"))
+        per_char = _numeric_constant(_arg(expr, "time_per_char", 2))
         per_char = 0.06 if per_char is None else per_char
         return round(count * (per_char + 0.005), 2)
     if name == "Blink":  # Manim 0.22+ only: a Succession of time_on/hide and time_off steps
-        time_on = _numeric_constant(_keyword(expr, "time_on"))
-        time_off = _numeric_constant(_keyword(expr, "time_off"))
-        blinks = _numeric_constant(_keyword(expr, "blinks"))
+        time_on = _numeric_constant(_arg(expr, "time_on", 1))
+        time_off = _numeric_constant(_arg(expr, "time_off", 2))
+        blinks = _numeric_constant(_arg(expr, "blinks", 3))
         time_on = 0.5 if time_on is None else time_on
         time_off = 0.5 if time_off is None else time_off
         blinks = 1.0 if blinks is None else blinks
-        hide_at_end = _keyword(expr, "hide_at_end")
+        hide_at_end = _arg(expr, "hide_at_end", 4)
         hidden = isinstance(hide_at_end, ast.Constant) and hide_at_end.value is True
         return round(time_on * (blinks + (0 if hidden else 1)) + time_off * blinks, 2)
     if name in _GROUPS:
         children = [arg for arg in expr.args if not isinstance(arg, ast.Starred)]
         if not children:
             return 1.0
-        durations = [_animation_seconds(child, texts) for child in children]
-        if name == "Succession":
-            return sum(durations)
-        if name.startswith("Lagged"):
-            lag = _numeric_constant(_keyword(expr, "lag_ratio"))
-            lag = 0.05 if lag is None else lag
-            return round(max(durations) * (1 + lag * (len(durations) - 1)), 2)
-        return max(durations)
+        lag = _numeric_constant(_arg(expr, "lag_ratio", None))
+        lag = _GROUPS[name] if lag is None else lag
+        start = 0.0
+        ends = []
+        for child in children:
+            duration = _animation_seconds(child, texts)
+            ends.append(start + duration)
+            start += duration * lag
+        return round(max(ends), 2)
+    if name == "ChangeSpeed":
+        duration = _animation_seconds(_arg(expr, "anim", 0), texts)
+        speedinfo = _arg(expr, "speedinfo", 1)
+        if not isinstance(speedinfo, ast.Dict):
+            return duration
+        speeds = {}
+        for key, value in zip(speedinfo.keys, speedinfo.values):
+            node = _numeric_constant(key)
+            speed = _numeric_constant(value)
+            if node is None or speed is None:
+                return duration
+            speeds[node] = speed
+        speeds.setdefault(0.0, 1.0)
+        speeds.setdefault(1.0, speeds[max(speeds)])
+        previous_node = 0.0
+        previous_speed = speeds[previous_node]
+        scaled_total = 0.0
+        for node, speed in sorted(speeds.items())[1:]:
+            speed_sum = previous_speed + speed
+            if speed_sum == 0:
+                return duration
+            scaled_total += (node - previous_node) * (2 / speed_sum)
+            previous_node, previous_speed = node, speed
+        return round(duration * scaled_total, 2)
     return _FIXED_RUN_TIMES.get(name, 1.0)
 
 
