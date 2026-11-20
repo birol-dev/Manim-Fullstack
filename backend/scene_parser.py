@@ -66,13 +66,28 @@ def _safe_unparse(expr: ast.AST, fallback: str) -> str:
 
 
 # --- Run-time estimates -----------------------------------------------------------
-# Manim's own defaults (manim/animation/*.py, v0.18-0.22). Anything not listed runs 1s.
-_FIXED_RUN_TIMES = {"DrawBorderThenFill": 2.0, "Circumscribe": 1.0}
+# Defaults taken from the Manim 0.18-0.22 animation sources (a class's own ``run_time``
+# default, subclasses included via **kwargs). Anything not listed uses Animation's 1s.
+_FIXED_RUN_TIMES = {
+    "Add": 0.0,  # Manim 0.22+ only
+    "ApplyPointwiseFunction": 3.0,
+    "ApplyWave": 2.0,
+    "Broadcast": 3.0,
+    "Circumscribe": 1.0,
+    "ComplexHomotopy": 3.0,
+    "DrawBorderThenFill": 2.0,
+    "FocusOn": 2.0,
+    "Homotopy": 3.0,
+    "LaggedStartMap": 2.0,
+    "Rotating": 5.0,
+    "SmoothedVectorizedHomotopy": 3.0,
+    "Wiggle": 2.0,
+}
 # Write/Unwrite: ``run_time = 1 if len(family_members_with_points()) < 15 else 2``.
 _LENGTH_BASED = {"Write", "Unwrite"}
 # AddTextLetterByLetter: ``run_time = time_per_char * len(text)`` (time_per_char=0.1).
 _PER_CHAR = {"AddTextLetterByLetter", "RemoveTextLetterByLetter"}
-_GROUPS = {"AnimationGroup", "LaggedStart", "LaggedStartMap", "Succession"}
+_GROUPS = {"AnimationGroup", "LaggedStart", "Succession"}
 _TEXT_CLASSES = {"Text", "MarkupText", "Paragraph", "Tex", "MathTex", "SingleStringMathTex", "Title", "BulletedList"}
 _TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 
