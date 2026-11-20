@@ -66,10 +66,13 @@ def _safe_unparse(expr: ast.AST, fallback: str) -> str:
 
 
 # --- Run-time estimates -----------------------------------------------------------
-# Defaults taken from the Manim 0.18-0.22 animation sources (a class's own ``run_time``
-# default, subclasses included via **kwargs). Anything not listed uses Animation's 1s.
+# Classes whose own (or inherited through **kwargs) fixed ``run_time`` default differs
+# from Animation's 1s in Manim 0.18-0.22. Animations whose run time depends on their
+# arguments are computed in _animation_seconds instead: Write/Unwrite, the per-character
+# ones, AddTextWordByWord, Blink and the groups. Anything else uses the 1s default.
 _FIXED_RUN_TIMES = {
     "Add": 0.0,  # Manim 0.22+ only
+    "ApplyMatrix": 3.0,  # inherits ApplyPointwiseFunction
     "ApplyPointwiseFunction": 3.0,
     "ApplyWave": 2.0,
     "Broadcast": 3.0,
@@ -86,7 +89,12 @@ _FIXED_RUN_TIMES = {
 # Write/Unwrite: ``run_time = 1 if len(family_members_with_points()) < 15 else 2``.
 _LENGTH_BASED = {"Write", "Unwrite"}
 # AddTextLetterByLetter: ``run_time = time_per_char * len(text)`` (time_per_char=0.1).
-_PER_CHAR = {"AddTextLetterByLetter", "RemoveTextLetterByLetter"}
+_PER_CHAR = {
+    "AddTextLetterByLetter",
+    "RemoveTextLetterByLetter",
+    "TypeWithCursor",  # Manim 0.22+ only, subclasses AddTextLetterByLetter
+    "UntypeWithCursor",  # Manim 0.22+ only, subclasses AddTextLetterByLetter
+}
 _GROUPS = {"AnimationGroup", "LaggedStart", "Succession"}
 _TEXT_CLASSES = {"Text", "MarkupText", "Paragraph", "Tex", "MathTex", "SingleStringMathTex", "Title", "BulletedList"}
 _TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
@@ -162,6 +170,24 @@ def _animation_seconds(expr: ast.AST, texts: dict) -> float:
         count = _glyph_count(expr.args[0], texts) if expr.args else None
         per_char = _numeric_constant(_keyword(expr, "time_per_char")) or 0.1
         return round(max(per_char * count, 1 / 15), 2) if count else 1.0
+    if name == "AddTextWordByWord":
+        # Despite the name Manim animates every glyph: time_per_char * n + 0.005 * n**1.5.
+        count = _glyph_count(expr.args[0], texts) if expr.args else None
+        if not count:
+            return 1.0
+        per_char = _numeric_constant(_keyword(expr, "time_per_char"))
+        per_char = 0.06 if per_char is None else per_char
+        return round(count * (per_char + 0.005), 2)
+    if name == "Blink":  # Manim 0.22+ only: a Succession of time_on/hide and time_off steps
+        time_on = _numeric_constant(_keyword(expr, "time_on"))
+        time_off = _numeric_constant(_keyword(expr, "time_off"))
+        blinks = _numeric_constant(_keyword(expr, "blinks"))
+        time_on = 0.5 if time_on is None else time_on
+        time_off = 0.5 if time_off is None else time_off
+        blinks = 1.0 if blinks is None else blinks
+        hide_at_end = _keyword(expr, "hide_at_end")
+        hidden = isinstance(hide_at_end, ast.Constant) and hide_at_end.value is True
+        return round(time_on * (blinks + (0 if hidden else 1)) + time_off * blinks, 2)
     if name in _GROUPS:
         children = [arg for arg in expr.args if not isinstance(arg, ast.Starred)]
         if not children:
