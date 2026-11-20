@@ -164,7 +164,8 @@ def test_a_newer_release_with_both_assets_is_offered(tmp_path):
     assert status["version"] == "1.4.0"
     assert "Faster exports" in status["notes"]
     assert status["progress"] is None
-    assert http.requests[0].get_header("User-agent") == f"ManimStudio/{APP_VERSION}"
+    # make_manager pins the installed version to 1.3.0, independent of APP_VERSION.
+    assert http.requests[0].get_header("User-agent") == "ManimStudio/1.3.0"
 
 
 def test_the_default_opener_reaches_the_network(tmp_path, monkeypatch):
