@@ -67,7 +67,7 @@ def _safe_unparse(expr: ast.AST, fallback: str) -> str:
 
 # --- Run-time estimates -----------------------------------------------------------
 # Manim's own defaults (manim/animation/*.py, v0.18-0.22). Anything not listed runs 1s.
-_FIXED_RUN_TIMES = {"DrawBorderThenFill": 2.0, "SpiralIn": 2.0, "Circumscribe": 1.0}
+_FIXED_RUN_TIMES = {"DrawBorderThenFill": 2.0, "Circumscribe": 1.0}
 # Write/Unwrite: ``run_time = 1 if len(family_members_with_points()) < 15 else 2``.
 _LENGTH_BASED = {"Write", "Unwrite"}
 # AddTextLetterByLetter: ``run_time = time_per_char * len(text)`` (time_per_char=0.1).

@@ -57,6 +57,7 @@ from studio.auth import COOKIE, agent_token, app_allowed, bearer, matches
 from studio.author_mcp import RenderJobs, python_available, python_enabled, set_python_enabled
 from studio.author_preview import inspect_render
 from studio.setup_mcp import connection_record
+from studio.version import APP_VERSION
 from scene_parser import get_render_names, get_scene_animations, get_scenes_from_code, get_syntax_error
 from workspace_paths import (
     UnsafePathError,
@@ -82,8 +83,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, StrictBool, ValidationError
-
-APP_VERSION = "1.1.0"
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKSPACE_DIR = os.path.abspath(os.path.expanduser(os.environ.get("MANIM_WORKSPACE") or os.path.join(BASE_DIR, "workspace")))
