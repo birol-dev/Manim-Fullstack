@@ -87,6 +87,7 @@ _FIXED_RUN_TIMES = {
     "Add": 0.0,  # Manim 0.22+ only
     "ApplyMatrix": 3.0,  # inherits ApplyPointwiseFunction
     "ApplyPointwiseFunction": 3.0,
+    "ApplyPointwiseFunctionToCenter": 3.0,  # inherits ApplyPointwiseFunction
     "ApplyWave": 2.0,
     "Broadcast": 3.0,
     "ComplexHomotopy": 3.0,
@@ -108,6 +109,8 @@ _PER_CHAR = {
     "UntypeWithCursor": 2,  # Manim 0.22+ only
 }
 _GROUPS = {"AnimationGroup": 0.0, "LaggedStart": 0.05, "Succession": 1.0}
+# Positional indexes of run_time. Wait(2) runs 2 s; Succession(Wait(delay), anim) relies on it.
+_RUN_TIME_POSITION = {"Wait": 0}
 _TEXT_CLASSES = {"Text", "MarkupText", "Paragraph", "Tex", "MathTex", "SingleStringMathTex", "Title", "BulletedList"}
 _TEX_COMMAND = re.compile(r"\\[a-zA-Z]+")
 
@@ -171,7 +174,7 @@ def _animation_seconds(expr: Optional[ast.AST], texts: dict) -> float:
         return 1.0  # mobject.animate..., variables holding animations
     name = _call_name(expr)
     if name != "AddTextWordByWord":
-        explicit = _numeric_constant(_arg(expr, "run_time", None))
+        explicit = _numeric_constant(_arg(expr, "run_time", _RUN_TIME_POSITION.get(name)))
         if explicit is not None:
             return explicit
     if name is None:
